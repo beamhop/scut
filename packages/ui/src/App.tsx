@@ -599,7 +599,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
             <div className="h-1 overflow-hidden rounded bg-white/10"><div className="h-full bg-beam transition-all" style={{ width: `${pf.total ? Math.round((100 * pf.done) / pf.total) : 5}%` }} /></div>
           </div>
         )}
-        {pf?.state === "error" && <div className="mt-4 rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{pf.error} Check your internet connection; it will retry when you create the agent.</div>}
+        {pf?.state === "error" && <div className="mt-4 rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{pf.error}</div>}
         {error && <div className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">Couldn't start the agent: {error}</div>}
         <div className="mt-6 flex justify-between">
           {/* On the very first screen there's nothing to cancel back to */}

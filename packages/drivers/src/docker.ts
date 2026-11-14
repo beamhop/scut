@@ -15,7 +15,22 @@ export class DockerDriver implements HostDriver {
   private host: string;
 
   static imagePresent(image: string): boolean {
-    return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+    try {
+      return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+    } catch {
+      return false; // no docker at all
+    }
+  }
+
+  /** Is there a Docker engine to talk to? (Used only where the built-in microVM engine isn't available.) */
+  static available(): { ok: boolean; reason?: string } {
+    try {
+      const p = Bun.spawnSync(["docker", "info", "--format", "{{.ServerVersion}}"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+      if (p.exitCode === 0) return { ok: true };
+      return { ok: false, reason: "Docker is installed but not running. Start Docker Desktop (or the Docker service) and reopen Beamhop." };
+    } catch {
+      return { ok: false, reason: "This computer can't run agents yet: its built-in virtualization isn't available here and Docker isn't installed. Install Docker Desktop, or add a cloud and run your agents there." };
+    }
   }
 
   /** Download the agent image, reporting layers done/total as docker prints them. */
@@ -45,6 +60,8 @@ export class DockerDriver implements HostDriver {
   }
 
   async create(o: CreateOpts): Promise<Instance> {
+    const engine = DockerDriver.available();
+    if (!engine.ok) throw new Error(engine.reason);
     const name = `scut-${o.name}`;
     const envArgs = Object.entries(o.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
     const args = [

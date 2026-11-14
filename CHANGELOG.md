@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.44.1 — When this computer can't run agents
+
+- On a computer with neither the built-in microVM engine nor Docker, the app used to crash at start (or fail later with a raw error). It now opens normally and the welcome screen says plainly what's missing: Docker not installed, or installed but not running — and that you can add a cloud instead. Creating an agent there gives the same message.
+- Checked by running the app with Docker removed from its PATH.
+
 ## v0.44.0 — The first download, in the open
 
 - On a fresh install, the agent computer (a multi-GB image) used to download silently inside "Create agent", while the button promised "~10 s" and the app's server sat blocked. Now the app starts the download in the background as soon as it opens, and the welcome screen shows a progress bar ("Getting your agents' computer ready (first time only): 3 of 7 parts") while you pick a brain. Creating waits for it instead of starting a second download; a failed download is explained and retried on create.

@@ -114,11 +114,13 @@ export class Scut {
   startPrefetch() {
     const local = this.drivers.get("local");
     if (!(local instanceof DockerDriver) || this.prefetching) return;
+    const engine = DockerDriver.available();
+    if (!engine.ok) { this.prefetch = { state: "error", done: 0, total: 0, error: engine.reason }; return; }
     if (DockerDriver.imagePresent(IMAGE)) { this.prefetch = { state: "ready", done: 0, total: 0 }; return; }
     this.prefetch = { state: "pulling", done: 0, total: 0 };
     this.prefetching = DockerDriver.pull(IMAGE, (p) => { this.prefetch = { state: "pulling", ...p }; })
       .then(() => { this.prefetch = { ...this.prefetch, state: "ready" }; })
-      .catch((e) => { this.prefetch = { ...this.prefetch, state: "error", error: String(e?.message ?? e) }; this.prefetching = undefined; });
+      .catch((e) => { this.prefetch = { ...this.prefetch, state: "error", error: `${String(e?.message ?? e)} Check your internet connection; Beamhop tries again when you create an agent.` }; this.prefetching = undefined; });
   }
 
   async loadDrivers() {
