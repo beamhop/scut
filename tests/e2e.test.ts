@@ -787,13 +787,41 @@ describe("v0.38: edit what an agent does", () => {
     const c = await client(rec.id);
     await c.waitFor((m) => m.t === "settings");
     c.send({ t: "settings", persona: "Track ferry timetables PERSONA-MARKER-42" });
-    await c.waitFor<any>((m) => m.t === "settings" && m.persona?.includes("PERSONA-MARKER-42"));
+    await c.waitFor<any>((m: any) => m.t === "settings" && !!m.persona?.includes("PERSONA-MARKER-42"));
     await Bun.sleep(4000); // harness reloads when idle
     const before = llm.requests.length;
     c.send({ t: "chat", text: "hi" });
     await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
     const sys = JSON.stringify(llm.requests.slice(before)[0].messages.filter((m: any) => m.role === "system"));
     expect(sys).toContain("PERSONA-MARKER-42");
+    c.close();
+  });
+});
+
+describe("v0.39: change an agent's brain", () => {
+  test("new model and key apply to the next request; leaving the key empty keeps it", async () => {
+    const base = `http://host.docker.internal:${llm.port}/v1`;
+    const rec = await scut.create({ name: "Rebrain", harness: "pi", model: { provider: "scut", api: "openai-completions", baseUrl: base, apiKey: "k-old", model: "mock-vision" } });
+    const c = await client(rec.id);
+    const s0 = await c.waitFor<any>((m) => m.t === "settings");
+    expect(s0.model).toMatchObject({ model: "mock-vision", hasKey: true });
+    expect(JSON.stringify(s0)).not.toContain("k-old"); // the key never leaves the agent
+    const ask = async (model: string, auth: string) => {
+      await Bun.sleep(4000);
+      const before = llm.requests.length;
+      c.send({ t: "chat", text: "hi" });
+      await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).ts > Date.now() - 60_000, 120_000);
+      await until(() => llm.requests.length > before || undefined, 60_000, "request");
+      expect(llm.requests[before].model).toBe(model);
+      expect(llm.requests[before].__auth).toBe(auth);
+    };
+    c.send({ t: "settings", model: { api: "openai-completions", baseUrl: base, model: "mock-vision-2", apiKey: "k-new" } });
+    await c.waitFor<any>((m) => m.t === "settings" && m.model?.model === "mock-vision-2");
+    await ask("mock-vision-2", "Bearer k-new");
+    c.msgs = [];
+    c.send({ t: "settings", model: { api: "openai-completions", baseUrl: base, model: "mock-vision-3" } });
+    await c.waitFor<any>((m) => m.t === "settings" && m.model?.model === "mock-vision-3");
+    await ask("mock-vision-3", "Bearer k-new");
     c.close();
   });
 });

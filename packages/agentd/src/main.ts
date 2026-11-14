@@ -110,7 +110,7 @@ function recordChat(line: ChatLine) {
   appendFile(`${DATA}/chat.jsonl`, JSON.stringify(line) + "\n").catch(() => {});
 }
 function settingsMsg(): ServerMsg {
-  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr } };
+  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr } };
 }
 function pairingMsg(): ServerMsg {
   const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
@@ -729,6 +729,12 @@ Bun.serve<WsData>({
         if (typeof m.persona === "string" && m.persona.slice(0, 2000) !== (spec.persona ?? "")) {
           spec.persona = m.persona.slice(0, 2000);
           // the job description lives in the system prompt: reload the harness once it's free
+          restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
+        }
+        if (m.model?.model && m.model.baseUrl && ["openai-completions", "anthropic-messages", "openai-responses"].includes(m.model.api)) {
+          // A new brain: keep the old key unless a new one is given for the same endpoint.
+          const keep = m.model.baseUrl === spec.model?.baseUrl ? spec.model?.apiKey : undefined;
+          spec.model = { provider: spec.model?.provider ?? "scut", api: m.model.api, baseUrl: m.model.baseUrl, model: m.model.model.slice(0, 200), apiKey: m.model.apiKey || keep };
           restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
         }
         if (m.channels) {

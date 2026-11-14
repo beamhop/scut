@@ -135,7 +135,7 @@ export type ClientMsg =
   | { t: "chat"; text: string }
   | { t: "approval"; id: string; ok: boolean }
   | { t: "stop" }
-  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
+  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; model?: { api: ModelConfig["api"]; baseUrl: string; model: string; apiKey?: string }; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   | { t: "pause"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "run_schedule"; id: string }
@@ -154,7 +154,7 @@ export type ServerMsg =
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
+  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
   | { t: "paused"; paused: boolean }
   | { t: "memory"; items: MemoryItem[] }
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }

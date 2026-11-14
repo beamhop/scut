@@ -821,6 +821,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
       </div>
       <SafetyCheck a={a} agent={agent} />
       <PersonaSettings a={a} name={agent.name} />
+      <BrainSettings a={a} name={agent.name} />
       <MemorySettings a={a} />
       <SkillSettings a={a} />
       <ChannelSettings a={a} />
@@ -838,6 +839,60 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
       </div>
       <RemoveAgent agent={agent} />
+    </div>
+  );
+}
+
+/** Change the model or key an agent thinks with (an expired key shouldn't strand an agent). */
+function BrainSettings({ a, name }: { a: ReturnType<typeof useAgent>; name: string }) {
+  const m = a.settings?.model;
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState("openrouter");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [key, setKey] = useState("");
+  const [check, setCheck] = useState<{ busy?: boolean; error?: string; ok?: boolean }>({});
+  const [models, setModels] = useState<string[]>([]);
+  const label = m ? Object.values(PRESETS).find((p) => p.baseUrl === m.baseUrl)?.label ?? m.baseUrl : "a subscription (signed in on its screen)";
+  const start = () => {
+    const k = Object.entries(PRESETS).find(([, p]) => p.baseUrl === m?.baseUrl)?.[0] ?? "openrouter";
+    setKind(k); setBaseUrl(m?.baseUrl ?? PRESETS[k].baseUrl); setModel(m?.model ?? PRESETS[k].model); setKey(""); setCheck({}); setOpen(true);
+  };
+  const sameEndpoint = baseUrl === m?.baseUrl;
+  async function save() {
+    setCheck({ busy: true });
+    const r = await api.verifyBrain({ provider: "scut", api: PRESETS[kind].api, baseUrl, apiKey: key || undefined, model });
+    if (r.models?.length) setModels(r.models);
+    // A saved key for this endpoint lives in the agent, not here: only insist on a check when a new key or endpoint is given.
+    if (!r.ok && (key || !sameEndpoint)) return setCheck({ error: r.error });
+    if (r.ok && r.modelFound === false) return setCheck({ error: `"${model}" isn't offered there.` });
+    a.send({ t: "settings", model: { api: PRESETS[kind].api as any, baseUrl, model, apiKey: key || undefined } });
+    setOpen(false);
+  }
+  const input = "w-full rounded-lg border border-white/10 bg-panel2 px-2 py-1";
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Brain</div>
+      {!open ? (
+        <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{label}{m && <span className="font-mono text-[12px] text-slate-400"> · {m.model}</span>}</span><button onClick={start} className="shrink-0 rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Change</button></div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(PRESETS).map(([k, p]) => (
+              <button key={k} onClick={() => { setKind(k); setBaseUrl(p.baseUrl); setModel(p.model); setCheck({}); }} className={`rounded-full px-2.5 py-0.5 ${kind === k ? "bg-white text-black" : "bg-panel2 hover:bg-white/10"}`}>{p.label}</button>
+            ))}
+          </div>
+          <input className={input} aria-label={`${name}'s model`} list="brain-models" value={model} onChange={(e) => { setModel(e.target.value); setCheck({}); }} />
+          <datalist id="brain-models">{models.map((x) => <option key={x} value={x} />)}</datalist>
+          <input className={input} aria-label={`${name}'s API key`} type="password" value={key} onChange={(e) => { setKey(e.target.value); setCheck({}); }} placeholder={sameEndpoint && m?.hasKey ? "Keep the current key, or paste a new one" : `API key (${PRESETS[kind].keyHint})`} />
+          <details className="text-slate-400"><summary className="cursor-pointer">Endpoint</summary><input className={`${input} mt-1`} aria-label="Endpoint" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setCheck({}); }} /></details>
+          {check.error && <div role="alert" className="text-amber-200">{check.error}</div>}
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setOpen(false)} className="rounded-full px-3 py-1 text-slate-400 hover:text-white">Cancel</button>
+            <button disabled={check.busy || !model || !baseUrl} onClick={save} className="rounded-full bg-beam px-3 py-1 font-semibold text-black disabled:opacity-50">{check.busy ? "Checking…" : "Save"}</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

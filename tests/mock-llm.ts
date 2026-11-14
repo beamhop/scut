@@ -15,6 +15,7 @@ export function startMockLlm(port = 0) {
       if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 });
       const body = (await req.json()) as any;
       auths.push(req.headers.get("authorization") ?? "");
+      body.__auth = req.headers.get("authorization") ?? ""; // per request, for tests that line requests up with keys
       requests.push(body);
       const msgs: any[] = body.messages ?? [];
       const last = msgs.at(-1);

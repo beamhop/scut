@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.39.0 — Change an agent's brain
+
+- Settings has **Brain**: switch an agent to another provider or model, or paste a new key (an expired key no longer strands an agent). New keys and endpoints are checked first; leaving the key empty keeps the current one. The agent reloads its brain once it's free.
+- Settings shows the provider and model, never the key (it stays inside the agent).
+- Test: a new model and key apply to the next request; changing only the model keeps the key.
+
 ## v0.38.0 — Change what an agent does
 
 - Settings has **What {name} does**: edit the job description you gave when creating the agent. Saving reloads the agent's brain once it's free, so the new description reaches the model's instructions (before, it was stored but never used until a restart).
