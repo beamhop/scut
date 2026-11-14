@@ -1,5 +1,6 @@
 // Local app server: serves the UI and a small API. The desktop shell opens this in a webview.
 import type { Scut } from "./core.ts";
+import type { CrewRoom } from "./crew.ts";
 
 let embedded: Record<string, { type: string; b64: string }> | null = null;
 try {
@@ -12,7 +13,7 @@ function asset(path: string): Response | null {
   return a ? new Response(Buffer.from(a.b64, "base64"), { headers: { "content-type": a.type } }) : null;
 }
 
-export function serve(scut: Scut, port: number, uiDir: string) {
+export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) {
   const json = (v: unknown, status = 200) => Response.json(v, { status });
   return Bun.serve({
     port,
@@ -29,6 +30,13 @@ export function serve(scut: Scut, port: number, uiDir: string) {
           const body = (await req.json()) as any;
           const rec = await scut.create(body);
           return json(rec);
+        }
+        if (p === "/api/crew" && req.method === "GET") return json({ enabled: !!crew, lines: crew?.lines.slice(-200) ?? [], members: scut.crewMembers() });
+        if (p === "/api/crew" && req.method === "POST") {
+          const { text } = (await req.json()) as { text: string };
+          if (!crew) return json({ error: "crew room disabled" }, 400);
+          await crew.post(String(text).slice(0, 4000));
+          return json({ ok: true });
         }
         if (p === "/api/destinations") {
           return json([...scut.drivers.values()].map((d) => ({ id: d.id, label: d.label, isolation: d.isolation, monthlyUsd: d.monthlyUsd })));

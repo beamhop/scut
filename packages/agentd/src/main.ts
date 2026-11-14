@@ -3,7 +3,7 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type CrewMember, type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -46,6 +46,7 @@ type ChatLine = { from: string; channel: string; text: string; ts: number };
 const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
 let paused = false;
+let crew: CrewMember[] = [];
 let schedules: Schedule[] = [];
 let usageDay = new Date().toISOString().slice(0, 10);
 let dayTokens = 0;
@@ -134,6 +135,11 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     const png = await desktop.screenshotPng();
     return new Response(png, { headers: { "content-type": "image/png" } });
   }
+  if (a.kind === "crew_post") {
+    const ok = await postCrew(String(a.text ?? ""));
+    return Response.json({ ok });
+  }
+  if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
     const ok = await requestApproval(String(a.title), a.detail);
     return Response.json({ ok });
@@ -200,6 +206,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
       if ((origin.channel === "telegram" || origin.notify) && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, origin.notify ? `⏰ ${text}\n\n${out}` : out);
       if (origin.channel === "nostr" && origin.chatId) await channels.find((c) => c.name === "nostr")?.send(origin.chatId, out).catch((e) => log("nostr send failed", e?.message));
+      if (origin.channel === "crew") await postCrew(out);
       setState("running");
       narrate("Idle");
     } catch (e: any) {
@@ -251,6 +258,12 @@ async function startChannels() {
       name: spec.name,
       about: `A Beamhop agent (${spec.template ?? "assistant"}). DM me.`,
     });
+    n.onCrew = (m) => {
+      const who = crew.find((c) => c.pubkey === m.from);
+      const mentioned = new RegExp(`(^|\\W)@?${spec!.name}(\\W|$)`, "i").test(m.text);
+      // Reply to the owner always; to other agents only when they mention me (prevents agent ping-pong).
+      if (who?.kind === "owner" || mentioned) prompt(`[crew room] ${who?.name ?? m.from.slice(0, 8)}: ${m.text}`, { channel: "crew", from: who?.name ?? "crew" });
+    };
     n.start(
       (m) => prompt(m.text, { channel: "nostr", chatId: m.chatId, from: m.from }),
       (id, ok, byId) => {
@@ -263,6 +276,13 @@ async function startChannels() {
 }
 function nostrOwner() {
   return spec?.channels.nostr?.ownerPubkey ?? spec?.ownerPubkey;
+}
+
+async function postCrew(text: string) {
+  const n = channels.find((c) => c.name === "nostr") as NostrChannel | undefined;
+  if (!n || !crew.length) return false;
+  await n.sendCrew(crew.map((c) => c.pubkey), text).catch((e) => log("crew send failed", e?.message));
+  return true;
 }
 
 async function stopChannels() {
@@ -283,6 +303,7 @@ async function run() {
     dayTokens = usage.dayTokens;
   }
   schedules = (await readJson<Schedule[]>(`${DATA}/schedules.json`)) ?? [];
+  crew = (await readJson<CrewMember[]>(`${DATA}/crew.json`)) ?? [];
   try {
     const lines = (await readFile(`${DATA}/chat.jsonl`, "utf8")).trim().split("\n").filter(Boolean).slice(-500);
     chatLog.splice(0, chatLog.length, ...lines.map((l) => JSON.parse(l)));
@@ -517,6 +538,9 @@ Bun.serve<WsData>({
         if (typeof m.persona === "string") spec.persona = m.persona.slice(0, 2000);
         await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
         broadcast(settingsMsg());
+      } else if (m.t === "crew" && Array.isArray(m.members)) {
+        crew = m.members.slice(0, 50);
+        await Bun.write(`${DATA}/crew.json`, JSON.stringify(crew, null, 2));
       } else if (m.t === "pause") {
         paused = !!m.paused;
         narrate(paused ? "You have control — agent paused" : "Control handed back");

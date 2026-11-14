@@ -153,6 +153,12 @@ export class NostrChannel implements Channel {
           since = Math.max(since, rumor.created_at);
           if (this.cursorFile) await Bun.write(this.cursorFile, String(since));
           const text = String(rumor.content).trim();
+          const ps = (rumor.tags as string[][]).filter((t) => t[0] === "p").map((t) => t[1]);
+          const isCrew = (rumor.tags as string[][]).some((t) => t[0] === "subject" && t[1] === CREW_SUBJECT) || ps.length > 1;
+          if (isCrew) {
+            this.onCrew?.({ from: rumor.pubkey, text, ts: rumor.created_at * 1000 });
+            return;
+          }
           const ap = text.match(/^(yes|no|approve|deny)\s+([0-9a-f]{6,})$/i);
           if (ap) return onApproval(ap[2], /^(yes|approve)$/i.test(ap[1]), rumor.pubkey);
           onMessage({ channel: "nostr", chatId: rumor.pubkey, from: rumor.pubkey.slice(0, 8), fromId: rumor.pubkey, text });
@@ -174,4 +180,14 @@ export class NostrChannel implements Channel {
   async askApproval(to: string, id: string, title: string) {
     await this.send(to, `Approval needed: ${title}\nReply "yes ${id}" or "no ${id}".`);
   }
+
+  /** Crew room: a private NIP-17 group conversation between the owner and all their agents. */
+  onCrew?: (m: { from: string; text: string; ts: number }) => void;
+  async sendCrew(members: string[], text: string) {
+    const others = members.filter((p) => p !== this.pub);
+    const wraps = nip17.wrapManyEvents(this.sk, others.map((publicKey) => ({ publicKey })), text, CREW_SUBJECT);
+    await Promise.all(wraps.map((w) => Promise.any(this.pool.publish(this.relays, w)).catch(() => {})));
+  }
 }
+
+export const CREW_SUBJECT = "Beamhop crew";

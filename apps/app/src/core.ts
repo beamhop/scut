@@ -21,6 +21,7 @@ export interface AgentRecord {
   harness: HarnessKind;
   agentPubkey: string;
   model?: { baseUrl?: string; model: string };
+  nostr?: boolean;
   current: Instance;
   history: Instance[];
   beam?: { to: string; stage: BeamStage; error?: string; startedAt: number };
@@ -184,9 +185,10 @@ export class Scut {
       await driver.destroy(inst).catch(() => {});
       throw e;
     }
-    const rec: AgentRecord = { id, name: o.name, mascot: spec.mascot!, harness: spec.harness, agentPubkey: spec.agentPubkey, model: o.model && { baseUrl: o.model.baseUrl, model: o.model.model }, current: inst, history: [] };
+    const rec: AgentRecord = { id, name: o.name, mascot: spec.mascot!, harness: spec.harness, agentPubkey: spec.agentPubkey, model: o.model && { baseUrl: o.model.baseUrl, model: o.model.model }, nostr: !!o.nostr, current: inst, history: [] };
     this.agents.push(rec);
     await this.save();
+    await this.syncCrew();
     return rec;
   }
 
@@ -246,11 +248,40 @@ export class Scut {
     }
   }
 
+  /** Everyone in the crew room: the owner (app key + optional personal npub) and every agent with Nostr. */
+  crewMembers(): { pubkey: string; name: string; kind: "agent" | "owner" }[] {
+    return [
+      { pubkey: this.ownerPubkey, name: "Owner", kind: "owner" as const },
+      ...(this.ownerNpub ? [{ pubkey: this.ownerNpub, name: "Owner", kind: "owner" as const }] : []),
+      ...this.agents.filter((a) => a.nostr).map((a) => ({ pubkey: a.agentPubkey, name: a.name, kind: "agent" as const })),
+    ];
+  }
+  ownerNpub?: string;
+
+  /** Push the crew list to every agent (over its WSS endpoint). */
+  async syncCrew() {
+    const members = this.crewMembers();
+    await Promise.all(
+      this.agents.filter((a) => a.nostr && !a.beam?.stage?.match(/packing|provisioning|transferring|restoring/)).map(
+        (a) =>
+          new Promise<void>((resolve) => {
+            try {
+              const ws = new WebSocket(`${a.current.endpoint.replace(/^http/, "ws")}/ws?auth=${this.auth(a.current.endpoint)}`);
+              const t = setTimeout(() => { ws.close(); resolve(); }, 5000);
+              ws.onopen = () => { ws.send(JSON.stringify({ t: "crew", members })); setTimeout(() => { clearTimeout(t); ws.close(); resolve(); }, 300); };
+              ws.onerror = () => { clearTimeout(t); resolve(); };
+            } catch { resolve(); }
+          }),
+      ),
+    );
+  }
+
   async remove(agentId: string) {
     const rec = this.get(agentId);
     for (const inst of [rec.current, ...rec.history]) await this.drivers.get(inst.driver)?.destroy(inst).catch(() => {});
     this.agents = this.agents.filter((a) => a !== rec);
     await this.save();
+    await this.syncCrew();
   }
 }
 

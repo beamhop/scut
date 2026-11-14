@@ -629,6 +629,43 @@ function useToasts() {
   return { push, view };
 }
 
+// ---------------- crew room ----------------
+function CrewRoomPanel({ onClose }: { onClose: () => void }) {
+  const [data, setData] = useState<{ enabled: boolean; lines: { name: string; text: string; ts: number }[]; members: { name: string; kind: string }[] }>();
+  const [text, setText] = useState("");
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const load = () => fetch("/api/crew").then((r) => r.json()).then(setData).catch(() => {});
+    load();
+    const t = setInterval(load, 2000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth" }); }, [data?.lines.length]);
+  return (
+    <aside className="fixed inset-y-0 right-0 z-30 flex w-[420px] flex-col border-l border-white/10 bg-panel shadow-2xl" aria-label="Crew room">
+      <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
+        <div className="font-semibold">Crew room</div>
+        <div className="font-mono text-[11px] text-slate-500">{data?.members.filter((m) => m.kind === "agent").length ?? 0} agents · private (Nostr NIP-17)</div>
+        <button onClick={onClose} className="ml-auto text-slate-400 hover:text-white" aria-label="Close crew room">✕</button>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-4">
+        {data && !data.lines.length && <div className="mt-10 text-center text-sm text-slate-500">Talk to all your agents at once. Mention one by name (“@Scout, find…”) to give it a task.</div>}
+        {data?.lines.map((l, i) => (
+          <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${l.name === "You" || l.name === "Owner" ? "ml-auto bg-beam/15" : "bg-panel2"}`}>
+            <div className="mb-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">{l.name}</div>
+            <div className="whitespace-pre-wrap">{l.text}</div>
+          </div>
+        ))}
+        <div ref={end} />
+      </div>
+      <form className="flex gap-2 border-t border-white/5 p-3" onSubmit={async (e) => { e.preventDefault(); if (!text.trim()) return; const t = text; setText(""); await fetch("/api/crew", { method: "POST", body: JSON.stringify({ text: t }) }); }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} aria-label="Message the crew" className="flex-1 rounded-full border border-white/10 bg-panel2 px-4 py-2 text-sm outline-none focus:border-beam" placeholder="Message the crew… (@Name to ask one agent)" />
+        <button className="rounded-full bg-beam px-4 text-sm font-semibold text-black">Send</button>
+      </form>
+    </aside>
+  );
+}
+
 // ---------------- app ----------------
 export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -638,6 +675,7 @@ export function App() {
   const [route, setRoute] = useState(location.hash);
   const [status, setStatus] = useState<Record<string, string>>({});
   const [dragging, setDragging] = useState(false);
+  const [crewOpen, setCrewOpen] = useState(false);
   const toasts = useToasts();
   const prevStages = useRef<Record<string, string>>({});
 
@@ -696,7 +734,8 @@ export function App() {
         <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">
           {agents.length} agent{agents.length === 1 ? "" : "s"}{needCount ? <span className="text-amber-300"> · {needCount} need{needCount === 1 ? "s" : ""} you</span> : ""}
         </div>
-        <button onClick={() => setCreating(true)} className="ml-auto rounded-full bg-gradient-to-r from-beam to-beam2 px-5 py-2 font-semibold text-black">+ New agent</button>
+        <button onClick={() => setCrewOpen(!crewOpen)} className="ml-auto rounded-full bg-panel2 px-4 py-2 text-sm hover:bg-white/10">Crew room</button>
+        <button onClick={() => setCreating(true)} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-5 py-2 font-semibold text-black">+ New agent</button>
       </header>
       <main className="grid grid-cols-1 gap-6 px-8 md:grid-cols-2 xl:grid-cols-3">
         {sorted.map((ag) => (
@@ -706,6 +745,7 @@ export function App() {
       {loaded && agents.length === 0 && !creating && <CreateAgent firstRun onDone={refresh} />}
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
       <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} />
+      {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} />}
       {toasts.view}
     </div>
   );

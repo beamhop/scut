@@ -8,6 +8,7 @@
 //   scut rm <agent>
 import { HOME, Scut } from "./core.ts";
 import { serve } from "./server.ts";
+import { CrewRoom } from "./crew.ts";
 import { parseArgs } from "node:util";
 
 const { values, positionals } = parseArgs({
@@ -90,7 +91,9 @@ switch (cmd) {
   case "app": {
     const port = Number(values.port ?? 7777);
     const ui = values.ui ?? process.env.SCUT_UI_DIR ?? new URL("../../../packages/ui/dist", import.meta.url).pathname;
-    const srv = serve(scut, port, ui);
+    const crew = process.env.SCUT_NO_CREW ? undefined : new CrewRoom(scut);
+    await crew?.start();
+    const srv = serve(scut, port, ui, crew);
     const url = `http://127.0.0.1:${srv.port}`;
     console.log(`Beamhop running at ${url}`);
     if (!process.env.SCUT_NO_WINDOW && cmd === undefined) openWindow(url);

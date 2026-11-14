@@ -65,4 +65,14 @@ server.tool(
   },
 );
 
+server.tool("crew_post", "Post a message to your crew room (your owner and the other agents). Mention an agent by name to ask it something.", { text: z.string() }, async (a) => {
+  const r = await call({ kind: "crew_post", text: a.text });
+  const { ok: posted } = (await r.json()) as { ok: boolean };
+  return ok(posted ? "posted to the crew room" : "no crew room configured");
+});
+server.tool("crew_list", "List the members of your crew room", {}, async () => {
+  const r = await call({ kind: "crew_list" });
+  return ok(JSON.stringify(await r.json()));
+});
+
 await server.connect(new StdioServerTransport());

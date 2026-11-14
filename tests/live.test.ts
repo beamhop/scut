@@ -117,3 +117,35 @@ describe("nostr (real public relays)", () => {
     pool.close(relays);
   });
 });
+
+describe("crew room (NIP-17 group over real relays)", () => {
+  test("owner talks to the crew; mentioned agent answers; Pi agent posts with crew_post", async () => {
+    const { CrewRoom } = await import("../apps/app/src/crew.ts");
+    const relays = ["wss://nos.lol", "wss://relay.primal.net"];
+    const a = await scut.create({ name: "Alpha", harness: "mock", nostr: { relays } });
+    const b = OR
+      ? await scut.create({ name: "Bravo", harness: "pi", nostr: { relays }, model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: OR, model: MODEL } })
+      : null;
+    await scut.syncCrew();
+    const crew = new CrewRoom(scut, relays);
+    await crew.start();
+    await Bun.sleep(3000);
+    const wait = async (pred: (l: any) => boolean, ms = 120_000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        const hit = crew.lines.find(pred);
+        if (hit) return hit;
+        await Bun.sleep(500);
+      }
+      throw new Error(`crew timeout: ${JSON.stringify(crew.lines.slice(-5))}`);
+    };
+    await crew.post("@Alpha are you there?");
+    const fromAlpha = await wait((l) => l.name === "Alpha" && l.text.includes("mock: message #1"));
+    console.log("Alpha in crew:", fromAlpha.text);
+    if (b) {
+      await crew.post("@Bravo please use your crew_post tool to post exactly: BRAVO_REPORTING");
+      const fromBravo = await wait((l) => l.name === "Bravo" && l.text.includes("BRAVO_REPORTING"));
+      console.log("Bravo in crew:", fromBravo.text);
+    }
+  });
+});

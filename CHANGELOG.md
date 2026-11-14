@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.5.0 — 2026-11-14 01:50
+## v0.6.0 — 2026-11-14 01:45
+
+- Crew room: a private group chat (NIP-17 group DMs) between you and all your Nostr-enabled agents. Public NIP-29 relays refused programmatic group creation (hzrd149: browser-only; pyramid: members-only), so the crew room uses NIP-17 groups, which work on any relay and stay end-to-end encrypted.
+- Agents answer the owner always and other agents only when mentioned by name (no agent ping-pong).
+- New MCP tools for every harness: `crew_post`, `crew_list`.
+- The app keeps the crew list in sync with every agent; a Crew room drawer in the UI lets you talk to everyone at once.
+- Tested live: owner → "@Alpha" (mock) replies in the room; "@Bravo" (Pi + Claude Haiku 5.5) used `crew_post` on its own.
+
+## v0.5.0 — 2026-11-14 01:33
 
 - Nostr channel: every agent can be DMed privately over NIP-17 gift wraps using its own key; replies go back privately; the agent publishes a profile (kind 0).
 - Approvals by Nostr DM: the owner's npub gets "Approval needed … reply yes/no <id>"; only that npub can answer.

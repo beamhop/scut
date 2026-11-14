@@ -134,7 +134,8 @@ export type ClientMsg =
   | { t: "stop" }
   | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string }
   | { t: "pause"; paused: boolean }
-  | { t: "schedules"; schedules: Schedule[] };
+  | { t: "schedules"; schedules: Schedule[] }
+  | { t: "crew"; members: CrewMember[] };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
@@ -157,6 +158,12 @@ export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" 
 export const SCREEN = { w: 1280, h: 800 };
 
 /** A recurring task. `daily` runs at minuteOfDay (UTC); `every` runs every `minutes`. */
+export interface CrewMember {
+  pubkey: string;
+  name: string;
+  kind: "agent" | "owner";
+}
+
 export interface Schedule {
   id: string;
   prompt: string;
