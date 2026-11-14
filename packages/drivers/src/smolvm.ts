@@ -1,5 +1,6 @@
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { EngineUnavailable } from "./gvisor.ts";
+import { loadSmolmachines } from "./engine.ts";
 
 /** libkrun/hypervisor errors that mean "no VM can start on this computer", not "this one agent failed". */
 const NO_VM = /krun_start_enter|VmCreate|start vm|Hypervisor|HV_|KVM|kvm|EINVAL/;
@@ -17,12 +18,14 @@ export class SmolvmDriver implements HostDriver {
   monthlyUsd = 0;
 
   private static sdk: any;
+  private static loadError?: string;
   static async load(): Promise<any | null> {
     if (SmolvmDriver.sdk !== undefined) return SmolvmDriver.sdk;
     try {
-      SmolvmDriver.sdk = (await import("smolmachines")).Machine;
-    } catch {
+      SmolvmDriver.sdk = (await loadSmolmachines()).Machine;
+    } catch (e: any) {
       SmolvmDriver.sdk = null;
+      SmolvmDriver.loadError = String(e?.message ?? e);
     }
     return SmolvmDriver.sdk;
   }
@@ -30,7 +33,7 @@ export class SmolvmDriver implements HostDriver {
   /** Is a local microVM possible here? Returns the engine's own reason when not. */
   static async availability(): Promise<{ available: boolean; reason?: string }> {
     const M = await SmolvmDriver.load();
-    if (!M) return { available: false, reason: "smolvm engine not installed for this platform" };
+    if (!M) return { available: false, reason: SmolvmDriver.loadError ?? "smolvm engine not available on this platform" };
     try {
       const a = M.localAvailability();
       return a.available ? { available: true } : { available: false, reason: a.reason };

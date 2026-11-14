@@ -4,3 +4,4 @@ dist
 *.log
 /.scut-test
 apps/app/src/ui-assets.ts
+packages/drivers/src/engine-blob.ts
