@@ -27,6 +27,15 @@ export interface HostDriver {
   destroy(inst: Instance): Promise<void>;
   /** Bring a stopped host back (e.g. after the computer restarted). Returns it with its current endpoint. */
   revive?(inst: Instance): Promise<Instance>;
+  /** Is this host running an older build of `image` than the one on this computer? (Local hosts only.) */
+  outdated?(inst: Instance, image: string): boolean;
+  /**
+   * Recreate the host from the current `image`, keeping its disk (/data). `check` must resolve once the new host is
+   * up and holds the agent; if it throws, the old host is put back exactly as it was. Never deletes the disk.
+   */
+  upgrade?(inst: Instance, image: string, check: (next: Instance) => Promise<void>): Promise<Instance>;
+  /** Addresses the host's port listens on, on this computer (e.g. ["127.0.0.1"] or ["0.0.0.0"]). */
+  boundHosts?(inst: Instance): string[];
 }
 
 export async function waitHealthy(endpoint: string, timeoutMs = 180_000): Promise<any> {

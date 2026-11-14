@@ -135,10 +135,14 @@ export type ClientMsg =
   | { t: "input"; kind: "move" | "click" | "dblclick" | "down" | "up" | "scroll" | "key" | "type"; x?: number; y?: number; button?: number; dy?: number; keys?: string; text?: string }
   | { t: "cursor"; x: number; y: number }
   | { t: "chat"; text: string }
-  | { t: "approval"; id: string; ok: boolean }
+  | { t: "approval"; id: string; ok: boolean; /** Optional reason with a "Don't" ("Wrong site"), passed to the agent and echoed in chat apps. */ reason?: string }
   | { t: "stop" }
   | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; model?: { api: ModelConfig["api"]; baseUrl: string; model: string; apiKey?: string }; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
-  | { t: "pause"; paused: boolean }
+  /**
+   * Pause or resume. `control` (default true): Take over / Give back — the owner has the screen ("You have control").
+   * control:false = a plain pause/resume ("Pause all", "Resume all"): it never takes the screen from the owner or hands it back.
+   */
+  | { t: "pause"; paused: boolean; control?: boolean }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "run_schedule"; id: string }
   | { t: "crew"; members: CrewMember[] }
@@ -159,14 +163,16 @@ export type ServerMsg =
       via?: ApprovalVia;
       /** When it was decided (ms epoch). */
       at?: number;
+      /** The owner's reason for a "Don't", if they gave one. */
+      reason?: string;
     }
   | { t: "stats"; cpu: number; memMb: number; memTotalMb: number; tokens: { input: number; output: number }; /** model tokens used today (UTC day, input + output) */ dayTokens?: number }
   | StatusMsg
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
-  | { t: "paused"; paused: boolean }
+  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
+  | { t: "paused"; paused: boolean; /** true when the owner has the screen (Take over), false for a plain pause */ control?: boolean }
   | { t: "memory"; items: MemoryItem[] }
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }
   /** The agent obtained a cloud provider key during an assisted signup; the app (owner) stores it. */
@@ -204,26 +210,44 @@ export interface ApprovalRequest {
   origin?: string;
 }
 
+/** Something the owner has to fix before the agent can work (fully or in one place), with where to fix it. */
+export interface AgentProblem {
+  /** One plain sentence, e.g. "Atlas has no brain yet. Add one in Settings → Brain." */
+  text: string;
+  /** Settings section that fixes it: brain = pick a brain, key = paste a new key for the brain, channel = a chat app's token. */
+  fix?: "brain" | "channel" | "key";
+}
+
 /** Bench data: what the agent is doing, in one place. Sent on connect and whenever any of it changes. */
 export interface StatusMsg {
   t: "status";
   state: AgentState;
-  /** One plain sentence: the latest step while working, "Waiting for you: {title}" with an approval pending, "Free" when idle. */
+  /**
+   * One plain sentence: the latest step while working, "Waiting for you: {title}" with an approval pending,
+   * "You have control" / "Paused while you have control" while the owner drives, "Paused" for a plain pause,
+   * "Needs a brain" / "Needs a new key" with a problem, "Skipped: {title} (you said no)" after a denial, "Ready" when idle.
+   */
   headline: string;
   /** ms epoch when the current state began ("Free since 14:02"). */
   since: number;
   /** The task being worked on right now, if any. */
   task?: { prompt: string; origin?: string; startedAt: number };
-  /** First line of the agent's last reply (≤ 120 chars) and when it was sent. */
-  lastResult?: { text: string; ts: number };
+  /** First line of the agent's last reply (≤ 120 chars) and when it was sent. ok:false = the task failed (no brain, key rejected, error). */
+  lastResult?: { text: string; ts: number; ok?: boolean };
   /** The next scheduled task to run (see nextRunAt). */
   nextRun?: { id: string; prompt: string; at: number };
   /** Number of approvals waiting for the owner. */
   pending: number;
   /** Model tokens used today (input + output). */
   dayTokens: number;
-  /** Owner has taken over the screen. */
+  /** The agent is paused (by Take over or a plain Pause): it waits before its next action. */
   paused?: boolean;
+  /** The owner has the screen (Take over). Implies paused. */
+  control?: boolean;
+  /** Something to fix (no brain, rejected key, a chat app that can't sign in). Absent when all is well. */
+  problem?: AgentProblem;
+  /** The page on the agent's screen (best effort, from the browser). Absent on its own start page or a blank tab. */
+  url?: string;
 }
 
 const RISK_RANK: Record<Risk, number> = { low: 0, medium: 1, high: 2 };
@@ -276,9 +300,38 @@ export function approvalText(req: Omit<ApprovalRequest, "t">, agentName: string,
 }
 
 /** What a chat approval message is edited to once decided: "Allowed by you on Telegram · 14:02". */
-export function approvalResolvedText(req: Pick<ApprovalRequest, "title">, agentName: string, ok: boolean, by: string, at: number, tz?: string): string {
+export function approvalResolvedText(req: Pick<ApprovalRequest, "title">, agentName: string, ok: boolean, by: string, at: number, tz?: string, reason?: string): string {
   const verdict = by === "timeout" ? `Skipped: nobody answered in time, so ${agentName} didn't do it` : `${ok ? "Allowed" : "Not allowed"} by ${by}`;
-  return `${agentName} wanted to: ${req.title}\n${ok ? "✓" : "✕"} ${verdict} · ${clock(at, tz)}`;
+  const why = !ok && reason?.trim() ? `\nReason: ${reason.trim().slice(0, 300)}` : "";
+  return `${agentName} wanted to: ${req.title}\n${ok ? "✓" : "✕"} ${verdict} · ${clock(at, tz)}${why}`;
+}
+
+/** What the agent is told when the owner says no (or nobody answers): a normal outcome, not an error. */
+export function denialText(via: ApprovalVia | "timeout", reason?: string): string {
+  if (via === "timeout") return "No answer from your owner in time. Don't do it: skip this step and tell them you skipped it.";
+  const why = reason?.trim() ? ` Their reason: ${reason.trim().slice(0, 300)}` : "";
+  return `Your owner said no. Skip this step and tell them.${why}`;
+}
+
+/** An endpoint on this computer or a private network (Ollama, LM Studio…), which may work without a key. */
+export function isLocalEndpoint(baseUrl: string): boolean {
+  try {
+    const h = new URL(baseUrl).hostname;
+    return /^(localhost|127\.|0\.0\.0\.0|host\.docker\.internal|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/.test(h) || h.endsWith(".local") || h.endsWith(".internal");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does this agent have nothing to think with? Pi needs a model endpoint, and a key unless the endpoint is local.
+ * The CLI harnesses (Codex, Copilot, opencode) can use a subscription signed in on the agent's screen; mock is a demo brain.
+ */
+export function brainMissing(spec: Pick<AgentSpec, "harness" | "model">): boolean {
+  if (spec.harness !== "pi") return false;
+  const m = spec.model;
+  if (!m?.baseUrl || !m.model) return true;
+  return !m.apiKey && !isLocalEndpoint(m.baseUrl);
 }
 
 /** Human-readable decider for approval.resolved `by`. */

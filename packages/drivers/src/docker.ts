@@ -69,12 +69,9 @@ export class DockerDriver implements HostDriver {
     return port ? { ...inst, endpoint: `http://${this.host}:${port}` } : inst;
   }
 
-  async create(o: CreateOpts): Promise<Instance> {
-    const engine = DockerDriver.available();
-    if (!engine.ok) throw new Error(engine.reason);
-    const name = `scut-${o.name}`;
-    const envArgs = Object.entries(o.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-    const args = [
+  private runArgs(name: string, image: string, env: Record<string, string>, o: { cpus?: number; memoryMb?: number } = {}): string[] {
+    const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+    return [
       "docker", "run", "-d", "--name", name,
       "-p", `${this.host}::8080`,
       "-v", `${name}-data:/data`,
@@ -88,8 +85,11 @@ export class DockerDriver implements HostDriver {
         ? ["-v", `${process.env.SCUT_DEV_CA}:/etc/scut/extra-ca.crt:ro`, "-e", "SCUT_EXTRA_CA=/etc/scut/extra-ca.crt", "-e", "NODE_EXTRA_CA_CERTS=/etc/scut/extra-ca.crt", "-e", "SSL_CERT_FILE=/etc/scut/extra-ca.crt"]
         : []),
       ...envArgs,
-      o.image,
+      image,
     ];
+  }
+
+  private async run(name: string, args: string[]): Promise<Instance> {
     // Async: a first-time image download inside `docker run` must not freeze the app's server.
     const p = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
@@ -97,6 +97,76 @@ export class DockerDriver implements HostDriver {
     const id = out.trim();
     const port = Bun.spawnSync(["docker", "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
     return { driver: this.id, instanceId: id, endpoint: `http://${this.host}:${port}`, meta: { name } };
+  }
+
+  async create(o: CreateOpts): Promise<Instance> {
+    const engine = DockerDriver.available();
+    if (!engine.ok) throw new Error(engine.reason);
+    const name = `scut-${o.name}`;
+    return this.run(name, this.runArgs(name, o.image, o.env, o));
+  }
+
+  private static inspect(args: string[]): string {
+    try {
+      const p = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "ignore", timeout: 15_000 });
+      return p.exitCode === 0 ? p.stdout.toString().trim() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  outdated(inst: Instance, image: string): boolean {
+    const name = inst.meta?.name ?? inst.instanceId;
+    const want = DockerDriver.inspect(["image", "inspect", "-f", "{{.Id}}", image]);
+    const have = DockerDriver.inspect(["inspect", "-f", "{{.Image}}", name]);
+    return !!want && !!have && want !== have;
+  }
+
+  async upgrade(inst: Instance, image: string, check: (next: Instance) => Promise<void>): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    if (!this.outdated(inst, image)) return inst;
+    // What the container was started with, minus what its (old) image sets by itself: BEAM_TICKET, test overrides…
+    const oldImage = DockerDriver.inspect(["inspect", "-f", "{{.Image}}", name]);
+    const parse = (j: string) => { try { return (JSON.parse(j) ?? []) as string[]; } catch { return []; } };
+    const imageEnv = new Set(parse(DockerDriver.inspect(["image", "inspect", "-f", "{{json .Config.Env}}", oldImage])));
+    const own = /^(SCUT_EXTRA_CA|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE)=/; // re-added by runArgs when still wanted
+    const env = Object.fromEntries(
+      parse(DockerDriver.inspect(["inspect", "-f", "{{json .Config.Env}}", name]))
+        .filter((e) => !imageEnv.has(e) && !own.test(e))
+        .map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)]),
+    );
+    const nano = Number(DockerDriver.inspect(["inspect", "-f", "{{.HostConfig.NanoCpus}}", name]) || 0);
+    const mem = Number(DockerDriver.inspect(["inspect", "-f", "{{.HostConfig.Memory}}", name]) || 0);
+    const limits = { cpus: nano ? nano / 1e9 : undefined, memoryMb: mem ? Math.round(mem / 1048576) : undefined };
+    const backup = `${name}-before-update`;
+    const sh = (...a: string[]) => Bun.spawnSync(["docker", ...a], { stdout: "ignore", stderr: "pipe", timeout: 60_000 });
+    sh("rm", "-f", backup); // a leftover from an earlier attempt that never finished
+    // Stop it cleanly (agentd writes as it goes; the disk is a named volume that outlives the container).
+    sh("stop", "-t", "20", name);
+    if (sh("rename", name, backup).exitCode !== 0) {
+      sh("start", name);
+      throw new Error(`couldn't set ${name} aside for the update`);
+    }
+    const rollback = () => {
+      sh("rm", "-f", name);
+      sh("rename", backup, name);
+      sh("start", name);
+    };
+    let next: Instance;
+    try {
+      next = await this.run(name, this.runArgs(name, image, env, limits));
+      await check(next);
+    } catch (e) {
+      rollback();
+      throw e;
+    }
+    sh("rm", backup); // the old container only; its disk is the one the new container uses
+    return next;
+  }
+
+  boundHosts(inst: Instance): string[] {
+    const name = inst.meta?.name ?? inst.instanceId;
+    return DockerDriver.inspect(["port", name, "8080/tcp"]).split("\n").filter(Boolean).map((l) => l.slice(0, l.lastIndexOf(":")).replace(/^\[|\]$/g, ""));
   }
 
   async destroy(inst: Instance) {

@@ -58,7 +58,7 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
       const p = url.pathname;
       try {
         if (p === "/api/agents" && req.method === "GET") {
-          return json(await Promise.all(scut.agents.map(async (a) => ({ ...a, token: scut.auth(a.current.endpoint), price: await scut.price(a.model) }))));
+          return json(await Promise.all(scut.agents.map(async (a) => ({ ...a, token: scut.auth(a.current.endpoint), price: await scut.price(a.model), ...(scut.updating.has(a.id) ? { updating: true } : {}) }))));
         }
         if (p === "/api/agents" && req.method === "POST") {
           const body = (await req.json()) as any;
@@ -71,6 +71,11 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           if (!crew) return json({ error: "crew room disabled" }, 400);
           await crew.post(String(text).slice(0, 4000));
           return json({ ok: true });
+        }
+        // Global controls: pause (a plain pause, not "you have control"), resume or stop every agent at once.
+        if ((p === "/api/agents/pause-all" || p === "/api/agents/resume-all" || p === "/api/agents/stop-all") && req.method === "POST") {
+          const msg = p.endsWith("pause-all") ? { t: "pause", paused: true, control: false } : p.endsWith("resume-all") ? { t: "pause", paused: false, control: false } : { t: "stop" };
+          return json({ ok: true, ...(await scut.sendAll(msg)) });
         }
         if (p === "/api/destinations") {
           return json([...scut.drivers.values()].map((d) => ({ id: d.id, label: d.label, isolation: d.isolation, monthlyUsd: d.monthlyUsd })));
@@ -100,11 +105,7 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             return json({ ok: true });
           }
           if (action === "token") return json({ endpoint: rec.current.endpoint, token: scut.auth(rec.current.endpoint) });
-          if (action === "phone") {
-            const ep = rec.current.endpoint;
-            const local = /^http:\/\/(127\.|localhost)/.test(ep);
-            return json({ url: `${ep}/?auth=${scut.freshAuth(ep)}`, local, expiresInMin: 15 });
-          }
+          if (action === "phone") return json(scut.phoneLink(rec));
           if (action === "beam" && req.method === "POST") {
             const { to } = (await req.json()) as { to: string };
             if (rec.beam && !["online", "failed"].includes(rec.beam.stage)) return json({ error: "beam in progress" }, 409);

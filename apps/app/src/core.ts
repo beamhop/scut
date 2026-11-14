@@ -6,6 +6,7 @@ import {
 import { DockerDriver, FlyDriver, RailwayDriver, RenderDriver, SmolvmDriver, waitHealthy, type HostDriver, type Instance } from "@scut/drivers";
 import type { Event } from "nostr-tools";
 import { chmod, mkdir } from "node:fs/promises";
+import { networkInterfaces } from "node:os";
 import { openAgentFile, writeAgentFile } from "./agentfile.ts";
 
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
@@ -62,7 +63,86 @@ export class Scut {
     await s.recoverInterruptedBeams();
     await s.reviveLocalHosts();
     void s.cleanupRetiredHosts();
+    if (process.env.SCUT_NO_AUTO_UPDATE !== "1") void s.updateOutdatedHosts();
     return s;
+  }
+
+  /** Agents whose computer is being rebuilt from a newer image right now (shown as "updating"). */
+  updating = new Map<string, Promise<void>>();
+  private updateRetry?: ReturnType<typeof setTimeout>;
+
+  /**
+   * Agents created on an older image keep it until their container is recreated. Recreate every local agent whose
+   * image differs from the current one, keeping its disk. Only while it is idle and not beaming; busy ones are tried
+   * again a minute later. A failed update puts the old computer back as it was.
+   */
+  async updateOutdatedHosts(image = IMAGE): Promise<{ updated: string[]; waiting: string[]; failed: string[] }> {
+    const out = { updated: [] as string[], waiting: [] as string[], failed: [] as string[] };
+    for (const a of this.agents) {
+      const d = this.drivers.get(a.current.driver);
+      if (!d?.upgrade || !d.outdated?.(a.current, image)) continue;
+      if (this.updating.has(a.id)) continue;
+      if (a.beam && !["online", "failed"].includes(a.beam.stage)) { out.waiting.push(a.name); continue; }
+      const h = (await fetch(`${a.current.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { state?: string } | null;
+      // Running a task, asking for approval, or mid-beam: don't pull the computer from under it. Unreachable = not working.
+      if (h && h.state !== "running") { out.waiting.push(a.name); continue; }
+      const job = (async () => {
+        const next = await d.upgrade!(a.current, image, async (n) => { await this.waitState(n.endpoint, ["running"], 180_000); });
+        a.current = next;
+        this.tokenCache.clear();
+        await this.save();
+      })();
+      this.updating.set(a.id, job.catch(() => {}));
+      try {
+        await job;
+        out.updated.push(a.name);
+      } catch (e: any) {
+        console.error(`update of ${a.name} failed; kept the old computer:`, e?.message ?? e);
+        out.failed.push(a.name);
+      } finally {
+        this.updating.delete(a.id);
+      }
+    }
+    if (out.updated.length) await this.syncCrew();
+    clearTimeout(this.updateRetry);
+    if (out.waiting.length) this.updateRetry = setTimeout(() => void this.updateOutdatedHosts(image), 60_000);
+    return out;
+  }
+
+  /**
+   * A link that opens this agent on a phone. Cloud agents: always. Agents on this computer: only if their port listens on
+   * the network (never changed silently here), using this computer's LAN address; otherwise reachable:false and why.
+   */
+  phoneLink(rec: AgentRecord, lan = lanIPv4()): { url: string; reachable: boolean; why?: string; local: boolean; expiresInMin: number } {
+    const ep = rec.current.endpoint;
+    const u = new URL(ep);
+    const loopback = /^(127\.|localhost$|\[::1\]$|::1$)/.test(u.hostname);
+    const link = (base: string) => `${base}/?auth=${this.freshAuth(base)}`;
+    if (!loopback) return { url: link(ep), reachable: true, local: false, expiresInMin: 15 };
+    const hosts = this.drivers.get(rec.current.driver)?.boundHosts?.(rec.current) ?? [];
+    if (lan && hosts.some((h) => h === "0.0.0.0" || h === "::" || h === lan)) {
+      return { url: link(`${u.protocol}//${lan}:${u.port}`), reachable: true, local: true, expiresInMin: 15 };
+    }
+    return { url: link(ep), reachable: false, why: `Your phone can't reach this computer. Beam ${rec.name} to a cloud to use it on your phone.`, local: true, expiresInMin: 15 };
+  }
+
+  /** Send one socket message to an agent (owner-signed). Resolves true once it was sent. */
+  sendTo(a: AgentRecord, msg: unknown): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      try {
+        const ws = new WebSocket(`${a.current.endpoint.replace(/^http/, "ws")}/ws?auth=${this.auth(a.current.endpoint)}`);
+        const t = setTimeout(() => { ws.close(); resolve(false); }, 5000);
+        ws.onopen = () => { ws.send(JSON.stringify(msg)); setTimeout(() => { clearTimeout(t); ws.close(); resolve(true); }, 300); };
+        ws.onerror = () => { clearTimeout(t); resolve(false); };
+      } catch { resolve(false); }
+    });
+  }
+
+  /** Send a message to every agent that isn't mid-beam (pause all, resume all, stop all). */
+  async sendAll(msg: unknown): Promise<{ sent: string[]; failed: string[] }> {
+    const live = this.agents.filter((a) => !a.beam?.stage?.match(/packing|provisioning|transferring|restoring/));
+    const res = await Promise.all(live.map(async (a) => [a.name, await this.sendTo(a, msg)] as const));
+    return { sent: res.filter(([, ok]) => ok).map(([n]) => n), failed: res.filter(([, ok]) => !ok).map(([n]) => n) };
   }
 
   /**
@@ -203,7 +283,7 @@ export class Scut {
     return a;
   }
 
-  private tokenCache = new Map<string, { token: string; at: number }>();
+  tokenCache = new Map<string, { token: string; at: number }>();
   /** Owner token for an agent endpoint, cached for 5 minutes (tokens are valid for 15). */
   auth(endpoint: string) {
     const host = new URL(endpoint).host;
@@ -244,7 +324,7 @@ export class Scut {
     return r;
   }
 
-  private async waitState(endpoint: string, want: string[], timeoutMs = 120_000) {
+  async waitState(endpoint: string, want: string[], timeoutMs = 120_000) {
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
       const h = await waitHealthy(endpoint, 30_000);
@@ -326,6 +406,7 @@ export class Scut {
   /** Beam an agent to another host. The source keeps a cold copy until destroyed. */
   async beam(agentId: string, to: string, opts: { destroySource?: boolean; onStage?: (s: BeamStage) => void } = {}) {
     const rec = this.get(agentId);
+    await this.updating.get(rec.id); // never beam a computer that is being rebuilt
     const driver = this.drivers.get(to);
     if (!driver) throw new Error(`unknown destination ${to}`);
     const src = rec.current;
@@ -463,19 +544,7 @@ export class Scut {
   /** Push the crew list to every agent (over its WSS endpoint). */
   async syncCrew() {
     const members = this.crewMembers();
-    await Promise.all(
-      this.agents.filter((a) => a.nostr && !a.beam?.stage?.match(/packing|provisioning|transferring|restoring/)).map(
-        (a) =>
-          new Promise<void>((resolve) => {
-            try {
-              const ws = new WebSocket(`${a.current.endpoint.replace(/^http/, "ws")}/ws?auth=${this.auth(a.current.endpoint)}`);
-              const t = setTimeout(() => { ws.close(); resolve(); }, 5000);
-              ws.onopen = () => { ws.send(JSON.stringify({ t: "crew", members })); setTimeout(() => { clearTimeout(t); ws.close(); resolve(); }, 300); };
-              ws.onerror = () => { clearTimeout(t); resolve(); };
-            } catch { resolve(); }
-          }),
-      ),
-    );
+    await Promise.all(this.agents.filter((a) => a.nostr && !a.beam?.stage?.match(/packing|provisioning|transferring|restoring/)).map((a) => this.sendTo(a, { t: "crew", members })));
   }
 
   async remove(agentId: string) {
@@ -488,4 +557,11 @@ export class Scut {
 }
 
 export const MASCOTS = ["cyan", "magenta", "lime", "amber", "violet", "coral"];
+
+/** This computer's address on the local network: the first non-internal IPv4, skipping container/VM bridges. */
+export function lanIPv4(): string | undefined {
+  const all = Object.entries(networkInterfaces()).filter(([name]) => !/^(docker|br-|veth|virbr|vmnet|vboxnet|cni|flannel|lxc)/.test(name));
+  const v4 = all.flatMap(([, list]) => list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => i.address);
+  return v4.find((a) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)) ?? v4[0];
+}
 

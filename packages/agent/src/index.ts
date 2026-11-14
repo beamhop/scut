@@ -40,6 +40,8 @@ export function systemPromptFor(spec: AgentSpec): string {
     role,
     spec.persona ? `Persona: ${spec.persona}` : "",
     "Use the `computer` MCP tools (screenshot, click, type_text, key, scroll, open_url) to operate your computer.",
+    "Your browser fills the whole screen and has no address bar or tabs: use open_url to go to a web address. A link that opens a new tab shows it full screen; press ctrl+w to close it and go back.",
+    "If your owner says no to a step, that is a normal answer, not an error: skip that step, carry on with the rest if it still makes sense, and tell them what you skipped.",
     "When you learn something durable about your owner or your work (preferences, names, decisions), save it with the remember tool.",
     "When asked to do something regularly (every morning, every hour), set it up with the schedule_task tool instead of only promising to.",
     "Take a screenshot before acting and after each important step.",
@@ -303,16 +305,19 @@ export class MockHarness implements Harness {
     const prev = (await Bun.file(log).exists()) ? await Bun.file(log).text() : "";
     await Bun.write(log, prev + text + "\n");
     const url = text.match(/https?:\/\/\S+/)?.[0];
+    let skipped = "";
     if (url) {
       onEvent({ type: "tool", name: "open_url", args: { url } });
-      await this.computer({ kind: "open_url", url });
-      await Bun.sleep(1500);
+      const r = await this.computer({ kind: "open_url", url });
+      // The owner said no: a normal answer. Skip the step and say so, like a real agent would.
+      if (r?.denied) skipped = `, skipped opening ${url} (${r.by === "timeout" ? "no answer in time" : "you said no"}${r.reason ? `: ${r.reason}` : ""})`;
+      else await Bun.sleep(1500);
     }
     onEvent({ type: "tool", name: "screenshot", args: {} });
     const shot = await this.computer({ kind: "screenshot" });
     const n = prev.split("\n").filter(Boolean).length + 1;
     // "#loop" in a message makes the mock echo it whole (used to test the crew loop guard).
-    const reply = `mock: message #${n} received ("${text.includes("#loop") ? text : text.slice(0, 60)}"), screenshot ${shot?.bytes ?? 0} bytes`;
+    const reply = `mock: message #${n} received ("${text.includes("#loop") ? text : text.slice(0, 60)}")${skipped}, screenshot ${shot?.bytes ?? 0} bytes`;
     onEvent({ type: "text", delta: reply });
     onEvent({ type: "usage", input: text.length, output: reply.length });
     return reply;

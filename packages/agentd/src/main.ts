@@ -3,8 +3,8 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg,
-  SCREEN, callsign, glyphCells, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg, type AgentProblem,
+  SCREEN, callsign, glyphCells, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, denialText, brainMissing, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -51,6 +51,8 @@ type ChatLine = { from: string; channel: string; text: string; ts: number };
 const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
 let paused = false;
+/** The owner has the screen (Take over), as opposed to a plain pause. */
+let control = false;
 let crew: CrewMember[] = [];
 let memory: MemoryItem[] = [];
 async function saveMemory() {
@@ -100,7 +102,7 @@ const clients = new Set<ServerWebSocket<WsData>>();
 function broadcast(m: ServerMsg, except?: ServerWebSocket<WsData>) {
   const s = JSON.stringify(m);
   for (const c of clients) if (c !== except) c.send(s);
-  if (m.t === "schedules" || m.t === "paused" || m.t === "approval.request" || m.t === "approval.resolved") pushStatus();
+  if (m.t === "schedules" || m.t === "paused" || m.t === "approval.request" || m.t === "approval.resolved" || m.t === "pairing" || m.t === "settings") pushStatus();
 }
 function narrate(text: string) {
   const n = { text, ts: Date.now() };
@@ -120,6 +122,12 @@ function recordChat(line: ChatLine) {
     pushStatus();
   }
 }
+/** The agent's reply for a task that couldn't be done: shown and sent like a reply, but recorded as a failure. */
+function recordFailure(line: ChatLine) {
+  recordChat(line);
+  lastResult = { text: firstLine(line.text), ts: line.ts, ok: false };
+  pushStatus();
+}
 const firstLine = (t: string) => {
   const l = t.trim().split("\n").find((x) => x.trim())?.trim() ?? "";
   return l.length > 120 ? `${l.slice(0, 119)}…` : l;
@@ -129,9 +137,22 @@ const firstLine = (t: string) => {
 type TaskInfo = { prompt: string; origin?: string; startedAt: number };
 let currentTask: TaskInfo | null = null;
 let lastStep: { text: string; ts: number } | null = null;
-let lastResult: { text: string; ts: number } | undefined;
+let lastResult: StatusMsg["lastResult"];
 function todayTokens() {
   return usageDay === new Date().toISOString().slice(0, 10) ? dayTokens : 0;
+}
+/** A task's approvals the owner said no to (or nobody answered): the task goes on, and the bench says what was skipped. */
+let skipped: { title: string; why: "no" | "timeout" } | null = null;
+/** The brain's key was rejected by the provider; cleared when the brain or key changes. */
+let keyRejected = false;
+function problem(): AgentProblem | undefined {
+  const name = spec?.name ?? "Your agent";
+  if (spec && brainMissing(spec)) return { text: `${name} has no brain yet. Add one in Settings → Brain.`, fix: "brain" };
+  if (keyRejected) return { text: `The brain's key was rejected. Paste a new key in Settings → Brain.`, fix: "key" };
+  const names: Record<string, string> = { telegram: "Telegram", slack: "Slack", discord: "Discord" };
+  const bad = Object.keys(names).find((k) => channelErrors[k] && (spec?.channels as Record<string, unknown> | undefined)?.[k]);
+  if (bad) return { text: `${names[bad]} can't sign in, so messages and approvals there don't arrive. Check its token in Settings → Chat apps.`, fix: "channel" };
+  return undefined;
 }
 function headline(): string {
   const waiting = [...pendingApprovals.values()][0];
@@ -141,9 +162,19 @@ function headline(): string {
     case "starting": return "Starting up";
     case "quiescing": return "Packing up to move";
     case "retired": return "Moved to another place";
-    case "running": return "Free";
   }
-  if (paused && currentTask) return "Paused while you have control";
+  // Paused comes before "Ready": an idle agent whose screen you have is not free for a task.
+  if (paused) {
+    if (control) return currentTask ? "Paused while you have control" : "You have control";
+    return currentTask ? "Paused: it waits before its next step" : "Paused";
+  }
+  if (state === "running") {
+    const p = problem();
+    if (p?.fix === "brain") return "Needs a brain";
+    if (p?.fix === "key") return "Needs a new key";
+    if (skipped) return `Skipped: ${firstLine(skipped.title).slice(0, 100)} (${skipped.why === "no" ? "you said no" : "nobody answered in time"})`;
+    return "Ready";
+  }
   if (state === "stuck" && !currentTask) {
     const last = narrationLog.at(-1)?.text;
     return last?.startsWith("Stuck") ? firstLine(last.replace(/ — reply or take over to help$/, "")) : "Stuck: reply or take over to help";
@@ -159,6 +190,7 @@ function statusMsg(): StatusMsg {
     t: "status", state, headline: headline(), since: stateSince,
     task: currentTask ? { ...currentTask, prompt: currentTask.prompt.slice(0, 300) } : undefined,
     lastResult, nextRun: nextScheduledRun(schedules), pending: pendingApprovals.size, dayTokens: todayTokens(), paused,
+    ...(paused && control ? { control: true } : {}), problem: problem(), url: screenUrl,
   };
 }
 let lastStatus = "";
@@ -175,8 +207,20 @@ function pushStatus() {
   }, 50);
 }
 setInterval(pushStatus, 30_000); // "next run" and the day's tokens move with the clock too
+
+/** Where the agent's screen is (for the bezel bar). Its own start page and blank tabs count as nowhere. */
+let screenUrl: string | undefined;
+setInterval(async () => {
+  if (!desktop) return;
+  const u = await desktop.currentUrl().catch(() => undefined);
+  const shown = u && /^https?:/.test(u) && !u.startsWith(`http://127.0.0.1:${PORT}/`) && !u.startsWith(`http://localhost:${PORT}/`) ? u.slice(0, 2000) : undefined;
+  if (shown !== screenUrl) {
+    screenUrl = shown;
+    pushStatus();
+  }
+}, 1500);
 function settingsMsg(): ServerMsg {
-  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr } };
+  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
 }
 function pairingMsg(): ServerMsg {
   const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
@@ -190,8 +234,8 @@ function pairingMsg(): ServerMsg {
 
 // ---------- approvals ----------
 const APPROVAL_TTL_MIN = Number(process.env.SCUT_APPROVAL_TTL_MIN ?? 25);
-type Decision = { ok: boolean; via: ApprovalVia };
-const approvals = new Map<string, (ok: boolean, via: ApprovalVia) => void>();
+type Decision = { ok: boolean; via: ApprovalVia; reason?: string };
+const approvals = new Map<string, (ok: boolean, via: ApprovalVia, reason?: string) => void>();
 const pendingApprovals = new Map<string, ApprovalRequest>();
 /** Chat messages that carry an approval's buttons, so they can be edited once it's decided. */
 type Posted = { channel: Channel; chatId: string; ref: Promise<string | undefined> };
@@ -222,23 +266,29 @@ function requestApproval(title: string, detail?: string, suggestedKind?: string)
     resolveApproval(id, false, "timeout");
   }, APPROVAL_TTL_MIN * 60_000);
   return new Promise((resolve) => {
-    approvals.set(id, (ok, via) => {
+    approvals.set(id, (ok, via, reason) => {
       clearTimeout(expire);
       approvals.delete(id);
       pendingApprovals.delete(id);
       const by = approvalBy(via);
       const at = Date.now();
-      broadcast({ t: "approval.resolved", id, ok, by, via, at });
+      reason = !ok && typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 300) : undefined;
+      broadcast({ t: "approval.resolved", id, ok, by, via, at, ...(reason ? { reason } : {}) });
       // Echo the decision in every chat that got the buttons, and take the buttons away so they can't fire twice.
-      const done = approvalResolvedText(req, name, ok, by, at, spec?.ownerTz);
+      const done = approvalResolvedText(req, name, ok, by, at, spec?.ownerTz, reason);
       for (const p of posted) p.ref.then((ref) => (ref ? p.channel.closeApproval?.(p.chatId, ref, done) : undefined)).catch(() => {});
-      setState("busy");
-      resolve({ ok, via });
+      // Saying no is a normal outcome: the task goes on without this step, and the bench says what was skipped.
+      if (!ok && currentTask && via !== "stop") {
+        skipped = { title, why: via === "timeout" ? "timeout" : "no" };
+        lastStep = { text: `Skipped: ${title} (${via === "timeout" ? "nobody answered in time" : "you said no"})`, ts: at };
+      }
+      setState(currentTask ? "busy" : "running");
+      resolve({ ok, via, reason });
     });
   });
 }
-function resolveApproval(id: string, ok: boolean, via: ApprovalVia) {
-  approvals.get(id)?.(ok, via); // first answer wins
+function resolveApproval(id: string, ok: boolean, via: ApprovalVia, reason?: string) {
+  approvals.get(id)?.(ok, via, reason); // first answer wins
 }
 
 // ---------- computer actions (used by MCP server, mock harness and the human) ----------
@@ -317,7 +367,7 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
   if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
     const d = await requestApproval(String(a.title ?? ""), a.detail, a.approval_kind);
-    return Response.json({ ok: d.ok, by: d.via === "timeout" ? "timeout" : "owner" });
+    return Response.json({ ok: d.ok, by: d.via === "timeout" ? "timeout" : "owner", ...(d.ok ? {} : { reason: d.reason, message: denialText(d.via, d.reason) }) });
   }
   if (who === "agent") {
     if (paused) {
@@ -328,7 +378,8 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     if (spec?.autonomy === "ask") {
       const ask = askTitle(a);
       const d = await requestApproval(ask.title, ask.detail, ask.kind);
-      if (!d.ok) return new Response(d.via === "timeout" ? "no answer from the owner in time: skip this step and tell them" : "denied by owner", { status: 403 });
+      // Not an error: a plain answer the agent can act on (JSON, so every caller can read it).
+      if (!d.ok) return Response.json({ ok: false, denied: true, by: d.via === "timeout" ? "timeout" : "owner", reason: d.reason, message: denialText(d.via, d.reason) }, { status: 403 });
     }
     narrate(`Now: ${describe(a)}`);
     if (a.x !== undefined) broadcast({ t: "cursor", x: a.x, y: a.y, who: "agent" });
@@ -392,25 +443,7 @@ function prompt(text: string, origin: PromptOrigin) {
       narrate("Budget reached");
       return;
     }
-    currentTask = { prompt: text, origin: originLabel(origin), startedAt: Date.now() };
-    lastStep = null;
-    setState("busy");
-    const t0 = dayTokens;
-    try {
-      const reply = await harness.prompt(memoryPreamble() + text, (e) => {
-        if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${toolPhrase(e.name)}`);
-        if (e.type === "usage") {
-          tokens.input += e.input;
-          tokens.output += e.output;
-          dayTokens += e.input + e.output;
-          Bun.write(`${DATA}/usage.json`, JSON.stringify({ tokens, usageDay, dayTokens })).catch(() => {});
-          pushStatus();
-        }
-        if (e.type === "error") narrate(`Problem: ${e.message.slice(0, 160)}`);
-      });
-      const out = reply || "(no reply)";
-      recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
-      origin.onDone?.({ ok: true, text: out, tokens: dayTokens - t0 });
+    const reply = async (out: string) => {
       if (origin.notify) {
         // scheduled task: tell the owner wherever they paired
         for (const c of channels) {
@@ -421,7 +454,64 @@ function prompt(text: string, origin: PromptOrigin) {
         await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, out).catch((e) => log(`${origin.channel} send failed`, e?.message));
       }
       if (origin.channel === "crew") await postCrew(out);
+    };
+    skipped = null;
+    // No brain: say so plainly, and record a failure (never "(no reply)" reported as done).
+    if (spec && brainMissing(spec)) {
+      const msg = `${spec.name} has no brain yet, so it can't do this. Add one in Settings → Brain.`;
+      recordFailure({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
+      origin.onDone?.({ ok: false, text: msg, tokens: 0 });
+      narrate(`Problem: ${spec.name} has no brain yet`);
+      await reply(msg);
+      return;
+    }
+    currentTask = { prompt: text, origin: originLabel(origin), startedAt: Date.now() };
+    lastStep = null;
+    setState("busy");
+    const t0 = dayTokens;
+    const errors: string[] = [];
+    try {
+      const out0 = await harness.prompt(memoryPreamble() + text, (e) => {
+        if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${toolPhrase(e.name)}`);
+        if (e.type === "usage") {
+          tokens.input += e.input;
+          tokens.output += e.output;
+          dayTokens += e.input + e.output;
+          Bun.write(`${DATA}/usage.json`, JSON.stringify({ tokens, usageDay, dayTokens })).catch(() => {});
+          pushStatus();
+        }
+        if (e.type === "error") {
+          errors.push(e.message);
+          narrate(`Problem: ${e.message.slice(0, 160)}`);
+        }
+      });
       currentTask = null;
+      const failed = !out0.trim() && errors.length > 0;
+      if (failed) {
+        // The brain answered with an error and no text: an honest failure, in plain words.
+        const name = spec?.name ?? "Your agent";
+        const keyBad = errors.some((m) => KEY_REJECTED.test(m));
+        if (keyBad && !keyRejected) {
+          keyRejected = true;
+          broadcast(settingsMsg());
+        }
+        const msg = keyBad
+          ? `${name} couldn't do this: its brain's key was rejected. Paste a new key in Settings → Brain.`
+          : `${name} couldn't do this: its brain answered with an error (${firstLine(errors.at(-1)!).slice(0, 160)}).`;
+        recordFailure({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
+        origin.onDone?.({ ok: false, text: msg, tokens: dayTokens - t0 });
+        await reply(msg);
+        setState("running");
+        return;
+      }
+      if (keyRejected) {
+        keyRejected = false; // it works again
+        broadcast(settingsMsg());
+      }
+      const out = out0 || `${spec?.name ?? "Your agent"} finished without saying anything.`;
+      recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
+      origin.onDone?.({ ok: true, text: out, tokens: dayTokens - t0 });
+      await reply(out);
       setState("running");
       narrate("Ready");
     } catch (e: any) {
@@ -432,6 +522,8 @@ function prompt(text: string, origin: PromptOrigin) {
     }
   });
 }
+/** Provider answers that mean "this key is no good". */
+const KEY_REJECTED = /\b(401|403)\b|unauthori[sz]ed|invalid[^.]{0,20}(api[ _-]?)?key|incorrect api key|no auth credentials|authentication|api key (is )?(missing|invalid|not valid)/i;
 /** Tool names as words, for narration and the bench headline. */
 function toolPhrase(name: string) {
   const n = name.replace(/^mcp__\w+__/, "");
@@ -596,7 +688,13 @@ function makeHarness() {
     async (a) => {
       const r = await computer(a, "agent");
       if (a.kind === "screenshot") return { bytes: (await r.arrayBuffer()).byteLength };
-      return r.json();
+      // A "no" from the owner is JSON too; anything else that isn't JSON becomes a plain error object, never a parse error.
+      const body = await r.text();
+      try {
+        return JSON.parse(body);
+      } catch {
+        return { ok: false, error: body.slice(0, 300) };
+      }
     },
   );
 }
@@ -705,7 +803,7 @@ setInterval(() => clients.size && stats().catch(() => {}), 2000);
 
 // ---------- scheduled tasks ----------
 setInterval(async () => {
-  if (state !== "running" || !holdsLease()) return;
+  if (state !== "running" || paused || !holdsLease()) return; // paused (or driven): routines wait until resumed
   let changed = false;
   for (const s of schedules) {
     if (!scheduleDue(s)) continue;
@@ -780,7 +878,8 @@ Bun.serve<WsData>({
 
       // everything below requires the owner's signature
       if (!authed(req, url)) {
-        if (p === "/" || p.startsWith("/assets") || p.endsWith(".js") || p.endsWith(".css")) return serveUi(p);
+        // The UI shell and its static files (fonts too: the start page and the phone page use them) are public.
+        if (p === "/" || p.startsWith("/assets") || p.startsWith("/fonts/") || p.endsWith(".js") || p.endsWith(".css")) return serveUi(p);
         return new Response("unauthorized", { status: 401 });
       }
 
@@ -849,7 +948,7 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify(settingsMsg()));
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
       ws.send(JSON.stringify(statusMsg()));
-      ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
+      ws.send(JSON.stringify({ t: "paused", paused, control } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "runs", items: runs } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "memory", items: memory } satisfies ServerMsg));
@@ -882,7 +981,7 @@ Bun.serve<WsData>({
       } else if (m.t === "chat") {
         prompt(m.text, { channel: "app", from: "owner" });
       } else if (m.t === "approval") {
-        resolveApproval(m.id, m.ok, "app");
+        resolveApproval(m.id, m.ok, "app", typeof m.reason === "string" ? m.reason : undefined);
       } else if (m.t === "settings" && spec) {
         if (m.autonomy && ["ask", "risky", "auto"].includes(m.autonomy)) spec.autonomy = m.autonomy;
         if (typeof m.dailyTokenBudget === "number" && m.dailyTokenBudget >= 0) spec.dailyTokenBudget = Math.floor(m.dailyTokenBudget);
@@ -895,6 +994,8 @@ Bun.serve<WsData>({
           // A new brain: keep the old key unless a new one is given for the same endpoint.
           const keep = m.model.baseUrl === spec.model?.baseUrl ? spec.model?.apiKey : undefined;
           spec.model = { provider: spec.model?.provider ?? "scut", api: m.model.api, baseUrl: m.model.baseUrl, model: m.model.model.slice(0, 200), apiKey: m.model.apiKey || keep };
+          keyRejected = false; // a new brain or key: give it a chance
+          pushStatus();
           restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
         }
         if (m.channels) {
@@ -946,9 +1047,19 @@ Bun.serve<WsData>({
         }
         broadcast({ t: "skills", items: await listSkills(), error });
       } else if (m.t === "pause") {
-        paused = !!m.paused;
-        narrate(paused ? "You have control — agent paused" : "Control handed back");
-        broadcast({ t: "paused", paused });
+        const was = { paused, control };
+        // A plain pause/resume (control:false, e.g. "Pause all" / "Resume all") never takes the screen from the owner
+        // or hands it back: only Take over / Give back do that.
+        const plain = m.control === false;
+        if (!(plain && was.control)) {
+          paused = !!m.paused;
+          control = paused && !plain;
+        }
+        if (paused !== was.paused || control !== was.control) {
+          if (paused) narrate(control ? "You have control — agent paused" : "Paused by you");
+          else narrate(was.control ? "Control handed back" : "Resumed by you");
+        }
+        broadcast({ t: "paused", paused, control });
       } else if (m.t === "schedules" && Array.isArray(m.schedules)) {
         const known = new Map(schedules.map((s) => [s.id, s]));
         schedules = m.schedules.slice(0, 50).map((s) => ({ ...s, prompt: String(s.prompt).slice(0, 2000), createdAt: s.createdAt ?? known.get(s.id)?.createdAt ?? Date.now() }));
@@ -1020,7 +1131,7 @@ body{display:grid;place-items:center}
 </style></head><body><main class="c">
 <div class="p" aria-hidden="true"><svg width="64" height="64" viewBox="0 0 7 7"><rect x=".25" y=".25" width="6.5" height="6.5" rx="1.1" fill="#f6f5f2" stroke="#d6d3cc" stroke-width=".08"/>${dots}</svg><span class="cs">${esc(callsign(name, pubkey))}</span></div>
 <h1 class="n">${n}</h1>
-<p class="s">Free for a task. Message ${n} in Beamhop or in a chat app.</p>
+<p class="s">Ready for a task. Message ${n} in Beamhop or in a chat app.</p>
 </main><p class="f">This is ${n}'s own computer. Anything it does happens here, away from your files.</p></body></html>`;
 }
 const UI_HEADERS = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "referrer-policy": "no-referrer" };

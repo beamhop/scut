@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { ServerMsg } from "@scut/protocol";
-import { assessApproval, approvalText, nextRunAt, nextScheduledRun, scheduleDue, type Schedule } from "@scut/protocol";
+import { assessApproval, approvalResolvedText, approvalText, brainMissing, nextRunAt, nextScheduledRun, scheduleDue, type Schedule } from "@scut/protocol";
 import { startMockLlm } from "./mock-llm.ts";
 import { startMockTelegram } from "./mock-telegram.ts";
 import { startMockDiscord, startMockSlack } from "./mock-chat.ts";
@@ -749,9 +749,11 @@ describe("v0.35: small frames for tiles and phones", () => {
     const small: typeof big = new (big.constructor as any)(rec.current.endpoint, scut.auth(rec.current.endpoint));
     await small.open();
     small.send({ t: "subscribe", frames: true, fps: 2, small: true });
+    await Bun.sleep(500); // first paints (full frames, on purpose) are not the stream
     small.frameBytes = [];
     big.frameBytes = [];
-    for (let i = 0; i < 6; i++) { big.send({ t: "input", kind: "type", text: `x${i}` }); await Bun.sleep(700); } // make the screen change
+    // make the screen change (the start page has no text field; the pointer is drawn into the frames)
+    for (let i = 0; i < 6; i++) { big.send({ t: "input", kind: "move", x: 200 + i * 150, y: 200 + (i % 2) * 300 }); await Bun.sleep(700); }
     expect(ffmpegs()).toBeGreaterThanOrEqual(2); // full + small capture
     const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
     console.log("frame bytes: full", Math.round(avg(big.frameBytes)), "small", Math.round(avg(small.frameBytes)), "counts", big.frameBytes.length, small.frameBytes.length);
@@ -931,7 +933,7 @@ describe("v0.60: transparency", () => {
     expect(text).toBe("Atlas wants to: Pay the invoice\nHigh risk · payment\n\n€42 to ACME\n\nCame from: your Telegram message\nDecide within 25 min, then Atlas skips it.");
   });
 
-  test("structured approvals and the bench status: Free → working → Waiting for you → Free with a result", async () => {
+  test("structured approvals and the bench status: Ready → working → Waiting for you → Ready with a result", async () => {
     const rec = await scut.create({
       name: "Atlas",
       harness: "pi",
@@ -939,12 +941,13 @@ describe("v0.60: transparency", () => {
     });
     const c = await client(rec.id);
     const s0 = await c.waitFor<any>((m) => m.t === "status");
-    expect(s0).toMatchObject({ state: "running", headline: "Free", pending: 0 });
+    expect(s0).toMatchObject({ state: "running", headline: "Ready", pending: 0 });
+    expect(s0.problem).toBeUndefined();
     expect(s0.since).toBeLessThanOrEqual(Date.now());
     expect(s0.lastResult).toBeUndefined();
     c.send({ t: "chat", text: 'CALL request_approval {"title":"Pay the invoice"}\n' });
     const working = await c.waitFor<any>((m) => m.t === "status" && (m as any).state === "busy", 60_000);
-    expect(working.headline).not.toBe("Free");
+    expect(working.headline).not.toBe("Ready");
     expect(working.task).toMatchObject({ origin: "app chat" });
     const req = await c.waitFor<any>((m) => m.t === "approval.request", 120_000);
     // the agent passed no kind and no risk: agentd works both out
@@ -960,7 +963,7 @@ describe("v0.60: transparency", () => {
     const res = await c.waitFor<any>((m) => m.t === "approval.resolved" && (m as any).id === req.id);
     expect(res).toMatchObject({ ok: true, by: "you in Beamhop", via: "app" });
     expect(typeof res.at).toBe("number");
-    const free = await c.waitFor<any>((m) => m.t === "status" && (m as any).headline === "Free" && !!(m as any).lastResult, 120_000);
+    const free = await c.waitFor<any>((m) => m.t === "status" && (m as any).headline === "Ready" && !!(m as any).lastResult, 120_000);
     expect(free.lastResult.text).toContain("MOCK_DONE");
     expect(free.lastResult.text.length).toBeLessThanOrEqual(120);
     expect(free.since).toBeGreaterThanOrEqual(res.at);
@@ -1003,4 +1006,207 @@ describe("v0.60: transparency", () => {
     await until(() => tg.sent.slice(from).find((m) => m.chat_id === "42" && m.text.startsWith("mock:")), 30_000, "reply");
     c.close();
   }, 200_000);
+  test("the agent's screen is the page: no tabs or address bar; open_url and new tabs work; status says where it is", async () => {
+    const reports: { path: string; h: number; w: number }[] = [];
+    const site = Bun.serve({
+      port: 0,
+      hostname: "0.0.0.0",
+      fetch(req) {
+        const u = new URL(req.url);
+        if (u.pathname === "/report") {
+          reports.push({ path: u.searchParams.get("p")!, h: Number(u.searchParams.get("h")), w: Number(u.searchParams.get("w")) });
+          return new Response("ok");
+        }
+        const link = u.pathname === "/first" ? `<a target="_blank" href="/second" style="display:block;height:100vh">open a new tab</a>` : "";
+        return new Response(`<!doctype html><title>${u.pathname}</title><body style="margin:0">${link}<script>const r=()=>fetch("/report?p=${u.pathname}&h="+innerHeight+"&w="+innerWidth);r();setInterval(r,1000)</script>`, { headers: { "content-type": "text/html" } });
+      },
+    });
+    try {
+      const rec = await scut.create({ name: "Kiosk", harness: "mock" });
+      const ep = rec.current.endpoint;
+      // the start page's fonts are public (they were 401)
+      const font = await fetch(`${ep}/fonts/mona-sans-latin-wdth-normal.woff2`);
+      expect(font.status).toBe(200);
+      expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(1000);
+      const c = await client(rec.id);
+      const s0 = await c.waitFor<any>((m) => m.t === "status");
+      expect(s0.url).toBeUndefined(); // its own start page is nowhere
+      const base = `http://host.docker.internal:${site.port}`;
+      c.send({ t: "chat", text: `please open ${base}/first` });
+      await c.waitFor((m) => m.t === "status" && (m as any).url === `${base}/first`, 60_000);
+      // the page has the whole screen: no tab strip, address bar or frame (checked once the just-started browser settled)
+      await until(() => reports.find((r) => r.path === "/first" && r.w === 1280 && r.h === 800), 30_000, "first page fills the screen");
+      await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+      // a link that opens a new tab: the new tab is the screen, and the status follows it
+      c.send({ t: "input", kind: "click", x: 640, y: 400, button: 1 });
+      await c.waitFor((m) => m.t === "status" && (m as any).url === `${base}/second`, 30_000);
+      await until(() => reports.find((r) => r.path === "/second" && r.w === 1280 && r.h === 800), 30_000, "second page fills the screen");
+      // open_url still works from there (it navigates the tab on screen)
+      c.send({ t: "chat", text: `now open ${base}/third` });
+      await c.waitFor((m) => m.t === "status" && (m as any).url === `${base}/third`, 60_000);
+      await until(() => reports.find((r) => r.path === "/third"), 30_000, "third page report");
+      c.close();
+    } finally {
+      site.stop(true);
+    }
+  }, 200_000);
+
+  test("an agent with no brain says so plainly and fails honestly; a rejected key is a problem too", async () => {
+    expect(brainMissing({ harness: "pi", model: undefined })).toBe(true);
+    expect(brainMissing({ harness: "pi", model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", model: "x" } })).toBe(true);
+    expect(brainMissing({ harness: "pi", model: { provider: "scut", api: "openai-completions", baseUrl: "http://host.docker.internal:11434/v1", model: "llama" } })).toBe(false); // local: no key needed
+    expect(brainMissing({ harness: "codex", model: undefined })).toBe(false); // signs in to a subscription on its screen
+    expect(brainMissing({ harness: "mock", model: undefined })).toBe(false);
+    // "Skip this" in the create flow: Pi with the preset endpoint and no key
+    const rec = await scut.create({ name: "Brainless", harness: "pi", model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", model: "some/model" } });
+    const c = await client(rec.id);
+    const s0 = await c.waitFor<any>((m) => m.t === "status");
+    expect(s0).toMatchObject({ state: "running", headline: "Needs a brain", problem: { fix: "brain" } });
+    expect(s0.problem.text).toContain("Brainless has no brain yet");
+    expect((await c.waitFor<any>((m) => m.t === "settings")).problem).toMatchObject({ fix: "brain" });
+    c.send({ t: "chat", text: "find me a flight" });
+    const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");
+    expect(reply.text).toBe("Brainless has no brain yet, so it can't do this. Add one in Settings → Brain.");
+    const after = await c.waitFor<any>((m) => m.t === "status" && (m as any).lastResult?.ok === false);
+    expect(after).toMatchObject({ headline: "Needs a brain", state: "running" });
+    expect(c.msgs.some((m) => m.t === "narration" && (m as any).text === "Ready" && (m as any).ts > s0.since)).toBe(false); // never "Finished"
+    expect(c.msgs.some((m) => m.t === "narration" && /^Problem: Brainless has no brain yet/.test((m as any).text))).toBe(true);
+    // a brain whose key the provider rejects
+    c.send({ t: "settings", model: { api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, model: "mock-vision", apiKey: "rejected" } });
+    await c.waitFor((m) => m.t === "status" && !(m as any).problem);
+    await Bun.sleep(1500); // the harness restarts with the new brain
+    c.send({ t: "chat", text: "try again" });
+    const r2 = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent" && (m as any).text !== reply.text, 120_000);
+    expect(r2.text).toContain("key was rejected");
+    const keyBad = await c.waitFor<any>((m) => m.t === "status" && (m as any).problem?.fix === "key");
+    expect(keyBad.headline).toBe("Needs a new key");
+    expect(keyBad.lastResult.ok).toBe(false);
+    // a good key clears it
+    c.send({ t: "settings", model: { api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, model: "mock-vision", apiKey: "test" } });
+    await c.waitFor((m) => m.t === "status" && !(m as any).problem && (m as any).headline === "Ready");
+    c.close();
+  }, 300_000);
+
+  test("saying no is a normal outcome: the reason reaches the agent, the task finishes, the bench says what was skipped", async () => {
+    expect(approvalResolvedText({ title: "Pay the invoice" }, "Atlas", false, "you in Beamhop", Date.UTC(2026, 0, 1, 14, 2), "UTC", "Wrong site")).toBe("Atlas wanted to: Pay the invoice\n✕ Not allowed by you in Beamhop · 14:02\nReason: Wrong site");
+    // autonomy "ask": a computer step the owner refuses (this was "Stuck: JSON Parse error")
+    const rec = await scut.create({ name: "Scout", harness: "mock", autonomy: "ask" });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "please open https://shop.example.com/checkout" });
+    const req = await c.waitFor<any>((m) => m.t === "approval.request");
+    c.send({ t: "approval", id: req.id, ok: false, reason: "Wrong site" });
+    const res = await c.waitFor<any>((m) => m.t === "approval.resolved" && (m as any).id === req.id);
+    expect(res).toMatchObject({ ok: false, via: "app", reason: "Wrong site" });
+    const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");
+    expect(reply.text).toContain("skipped opening https://shop.example.com/checkout (you said no: Wrong site)");
+    const st = await c.waitFor<any>((m) => m.t === "status" && (m as any).state === "running" && !!(m as any).lastResult);
+    expect(st.headline).toBe("Skipped: Open https://shop.example.com/checkout (you said no)");
+    expect(st.lastResult.ok).toBeUndefined();
+    expect(c.msgs.some((m) => m.t === "narration" && /^Stuck|Parse/i.test((m as any).text))).toBe(false);
+    c.close();
+    // Pi + request_approval: the tool result tells the model plainly, with the reason
+    const pi = await scut.create({ name: "Pia", harness: "pi", model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" } });
+    const c2 = await client(pi.id);
+    c2.send({ t: "chat", text: 'CALL request_approval {"title":"Pay the invoice"}\n' });
+    const req2 = await c2.waitFor<any>((m) => m.t === "approval.request", 120_000);
+    const before = llm.requests.length;
+    c2.send({ t: "approval", id: req2.id, ok: false, reason: "Not now" });
+    await c2.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
+    const toolMsg = llm.requests.slice(before).flatMap((r: any) => r.messages).find((m: any) => m.role === "tool");
+    expect(JSON.stringify(toolMsg.content)).toContain("Your owner said no. Skip this step and tell them. Their reason: Not now");
+    const st2 = await c2.waitFor<any>((m) => m.t === "status" && (m as any).state === "running" && !!(m as any).lastResult);
+    expect(st2.headline).toBe("Skipped: Pay the invoice (you said no)");
+    c2.close();
+  }, 300_000);
+
+  test("while you drive the headline says so; Pause all / Resume all never take or hand back the screen; phone link is honest", async () => {
+    const { serve } = await import("../apps/app/src/server.ts");
+    const app = serve(scut, 0, "/nonexistent");
+    const api = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${app.port}${path}`, init).then((r) => r.json() as Promise<any>);
+    try {
+      const rec = await scut.create({ name: "Driven", harness: "mock" });
+      const c = await client(rec.id);
+      await c.waitFor((m) => m.t === "status" && (m as any).headline === "Ready");
+      c.send({ t: "pause", paused: true }); // Take over
+      const drive = await c.waitFor<any>((m) => m.t === "status" && (m as any).paused === true);
+      expect(drive).toMatchObject({ headline: "You have control", control: true, state: "running" });
+      expect((await c.waitFor<any>((m) => m.t === "paused" && (m as any).paused)).control).toBe(true);
+      // Resume all must not hand the screen back
+      expect((await api("/api/agents/resume-all", { method: "POST" })).sent).toContain("Driven");
+      await Bun.sleep(800);
+      expect(c.msgs.filter((m) => m.t === "status").at(-1)).toMatchObject({ headline: "You have control", paused: true });
+      c.send({ t: "pause", paused: false }); // Give back
+      await c.waitFor((m) => m.t === "status" && (m as any).headline === "Ready" && !(m as any).paused);
+      // Pause all: a plain pause (the screen stays the agent's)
+      const all = await api("/api/agents/pause-all", { method: "POST" });
+      expect(all.sent).toContain("Driven");
+      expect(all.failed).toEqual([]);
+      const p = await c.waitFor<any>((m) => m.t === "status" && (m as any).headline === "Paused");
+      expect(p.paused).toBe(true);
+      expect(p.control).toBeUndefined();
+      await api("/api/agents/resume-all", { method: "POST" });
+      await c.waitFor((m) => m.t === "status" && (m as any).headline === "Ready" && !(m as any).paused);
+      // a foreign origin can't pause everyone
+      expect((await fetch(`http://127.0.0.1:${app.port}/api/agents/pause-all`, { method: "POST", headers: { origin: "https://evil.example" } })).status).toBe(403);
+      c.close();
+      // phone link: an agent on this computer listens on loopback only, so a phone can't reach it; say so
+      const ph = await api(`/api/agents/${rec.id}/phone`);
+      expect(ph).toMatchObject({ reachable: false, local: true });
+      expect(ph.why).toBe("Your phone can't reach this computer. Beam Driven to a cloud to use it on your phone.");
+      // a cloud agent works as before; a local one whose port is open on the network gets the LAN address
+      const cloud = scut.phoneLink({ ...rec, current: { driver: "fly", instanceId: "x", endpoint: "https://driven.fly.dev" } });
+      expect(cloud).toMatchObject({ reachable: true, local: false });
+      expect(cloud.url).toStartWith("https://driven.fly.dev/?auth=");
+      scut.drivers.set("lan-test", { id: "lan-test", label: "LAN", isolation: "container", monthlyUsd: 0, create: async () => { throw new Error("no"); }, destroy: async () => {}, boundHosts: () => ["0.0.0.0"] });
+      const lan = scut.phoneLink({ ...rec, current: { driver: "lan-test", instanceId: "x", endpoint: "http://127.0.0.1:40123" } }, "192.168.1.20");
+      expect(lan).toMatchObject({ reachable: true, local: true });
+      expect(lan.url).toStartWith("http://192.168.1.20:40123/?auth=");
+      scut.drivers.delete("lan-test");
+    } finally {
+      app.stop(true);
+    }
+  }, 200_000);
+
+  test("an agent on an older image is rebuilt from the new one, keeping its disk (never while busy)", async () => {
+    const next = "scut-agent:e2e-next";
+    const b = Bun.spawnSync(["docker", "build", "-t", next, "-"], { stdin: new TextEncoder().encode(`FROM ${process.env.SCUT_IMAGE}\nLABEL scut.e2e=next-${Date.now()}\n`), stdout: "pipe", stderr: "pipe" });
+    expect(b.exitCode).toBe(0);
+    try {
+      const rec = await scut.create({ name: "Oldie", harness: "mock" });
+      const c = await client(rec.id);
+      c.send({ t: "chat", text: "before the update" });
+      await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+      c.send({ t: "memory", op: "add", text: "likes tea" });
+      await c.waitFor((m) => m.t === "memory" && (m as any).items.length === 1);
+      // busy (here: waiting for an approval): left alone for now
+      c.send({ t: "settings", autonomy: "ask" });
+      c.send({ t: "chat", text: "open https://example.com" });
+      const req = await c.waitFor<any>((m) => m.t === "approval.request");
+      expect((await scut.updateOutdatedHosts(next)).waiting).toContain("Oldie");
+      c.send({ t: "approval", id: req.id, ok: true });
+      await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).text.includes("message #2"));
+      await c.waitFor((m) => m.t === "status" && (m as any).state === "running");
+      c.close();
+      const name = rec.current.meta!.name;
+      const imageOf = () => Bun.spawnSync(["docker", "inspect", "-f", "{{.Image}}", name], { stdout: "pipe" }).stdout.toString().trim();
+      const want = Bun.spawnSync(["docker", "image", "inspect", "-f", "{{.Id}}", next], { stdout: "pipe" }).stdout.toString().trim();
+      expect(imageOf()).not.toBe(want);
+      expect(scut.drivers.get("local")!.outdated!(rec.current, next)).toBe(true);
+      const r = await scut.updateOutdatedHosts(next);
+      expect(r.updated).toContain("Oldie");
+      expect(r.failed).toEqual([]);
+      expect(imageOf()).toBe(want);
+      expect(scut.drivers.get("local")!.outdated!(scut.get(rec.id).current, next)).toBe(false);
+      expect(Bun.spawnSync(["docker", "inspect", `${name}-before-update`], { stdout: "ignore", stderr: "ignore" }).exitCode).not.toBe(0); // old container gone
+      const c2 = await client(rec.id);
+      const h = await c2.waitFor<any>((m) => m.t === "history");
+      expect(JSON.stringify(h.chat)).toContain("before the update");
+      expect((await c2.waitFor<any>((m) => m.t === "memory")).items[0].text).toBe("likes tea");
+      await until(() => c2.frames > 0 || undefined, 30_000, "its screen");
+      c2.close();
+      expect((await scut.updateOutdatedHosts(next)).updated).toEqual([]); // nothing left to do
+    } finally {
+      Bun.spawnSync(["docker", "rmi", "-f", next], { stdout: "ignore", stderr: "ignore" });
+    }
+  }, 300_000);
 });

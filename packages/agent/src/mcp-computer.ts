@@ -8,13 +8,24 @@ import { z } from "zod";
 const BASE = process.env.SCUT_CONTROL_URL ?? "http://127.0.0.1:8080";
 const TOKEN = process.env.SCUT_INTERNAL_TOKEN ?? "";
 
+/** The owner said no to this step (autonomy "ask"). Not a failure: the tool answers with plain words instead. */
+class Denied extends Error {}
+
 async function call(action: Record<string, unknown>) {
   const r = await fetch(`${BASE}/internal/computer`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-internal-token": TOKEN },
     body: JSON.stringify(action),
   });
-  if (!r.ok) throw new Error(`${action.kind} failed: ${r.status} ${await r.text()}`);
+  if (!r.ok) {
+    const body = await r.text();
+    let j: { denied?: boolean; message?: string } | null = null;
+    try {
+      j = JSON.parse(body);
+    } catch {}
+    if (j?.denied) throw new Denied(j.message ?? "Your owner said no. Skip this step and tell them.");
+    throw new Error(`${action.kind} failed: ${r.status} ${body}`);
+  }
   return r;
 }
 
@@ -43,6 +54,9 @@ const registerTool = server.tool.bind(server) as (...a: any[]) => any;
     }, 15_000);
     try {
       return await handler(...args);
+    } catch (e) {
+      if (e instanceof Denied) return ok(e.message);
+      throw e;
     } finally {
       if (beat) clearInterval(beat);
     }
@@ -64,7 +78,7 @@ server.tool("type_text", "Type text at the focused element", { text: z.string() 
   await call({ kind: "type", text: a.text });
   return ok("typed");
 });
-server.tool("key", "Press keys, xdotool syntax, e.g. 'Return', 'ctrl+l', 'ctrl+shift+t'", { keys: z.string() }, async (a) => {
+server.tool("key", "Press keys, xdotool syntax, e.g. 'Return', 'Tab', 'ctrl+a', 'ctrl+w' (close a tab a link opened). There is no address bar: use open_url to go to a web address.", { keys: z.string() }, async (a) => {
   await call({ kind: "key", keys: a.keys });
   return ok(`pressed ${a.keys}`);
 });
@@ -72,7 +86,7 @@ server.tool("scroll", "Scroll at a position; positive dy scrolls down", { ...xy,
   await call({ kind: "scroll", x: a.x, y: a.y, dy: a.dy });
   return ok("scrolled");
 });
-server.tool("open_url", "Open a URL in your Chromium browser", { url: z.string() }, async (a) => {
+server.tool("open_url", "Go to a web address in your browser (it fills the screen and has no address bar, so this is how you navigate)", { url: z.string() }, async (a) => {
   await call({ kind: "open_url", url: a.url });
   return ok(`opened ${a.url}`);
 });
@@ -86,9 +100,9 @@ server.tool(
   },
   async (a) => {
     const r = await call({ kind: "approval", title: a.title, detail: a.detail, approval_kind: a.kind });
-    const { ok: approved, by } = (await r.json()) as { ok: boolean; by?: string };
+    const { ok: approved, by, message } = (await r.json()) as { ok: boolean; by?: string; message?: string };
     if (approved) return ok("approved");
-    return ok(by === "timeout" ? "no answer from your owner in time — do not do it; skip this step and tell them you skipped it" : "denied — do not do it");
+    return ok(message ?? (by === "timeout" ? "No answer from your owner in time. Don't do it: skip this step and tell them you skipped it." : "Your owner said no. Skip this step and tell them."));
   },
 );
 

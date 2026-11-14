@@ -5,6 +5,28 @@ import type { Subprocess } from "bun";
 
 const DISPLAY = process.env.SCUT_DISPLAY ?? ":99";
 const env = () => ({ ...process.env, DISPLAY });
+const CDP_PORT = Number(process.env.SCUT_CDP_PORT ?? 9222);
+
+/** One DevTools protocol call on a page target (short-lived socket). */
+async function cdp(ws: string, method: string, params: Record<string, unknown> = {}): Promise<any> {
+  const sock = new WebSocket(ws);
+  try {
+    return await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`${method}: timeout`)), 5000);
+      sock.onerror = () => { clearTimeout(t); reject(new Error(`${method}: socket error`)); };
+      sock.onopen = () => sock.send(JSON.stringify({ id: 1, method, params }));
+      sock.onmessage = (e) => {
+        const m = JSON.parse(String(e.data));
+        if (m.id !== 1) return;
+        clearTimeout(t);
+        if (m.error) reject(new Error(`${method}: ${m.error.message}`));
+        else resolve(m.result);
+      };
+    });
+  } finally {
+    sock.close();
+  }
+}
 
 export class Desktop {
   private procs: Subprocess[] = [];
@@ -32,6 +54,17 @@ export class Desktop {
     this.procs.push(Bun.spawn(["openbox"], { env: env(), stdout: "ignore", stderr: "ignore" }));
     this.startBrowser(this.homeUrl);
     this.startFrames();
+    await this.waitForBrowser(20_000); // "running" means its browser can be driven
+  }
+
+  /** Wait until the browser answers on its debugging port (false after `ms`). */
+  private async waitForBrowser(ms: number): Promise<boolean> {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (await this.visiblePage(3000).catch(() => undefined)) return true;
+      await Bun.sleep(250);
+    }
+    return false;
   }
 
   private async waitForX() {
@@ -77,14 +110,40 @@ export class Desktop {
         `--user-data-dir=${this.dataDir}/chrome`,
         "--window-position=0,0",
         `--window-size=${SCREEN.w},${SCREEN.h}`,
-        "--start-maximized",
+        // The whole screen is the page: no tab strip, no address bar, no window frame (Beamhop's bezel shows where it is).
+        // Links that open a new tab still work (the new tab becomes the screen; ctrl+w goes back).
+        "--kiosk",
+        // Navigation (open_url) and "where is it" go through the DevTools protocol, on this computer's loopback only.
+        `--remote-debugging-port=${CDP_PORT}`,
+        "--remote-debugging-address=127.0.0.1",
         url,
       ],
       { env: env(), stdout: "ignore", stderr: "ignore" },
     );
     this.procs.push(p);
+    this.browser = p;
+  }
+  private browser?: Subprocess;
+
+  /** The tab on screen (DevTools target), or undefined when the browser or its debugging port is not there. */
+  private async visiblePage(timeoutMs = 3000): Promise<{ url: string; ws: string } | undefined> {
+    const list = (await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`, { signal: AbortSignal.timeout(timeoutMs) }).then((r) => r.json()).catch(() => null)) as
+      | { type: string; url: string; webSocketDebuggerUrl?: string }[]
+      | null;
+    const pages = (list ?? []).filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
+    if (pages.length <= 1) return pages[0] && { url: pages[0].url, ws: pages[0].webSocketDebuggerUrl! };
+    // Several tabs (a link opened a new one): the one on screen is the visible one; the list is newest-first otherwise.
+    for (const p of pages) {
+      const r = await cdp(p.webSocketDebuggerUrl!, "Runtime.evaluate", { expression: "document.visibilityState", returnByValue: true }).catch(() => null);
+      if (r?.result?.value === "visible") return { url: p.url, ws: p.webSocketDebuggerUrl! };
+    }
+    return { url: pages[0].url, ws: pages[0].webSocketDebuggerUrl! };
   }
 
+  /** The address of the page on screen (best effort). */
+  async currentUrl(): Promise<string | undefined> {
+    return (await this.visiblePage().catch(() => undefined))?.url;
+  }
   private startFrames() {
     this.ffmpeg = this.mjpeg(this.fps, ["-q:v", "6"], (f) => this.emit(f));
   }
@@ -176,18 +235,26 @@ export class Desktop {
     }
   }
 
-  /** Navigate the current browser tab (like typing in the address bar); start the browser if it is gone. */
+  /** Navigate the tab on screen; start the browser if it is gone (e.g. its last tab was closed). */
   async navigate(url: string) {
-    const win = await this.xdotool("search", "--onlyvisible", "--class", "chromium").catch(() => "");
-    const id = win.split("\n").filter(Boolean).at(-1);
-    if (!id) {
-      this.startBrowser(url);
-      return;
+    // A busy computer or a browser that is still starting can take a while to answer: keep asking for a bit.
+    const t0 = Date.now();
+    do {
+      const page = await this.visiblePage().catch(() => undefined);
+      if (page && (await cdp(page.ws, "Page.navigate", { url }).catch(() => null))) return;
+      if (!this.browserAlive()) break;
+      await Bun.sleep(500);
+    } while (Date.now() - t0 < 15_000);
+    // Gone, or running but not answering: (re)start it on that page. There is no address bar to type into.
+    if (this.browserAlive()) {
+      this.browser!.kill();
+      await this.browser!.exited.catch(() => {});
     }
-    await this.xdotool("windowactivate", "--sync", id).catch(() => {});
-    await this.xdotool("key", "--clearmodifiers", "ctrl+l");
-    await this.xdotool("type", "--delay", "4", "--", url);
-    await this.xdotool("key", "Return");
+    this.startBrowser(url);
+  }
+
+  private browserAlive() {
+    return !!this.browser && this.browser.exitCode === null && !this.browser.killed;
   }
 
   stop() {

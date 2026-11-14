@@ -13,6 +13,8 @@ export function startMockLlm(port = 0) {
         return Response.json({ data: [{ id: "mock-vision" }] });
       }
       if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 });
+      // A key the provider rejects (the key "rejected" — distinct from "bad", which only /models refuses).
+      if (req.headers.get("authorization") === "Bearer rejected") return Response.json({ error: { message: "Invalid API key provided" } }, { status: 401 });
       const body = (await req.json()) as any;
       auths.push(req.headers.get("authorization") ?? "");
       body.__auth = req.headers.get("authorization") ?? ""; // per request, for tests that line requests up with keys
