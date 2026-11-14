@@ -761,3 +761,18 @@ describe("v0.35: small frames for tiles and phones", () => {
     big.close();
   });
 });
+
+describe("v0.36: no leftover hosts", () => {
+  test("old hosts left behind by earlier beams are removed when the app starts", async () => {
+    const rec = await scut.create({ name: "Tidy", harness: "mock" });
+    const old = rec.current;
+    await scut.beam(rec.id, "sim-cloud"); // like earlier versions: the old host stays, retired
+    expect((await (await fetch(`${old.endpoint}/health`)).json()).state).toBe("retired");
+    const again = await Scut.open();
+    await again.cleanupRetiredHosts();
+    expect(await fetch(`${old.endpoint}/health`).then(() => "up", () => "down")).toBe("down");
+    expect(again.get(rec.id).history.at(-1)!.meta?.removed).toBe("1");
+    expect((await (await fetch(`${again.get(rec.id).current.endpoint}/health`)).json()).state).toBe("running"); // the live one untouched
+    scut.get(rec.id).history = again.get(rec.id).history;
+  });
+});

@@ -60,6 +60,7 @@ export class Scut {
     s.agents = await loadJson<AgentRecord[]>(home, "agents.json", []);
     await s.loadDrivers();
     await s.recoverInterruptedBeams();
+    void s.cleanupRetiredHosts();
     return s;
   }
 
@@ -89,6 +90,22 @@ export class Scut {
       a.beam = { ...a.beam!, stage: "failed", target: undefined, error: `The app closed during the move. ${a.name} stayed where it was.`, doneAt: Date.now() };
     }
     if (stuck.length) await this.save();
+  }
+
+  /** Remove old hosts that earlier versions left behind after beams (retired, but still a container or a billed machine). */
+  async cleanupRetiredHosts() {
+    let changed = false;
+    for (const a of this.agents) {
+      for (const h of a.history) {
+        if (h.meta?.removed) continue;
+        const st = (await fetch(`${h.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { state?: string; agent?: string } | null;
+        if (!st || st.state !== "retired" || st.agent !== a.id) continue; // unreachable for now, still in use, or not ours
+        await this.drivers.get(h.driver)?.destroy(h).catch(() => {});
+        h.meta = { ...h.meta, removed: "1" };
+        changed = true;
+      }
+    }
+    if (changed) await this.save();
   }
 
   async loadDrivers() {
@@ -327,7 +344,11 @@ export class Scut {
       rec.history.push(src);
       rec.current = target;
       await stage("online");
-      if (opts.destroySource) await this.drivers.get(src.driver)?.destroy(src).catch(() => {});
+      if (opts.destroySource) {
+        await this.drivers.get(src.driver)?.destroy(src).catch(() => {});
+        src.meta = { ...src.meta, removed: "1" };
+        await this.save();
+      }
       return rec;
     } catch (e: any) {
       await this.req(src.endpoint, "/beam/abort", { method: "POST" }).catch(() => {});

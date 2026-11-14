@@ -102,7 +102,8 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             const { to } = (await req.json()) as { to: string };
             if (rec.beam && !["online", "failed"].includes(rec.beam.stage)) return json({ error: "beam in progress" }, 409);
             rec.beam = { to, stage: "packing", startedAt: Date.now() };
-            scut.beam(rec.id, to).catch((e) => console.error("beam failed", e));
+            // Once the agent is up on the new host the old one is only a retired shell; remove it (cloud hosts bill by the hour).
+            scut.beam(rec.id, to, { destroySource: true }).catch((e) => console.error("beam failed", e));
             return json({ ok: true });
           }
         }

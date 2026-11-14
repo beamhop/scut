@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.36.0 — No leftover hosts
+
+- Fixed a cost leak: beaming from the app left the old host behind as a retired shell — a container on your laptop, or a machine still billing by the hour on a cloud. The old host is now removed as soon as the agent is running on the new one (failed beams still roll back first).
+- On start, the app removes retired hosts that earlier versions left behind. It only touches hosts that answer and say they're retired copies of that agent; anything unreachable or still in use is left alone.
+- Test: a leftover retired host is removed on start while the live one keeps running.
+
 ## v0.35.0 — Light tiles
 
 - Crew-grid tiles and phones now get small frames: a second capture at 2 fps, 480 px wide, roughly a third of the bytes of a full frame (less on busy pages). It runs only while someone is watching a tile and stops when they leave. The agent view on a desktop keeps the full 1280 px stream.
