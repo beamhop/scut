@@ -37,7 +37,7 @@ type ChatLine = { from: string; channel: string; text: string; ts: number };
 type Approval = { id: string; title: string; detail?: string; ts: number };
 type Settings = Extract<ServerMsg, { t: "settings" }>;
 type Pairing = Extract<ServerMsg, { t: "pairing" }>["telegram"];
-function useAgent(agent: Agent | undefined, frames: boolean) {
+function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [frame, setFrame] = useState<string>();
   const [state, setState] = useState<AgentState>("starting");
   const [chat, setChat] = useState<ChatLine[]>([]);
@@ -66,7 +66,7 @@ function useAgent(agent: Agent | undefined, frames: boolean) {
       sock = new WebSocket(`${endpoint.replace(/^http/, "ws")}/ws?auth=${tokenRef.current}`);
       sock.binaryType = "blob";
       ws.current = sock;
-      sock.onopen = () => { setConnected(true); sock.send(JSON.stringify({ t: "subscribe", frames })); };
+      sock.onopen = () => { setConnected(true); sock.send(JSON.stringify({ t: "subscribe", frames, fps })); };
       sock.onmessage = (ev) => {
         if (ev.data instanceof Blob) {
           const next = URL.createObjectURL(ev.data);
@@ -193,7 +193,7 @@ function BeamProgress({ agent }: { agent: Agent }) {
 
 // ---------------- tile ----------------
 function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests: Destination[]; onOpen: () => void; onBeam: (to: string) => void; onStatus: (id: string, s: string) => void }) {
-  const a = useAgent(agent, true);
+  const a = useAgent(agent, true, 1);
   const [menu, setMenu] = useState(false);
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
   const now = a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
@@ -574,12 +574,37 @@ function SettingsPanel({ a }: { a: ReturnType<typeof useAgent> }) {
           </label>
         ))}
       </div>
+      <ChannelSettings a={a} />
       <Schedules a={a} />
       <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Daily token budget</div>
       <div className="flex items-center gap-2">
         <input value={budget} onChange={(e) => setBudget(e.target.value)} inputMode="numeric" className="w-32 rounded-lg border border-white/10 bg-panel2 px-2 py-1 font-mono" aria-label="Daily token budget, 0 for none" />
         <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
         <span className="font-mono text-[11px] text-slate-500">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
+  const [tg, setTg] = useState("");
+  const ch = a.settings?.channels;
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Channels</div>
+      <div className="flex items-center gap-2">
+        <span className="w-20">Telegram</span>
+        {ch?.telegram ? (
+          <><span className="text-emerald-300">connected</span><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto text-slate-500 hover:text-red-300">Disconnect</button></>
+        ) : (
+          <><input value={tg} onChange={(e) => setTg(e.target.value)} placeholder="Bot token from @BotFather" aria-label="Telegram bot token" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+          <button onClick={() => { if (tg.trim()) a.send({ t: "settings", channels: { telegram: { token: tg.trim() } } }); setTg(""); }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button></>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="w-20">Nostr</span>
+        {ch?.nostr ? <span className="text-emerald-300">DMs on</span> : <span className="text-slate-500">off</span>}
+        <button onClick={() => a.send({ t: "settings", channels: { nostr: ch?.nostr ? null : {} } })} className="ml-auto text-slate-500 hover:text-white">{ch?.nostr ? "Turn off" : "Turn on"}</button>
       </div>
     </div>
   );

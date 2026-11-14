@@ -77,7 +77,7 @@ function setState(s: AgentState) {
 }
 
 // ---------- WebSocket clients ----------
-type WsData = { frames: boolean; id: string };
+type WsData = { frames: boolean; id: string; fps: number; lastSent: number; lastHash?: number | bigint };
 const clients = new Set<ServerWebSocket<WsData>>();
 function broadcast(m: ServerMsg, except?: ServerWebSocket<WsData>) {
   const s = JSON.stringify(m);
@@ -96,7 +96,7 @@ function recordChat(line: ChatLine) {
   appendFile(`${DATA}/chat.jsonl`, JSON.stringify(line) + "\n").catch(() => {});
 }
 function settingsMsg(): ServerMsg {
-  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens };
+  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens, channels: { telegram: !!spec?.channels.telegram, nostr: !!spec?.channels.nostr } };
 }
 function pairingMsg(): ServerMsg {
   return { t: "pairing", telegram: spec?.channels.telegram ? { bot: tgBot, code: tgOwner ? undefined : tgPairCode, owner: tgOwner?.name } : undefined };
@@ -468,7 +468,7 @@ Bun.serve<WsData>({
       }
 
       if (p === "/ws") {
-        if (server.upgrade(req, { data: { frames: false, id: bytesToHex(crypto.getRandomValues(new Uint8Array(4))) } })) return;
+        if (server.upgrade(req, { data: { frames: false, fps: 8, lastSent: 0, id: bytesToHex(crypto.getRandomValues(new Uint8Array(4))) } })) return;
         return new Response("upgrade failed", { status: 400 });
       }
       if (p === "/status") return Response.json({ state, hostPubkey, spec: spec && { ...spec, model: spec.model && { ...spec.model, apiKey: undefined }, channels: Object.keys(spec.channels) }, holdsLease: holdsLease(), tokens });
@@ -539,6 +539,8 @@ Bun.serve<WsData>({
       }
       if (m.t === "subscribe") {
         ws.data.frames = m.frames;
+        ws.data.fps = Math.max(0.2, Math.min(15, Number(m.fps ?? 8)));
+        ws.data.lastHash = undefined;
         if (m.frames && desktop?.latest) ws.send(desktop.latest);
       } else if (m.t === "input") {
         if (desktop) await desktop.act(m as any).catch((e) => ws.send(JSON.stringify({ t: "error", message: String(e.message) })));
@@ -552,6 +554,19 @@ Bun.serve<WsData>({
         if (m.autonomy && ["ask", "risky", "auto"].includes(m.autonomy)) spec.autonomy = m.autonomy;
         if (typeof m.dailyTokenBudget === "number" && m.dailyTokenBudget >= 0) spec.dailyTokenBudget = Math.floor(m.dailyTokenBudget);
         if (typeof m.persona === "string") spec.persona = m.persona.slice(0, 2000);
+        if (m.channels) {
+          const ch = { ...spec.channels };
+          if (m.channels.telegram === null) delete ch.telegram;
+          else if (m.channels.telegram?.token) ch.telegram = { token: m.channels.telegram.token };
+          if (m.channels.nostr === null) delete ch.nostr;
+          else if (m.channels.nostr) ch.nostr = { ...(ch.nostr ?? {}), ...m.channels.nostr };
+          spec.channels = ch;
+          if (holdsLease()) {
+            await stopChannels();
+            await startChannels();
+            broadcast(pairingMsg());
+          }
+        }
         await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
         broadcast(settingsMsg());
       } else if (m.t === "crew" && Array.isArray(m.members)) {
@@ -583,7 +598,18 @@ setInterval(() => {
   if (desktop && !frameHooked) {
     frameHooked = true;
     desktop.frameListeners.add((jpeg) => {
-      for (const c of clients) if (c.data.frames && c.getBufferedAmount() < 1_000_000) c.send(jpeg);
+      // Per-viewer frame rate, and skip frames identical to the last one sent (idle screens cost ~nothing).
+      const hash = Bun.hash(jpeg);
+      const now = Date.now();
+      for (const c of clients) {
+        const d = c.data;
+        if (!d.frames || c.getBufferedAmount() > 1_000_000) continue;
+        if (now - d.lastSent < 1000 / d.fps - 20) continue;
+        if (d.lastHash === hash && now - d.lastSent < 5000) continue;
+        d.lastSent = now;
+        d.lastHash = hash;
+        c.send(jpeg);
+      }
     });
   }
   if (!desktop) frameHooked = false;

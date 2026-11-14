@@ -10,7 +10,7 @@ export class Desktop {
   private ffmpeg?: Subprocess;
   latest?: Uint8Array;
   frameListeners = new Set<(jpeg: Uint8Array) => void>();
-  private fps = 4;
+  private fps = Number(process.env.SCUT_FPS ?? 8);
 
   constructor(private dataDir: string) {}
 
@@ -41,14 +41,16 @@ export class Desktop {
     const ca = process.env.SCUT_EXTRA_CA;
     if (!ca) return;
     const db = `sql:${process.env.HOME ?? "/root"}/.pki/nssdb`;
-    Bun.spawnSync(["mkdir", "-p", db.slice(4)]);
-    Bun.spawnSync(["certutil", "-d", db, "-N", "--empty-password"], { stderr: "ignore" });
+    const dir = db.slice(4);
+    if (require("node:fs").existsSync(`${dir}/cert9.db`)) return; // already done (e.g. after a beam abort)
+    Bun.spawnSync(["mkdir", "-p", dir]);
+    Bun.spawnSync(["certutil", "-d", db, "-N", "--empty-password"], { stdin: "ignore", stderr: "ignore", timeout: 10_000 });
     // the bundle may hold several certs; import each
     const pems = require("node:fs").readFileSync(ca, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
     pems.forEach((pem: string, i: number) => {
       const f = `/tmp/scut-ca-${i}.pem`;
       require("node:fs").writeFileSync(f, pem);
-      Bun.spawnSync(["certutil", "-d", db, "-A", "-t", "C,,", "-n", `scut-extra-${i}`, "-i", f], { stderr: "ignore" });
+      Bun.spawnSync(["certutil", "-d", db, "-A", "-t", "C,,", "-n", `scut-extra-${i}`, "-i", f], { stdin: "ignore", stderr: "ignore", timeout: 10_000 });
     });
   }
 

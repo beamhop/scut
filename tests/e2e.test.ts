@@ -1,6 +1,6 @@
 // End-to-end tests: real agent containers (Docker), real desktop, real beams.
 // Run: SCUT_IMAGE=ghcr.io/beamhop/scut-agent:dev bun test tests/e2e.test.ts --timeout 600000
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { ServerMsg } from "@scut/protocol";
@@ -63,6 +63,10 @@ const client = async (id: string) => {
 
 beforeAll(async () => {
   scut = await Scut.open();
+});
+// Keep memory flat: each agent runs a full Chromium. Only "Mocky" lives across tests.
+afterEach(async () => {
+  for (const a of [...scut.agents]) if (a.name !== "Mocky") await scut.remove(a.id).catch(() => {});
 });
 afterAll(async () => {
   for (const a of [...scut.agents]) await scut.remove(a.id).catch(() => {});
@@ -291,6 +295,63 @@ describe("v0.3: auth binding, take control, schedules", () => {
     expect(ran.text).toContain("scheduled ping");
     const sched = await c.waitFor<any>((m) => m.t === "schedules" && !!(m as any).schedules[0]?.lastRun);
     expect(sched.schedules[0].lastRun).toBeGreaterThan(0);
+    c.close();
+  });
+});
+
+describe("v0.9: rollback, frame budget, channels from settings", () => {
+  test("a failed beam rolls back: the agent keeps running where it was", async () => {
+    const rec = await scut.create({ name: "Sturdy", harness: "mock" });
+    scut.drivers.set("broken", {
+      id: "broken", label: "Broken cloud", isolation: "container", monthlyUsd: 0,
+      create: async () => { throw new Error("provider said no"); },
+      destroy: async () => {},
+    });
+    let err = "";
+    const t0 = Date.now();
+    try {
+      await scut.beam(rec.id, "broken", { onStage: (x) => console.log("rollback stage", x, Date.now() - t0) });
+    } catch (e: any) {
+      err = String(e?.message);
+    }
+    expect(err).toContain("provider said no");
+    expect(scut.get(rec.id).current.driver).toBe("local");
+    expect(scut.get(rec.id).beam?.stage).toBe("failed");
+    const c = await client(rec.id);
+    await c.waitFor((m) => (m.t === "hello" || m.t === "state") && (m as any).state === "running");
+    c.send({ t: "chat", text: "still here?" });
+    const r = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");
+    expect(r.text).toContain("message #1");
+    c.close();
+    scut.drivers.delete("broken");
+  });
+
+  test("an idle screen costs almost no frames; low-fps viewers get fewer", async () => {
+    const rec = await scut.create({ name: "Idler", harness: "mock" });
+    const fast = await client(rec.id);
+    const slow = new (fast.constructor as any)(rec.current.endpoint, scut.auth(rec.current.endpoint));
+    await slow.open();
+    slow.send({ t: "subscribe", frames: true, fps: 1 });
+    await Bun.sleep(4000);
+    fast.frames = 0;
+    slow.frames = 0;
+    await Bun.sleep(4000);
+    console.log("idle frames in 4s: 8fps viewer", fast.frames, "1fps viewer", slow.frames);
+    expect(fast.frames).toBeLessThanOrEqual(3); // duplicates skipped (keepalive every 5s)
+    fast.send({ t: "input", kind: "type", text: "moving" }); // screen changes
+    fast.close();
+    slow.close();
+  });
+
+  test("connect Telegram later from settings", async () => {
+    const rec = await scut.create({ name: "Latecomer", harness: "mock" });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "settings");
+    c.send({ t: "settings", channels: { telegram: { token: "LATE:TOKEN" } } });
+    const s = await c.waitFor<any>((m) => m.t === "settings" && m.channels?.telegram);
+    expect(s.channels.telegram).toBe(true);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!m.telegram?.code);
+    expect(p.telegram.bot).toBe("mock_bot");
     c.close();
   });
 });

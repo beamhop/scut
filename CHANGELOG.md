@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.0 — 2026-11-14 02:33
+
+- Bandwidth: each viewer picks its frame rate (crew tiles 1 fps, agent view 8 fps) and frames identical to the last one sent are skipped, so an idle agent costs ~1 frame per 5 s per viewer instead of a constant stream. Desktop capture raised to 8 fps for a snappier agent view.
+- Connect or disconnect Telegram and Nostr from an agent's Settings after creation (channels restart live, pairing code appears).
+- Failed beams roll back cleanly: tested with a provider that refuses to create a machine; the agent keeps running where it was. Found and fixed a hang where restarting the desktop after an aborted beam blocked on certutil.
+- Test suite frees each test's agents (every agent runs a full Chromium), keeping memory flat.
+- Tests: 20/20 e2e, 7/7 UI.
+
 ## v0.8.0 — 2026-11-14 01:56
 
 Found by running a demo crew overnight: two agents got into a reply loop in the crew room, and some crew messages were lost.

@@ -110,8 +110,8 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "+ New agent")!.click());
   await page.waitForSelector('[role="dialog"]');
   await page.type('[aria-label="Name"]', "Uiborn");
-  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
-  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Beam it in"))!.click());
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Beam it in"))!.click());
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
   await page.close();
   expect(scut.agents.find((a) => a.name === "Uiborn")).toBeTruthy();
