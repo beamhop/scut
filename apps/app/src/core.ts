@@ -139,6 +139,7 @@ export class Scut {
     model?: ModelConfig;
     autonomy?: Autonomy;
     telegramToken?: string;
+    nostr?: boolean | { relays?: string[]; ownerPubkey?: string };
     driver?: string;
     dailyTokenBudget?: number;
   }): Promise<AgentRecord> {
@@ -157,7 +158,10 @@ export class Scut {
       autonomy: o.autonomy ?? "risky",
       ownerPubkey: this.ownerPubkey,
       agentPubkey: getPublicKey(agentSk),
-      channels: o.telegramToken ? { telegram: { token: o.telegramToken } } : {},
+      channels: {
+        ...(o.telegramToken ? { telegram: { token: o.telegramToken } } : {}),
+        ...(o.nostr ? { nostr: o.nostr === true ? {} : o.nostr } : {}),
+      },
       createdAt: Date.now(),
       dailyTokenBudget: o.dailyTokenBudget,
     };

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.0 — 2026-11-14 01:50
+
+- Nostr channel: every agent can be DMed privately over NIP-17 gift wraps using its own key; replies go back privately; the agent publishes a profile (kind 0).
+- Approvals by Nostr DM: the owner's npub gets "Approval needed … reply yes/no <id>"; only that npub can answer.
+- A processed-message cursor in /data means restarts and beams never replay old DMs.
+- UI: Nostr DMs toggle + "your npub" in agent creation; the agent's npub is shown (click to copy) in the agent view.
+- Tested live on nos.lol + relay.primal.net: user DM → approval DM → "yes <id>" → private reply.
+- Tests: 17/17 e2e, 5/5 UI, 3/3 live (OpenRouter, Telegram, Nostr).
+
 ## v0.4.0 — 2026-11-14 01:35
 
 - Single-file desktop app: `scripts/build-app.sh` compiles `scut` for Linux, macOS and Windows (x64/arm64) with the UI embedded; no files or installs next to it. Verified the Linux binary end to end from an empty folder (create agent, serve UI, API, remove).

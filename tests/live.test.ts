@@ -78,3 +78,42 @@ describe.skipIf(!TG)("telegram", () => {
     expect(h.state).toBe("retired"); // old host stopped polling
   });
 });
+
+describe("nostr (real public relays)", () => {
+  test("a user DMs the agent over NIP-17 and gets a private reply; approvals by DM", async () => {
+    const { generateSecretKey, getPublicKey, nip17, SimplePool } = await import("nostr-tools");
+    const userSk = generateSecretKey();
+    const userPk = getPublicKey(userSk);
+    const relays = ["wss://nos.lol", "wss://relay.primal.net"];
+    const rec = await scut.create({ name: "Nostro", harness: "mock", autonomy: "ask", nostr: { relays, ownerPubkey: userPk } });
+    await Bun.sleep(3000); // let the agent subscribe
+    const pool = new SimplePool();
+    const inbox: string[] = [];
+    const sub = pool.subscribeMany(relays, { kinds: [1059], "#p": [userPk] }, {
+      onevent: (w) => {
+        try {
+          const r = nip17.unwrapEvent(w, userSk);
+          if (!inbox.includes(r.content)) inbox.push(r.content);
+        } catch {}
+      },
+    });
+    const send = (text: string) => Promise.any(pool.publish(relays, nip17.wrapEvent(userSk, { publicKey: rec.agentPubkey }, text)));
+    const wait = async (re: RegExp, ms = 60_000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        const hit = inbox.find((x) => re.test(x));
+        if (hit) return hit;
+        await Bun.sleep(300);
+      }
+      throw new Error(`no DM matching ${re}; inbox: ${JSON.stringify(inbox)}`);
+    };
+    await send("please open https://example.com");
+    const ask = await wait(/Approval needed/);
+    const id = ask.match(/yes ([0-9a-f]+)/)![1];
+    await send(`yes ${id}`);
+    const reply = await wait(/^mock: message #1/);
+    console.log("nostr reply:", reply);
+    sub.close();
+    pool.close(relays);
+  });
+});

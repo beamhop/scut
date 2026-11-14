@@ -30,7 +30,8 @@ export interface AgentSpec {
   agentPubkey: string;
   channels: {
     telegram?: { token: string; ownerChatId?: number };
-    nostr?: { relays: string[] };
+    /** Nostr DMs (NIP-17). ownerPubkey receives approvals; defaults to the app owner key. */
+    nostr?: { relays?: string[]; ownerPubkey?: string };
   };
   createdAt: number;
   /** Hard cap on model tokens per day (input + output). 0 or missing = no cap. */

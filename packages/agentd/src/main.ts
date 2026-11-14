@@ -7,7 +7,7 @@ import {
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
-import { TelegramChannel, type Channel } from "@scut/channels";
+import { NostrChannel, TelegramChannel, type Channel } from "@scut/channels";
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
@@ -108,6 +108,9 @@ function requestApproval(title: string, detail?: string): Promise<boolean> {
   const chat = tgOwner?.chatId;
   const tg = channels.find((c) => c.name === "telegram");
   if (tg && chat) tg.askApproval(chat, id, title).catch(() => {});
+  const nc = channels.find((c) => c.name === "nostr");
+  const no = nostrOwner();
+  if (nc && no) nc.askApproval(no, id, title).catch(() => {});
   setState("stuck");
   narrate(`Waiting for approval: ${title}`);
   return new Promise((resolve) => {
@@ -177,7 +180,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
     if (budget > 0 && dayTokens >= budget) {
       const msg = `I've used today's token budget (${dayTokens.toLocaleString()} of ${budget.toLocaleString()}). Raise it in my settings or try again tomorrow.`;
       recordChat({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
-      if (origin.channel === "telegram" && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, msg);
+      if ((origin.channel === "telegram" || origin.channel === "nostr") && origin.chatId) await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, msg);
       narrate("Budget reached");
       return;
     }
@@ -196,6 +199,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       const out = reply || "(no reply)";
       recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
       if ((origin.channel === "telegram" || origin.notify) && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, origin.notify ? `⏰ ${text}\n\n${out}` : out);
+      if (origin.channel === "nostr" && origin.chatId) await channels.find((c) => c.name === "nostr")?.send(origin.chatId, out).catch((e) => log("nostr send failed", e?.message));
       setState("running");
       narrate("Idle");
     } catch (e: any) {
@@ -242,7 +246,25 @@ async function startChannels() {
     channels.push(c);
     log("telegram connected");
   }
+  if (spec.channels.nostr && agentSk) {
+    const n = new NostrChannel(agentSk, spec.channels.nostr.relays, `${DATA}/nostr-cursor`, {
+      name: spec.name,
+      about: `A Beamhop agent (${spec.template ?? "assistant"}). DM me.`,
+    });
+    n.start(
+      (m) => prompt(m.text, { channel: "nostr", chatId: m.chatId, from: m.from }),
+      (id, ok, byId) => {
+        if (byId === nostrOwner()) resolveApproval(id, ok, "nostr:owner");
+      },
+    );
+    channels.push(n);
+    log("nostr connected");
+  }
 }
+function nostrOwner() {
+  return spec?.channels.nostr?.ownerPubkey ?? spec?.ownerPubkey;
+}
+
 async function stopChannels() {
   await Promise.all(channels.splice(0).map((c) => c.stop()));
 }

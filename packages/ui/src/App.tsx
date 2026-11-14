@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerMsg, AgentState, Schedule } from "@scut/protocol";
+import { nip19 } from "nostr-tools";
 
 // ---------------- types + api ----------------
 type Instance = { driver: string; instanceId: string; endpoint: string };
@@ -272,6 +273,18 @@ const PRESETS: Record<string, { label: string; baseUrl: string; model: string; a
   ollama: { label: "Local (Ollama)", baseUrl: "http://host.docker.internal:11434/v1", model: "qwen3.8:8b", api: "openai-completions", keyHint: "not needed" },
 };
 
+function npubToHex(s: string): string | undefined {
+  const v = s.trim();
+  if (!v) return undefined;
+  if (/^[0-9a-f]{64}$/.test(v)) return v;
+  try {
+    const d = nip19.decode(v);
+    return d.type === "npub" ? (d.data as string) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => void }) {
   const [step, setStep] = useState(firstRun ? 0 : 1);
   const [kind, setKind] = useState("openrouter");
@@ -281,6 +294,8 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
   const [telegram, setTelegram] = useState("");
+  const [nostr, setNostr] = useState(true);
+  const [npub, setNpub] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const last = 1;
@@ -292,6 +307,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
     const r = await api.create({
       name: name || prompt.match(/\b([A-Z][a-z]+)\b/)?.[1] || ["Nova", "Scout", "Atlas", "Orbit", "Pixel", "Comet"][Math.floor(Math.random() * 6)],
       harness, template, persona: prompt || undefined, telegramToken: telegram || undefined,
+      nostr: nostr ? { ownerPubkey: npubToHex(npub) } : undefined,
       model: harness === "mock" ? undefined : { provider: "scut", api: p.api, baseUrl: model.baseUrl, apiKey: model.apiKey || undefined, model: model.model },
       driver: "local",
     }).catch((e) => ({ error: String(e) }));
@@ -355,6 +371,10 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
             <div className="grid grid-cols-2 gap-2">
               <input className={input} aria-label="Name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
               <input className={input} aria-label="Telegram bot token" placeholder="Telegram bot token (optional)" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={nostr} onChange={(e) => setNostr(e.target.checked)} className="accent-cyan-400" /> Nostr DMs</label>
+              {nostr && <input className={input} aria-label="Your npub for approvals" placeholder="Your npub, to get approvals by DM (optional)" value={npub} onChange={(e) => setNpub(e.target.value)} />}
             </div>
           </div>
         )}
@@ -458,6 +478,10 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
         </div>
         <aside className="flex w-96 flex-col border-l border-white/5 bg-panel">
           {showSettings && <SettingsPanel a={a} />}
+          <div className="flex items-center gap-2 border-b border-white/5 px-4 py-2 font-mono text-[11px] text-slate-500">
+            <span>NOSTR</span>
+            <button className="truncate text-beam hover:underline" title="Copy npub" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 24)}…</button>
+          </div>
           {a.pairing && !a.pairing.owner && a.pairing.code && (
             <div className="m-3 rounded-xl border border-beam/30 bg-beam/5 p-3 text-sm">
               <div className="font-semibold">Pair your Telegram</div>

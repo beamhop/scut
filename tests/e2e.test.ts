@@ -289,7 +289,7 @@ describe("v0.3: auth binding, take control, schedules", () => {
     c.send({ t: "schedules", schedules: [{ id: "s1", prompt: "scheduled ping", kind: "every", minutes: 60, enabled: true }] });
     const ran = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent" && m.channel === "schedule", 20_000);
     expect(ran.text).toContain("scheduled ping");
-    const sched = await c.waitFor<any>((m) => m.t === "schedules" && m.schedules[0]?.lastRun);
+    const sched = await c.waitFor<any>((m) => m.t === "schedules" && !!(m as any).schedules[0]?.lastRun);
     expect(sched.schedules[0].lastRun).toBeGreaterThan(0);
     c.close();
   });
