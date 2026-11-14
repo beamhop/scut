@@ -353,7 +353,10 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
   const a = useAgent(agent, true, 2, true); // tiles: small 480 px frames
   const [menu, setMenu] = useState(false);
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
-  const now = needsText(a) ?? a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
+  // A chat app that can't sign in is quiet trouble (messages never arrive): surface it on the tile when idle.
+  const broken = Object.entries(a.pairing?.channels ?? {}).find(([, c]) => c.error)?.[0];
+  const brokenText = broken && a.state === "running" ? `${broken[0].toUpperCase()}${broken.slice(1)} can't sign in — fix it in Settings` : undefined;
+  const now = needsText(a) ?? brokenText ?? a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
   const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
   const needs = a.state === "stuck" || a.approvals.length > 0;
   useEffect(() => { onStatus(agent.id, needs ? "stuck" : a.state); }, [needs, a.state]);

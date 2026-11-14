@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.50.0 — Quiet trouble on the tile
+
+- If one of an agent's chat apps can't sign in (say a revoked Telegram token), its tile in the crew grid says so — "Telegram can't sign in — fix it in Settings" — instead of a reassuring "Ready" while messages silently never arrive. Checked against the real Telegram API with a fake token.
+
 ## v0.49.2 — More UI coverage
 
 - UI tests: the crew room opens beside the grid and closes; a final check that no page logged an error across every flow (agent connections to hosts that were just removed are the one expected exception).
