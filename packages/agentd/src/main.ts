@@ -91,7 +91,7 @@ function setState(s: AgentState) {
 }
 
 // ---------- WebSocket clients ----------
-type WsData = { frames: boolean; id: string; fps: number; lastSent: number; lastHash?: number | bigint };
+type WsData = { frames: boolean; small?: boolean; id: string; fps: number; lastSent: number; lastHash?: number | bigint };
 const clients = new Set<ServerWebSocket<WsData>>();
 function broadcast(m: ServerMsg, except?: ServerWebSocket<WsData>) {
   const s = JSON.stringify(m);
@@ -708,9 +708,13 @@ Bun.serve<WsData>({
       }
       if (m.t === "subscribe") {
         ws.data.frames = m.frames;
+        ws.data.small = !!m.small;
         ws.data.fps = Math.max(0.2, Math.min(15, Number(m.fps ?? 8)));
         ws.data.lastHash = undefined;
-        if (m.frames && desktop?.latest) ws.send(desktop.latest);
+        updateThumbs();
+        // first paint right away: a big frame is fine even for a small viewer (the small stream needs a moment to start)
+        const first = m.small ? (desktop?.latestThumb ?? desktop?.latest) : desktop?.latest;
+        if (m.frames && first) ws.send(first);
       } else if (m.t === "input") {
         if (desktop) await desktop.act(m as any).catch((e) => ws.send(JSON.stringify({ t: "error", message: String(e.message) })));
       } else if (m.t === "cursor") {
@@ -791,29 +795,36 @@ Bun.serve<WsData>({
     },
     close(ws) {
       clients.delete(ws);
+      updateThumbs();
     },
   },
 });
 
 // frames fan-out with simple backpressure
 let frameHooked = false;
+function updateThumbs() {
+  desktop?.setThumbs([...clients].some((c) => c.data.frames && c.data.small));
+}
+setInterval(updateThumbs, 3000); // also catches viewers that left
 setInterval(() => {
   if (desktop && !frameHooked) {
     frameHooked = true;
-    desktop.frameListeners.add((jpeg) => {
+    const fanOut = (small: boolean) => (jpeg: Uint8Array) => {
       // Per-viewer frame rate, and skip frames identical to the last one sent (idle screens cost ~nothing).
       const hash = Bun.hash(jpeg);
       const now = Date.now();
       for (const c of clients) {
         const d = c.data;
-        if (!d.frames || c.getBufferedAmount() > 1_000_000) continue;
+        if (!d.frames || !!d.small !== small || c.getBufferedAmount() > 1_000_000) continue;
         if (now - d.lastSent < 1000 / d.fps - 20) continue;
         if (d.lastHash === hash && now - d.lastSent < 5000) continue;
         d.lastSent = now;
         d.lastHash = hash;
         c.send(jpeg);
       }
-    });
+    };
+    desktop.frameListeners.add(fanOut(false));
+    desktop.thumbListeners.add(fanOut(true));
   }
   if (!desktop) frameHooked = false;
 }, 200);

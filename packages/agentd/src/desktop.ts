@@ -10,6 +10,9 @@ export class Desktop {
   private ffmpeg?: Subprocess;
   latest?: Uint8Array;
   frameListeners = new Set<(jpeg: Uint8Array) => void>();
+  thumbListeners = new Set<(jpeg: Uint8Array) => void>();
+  latestThumb?: Uint8Array;
+  private thumbProc?: Subprocess;
   private fps = Number(process.env.SCUT_FPS ?? 8);
 
   constructor(private dataDir: string, private homeUrl = "about:blank") {}
@@ -77,15 +80,34 @@ export class Desktop {
   }
 
   private startFrames() {
+    this.ffmpeg = this.mjpeg(this.fps, ["-q:v", "6"], (f) => this.emit(f));
+  }
+
+  /**
+   * Small, slow frames for crew-grid tiles and phones: a second capture at 2 fps scaled to 480 px wide, about a tenth
+   * of the bytes per frame. Runs only while someone is watching a tile.
+   */
+  setThumbs(on: boolean) {
+    if (on && !this.thumbProc) {
+      this.thumbProc = this.mjpeg(2, ["-vf", "scale=480:-2", "-q:v", "7"], (f) => {
+        this.latestThumb = f;
+        for (const l of this.thumbListeners) l(f);
+      });
+    } else if (!on && this.thumbProc) {
+      this.thumbProc.kill();
+      this.thumbProc = undefined;
+    }
+  }
+
+  private mjpeg(fps: number, encode: string[], onFrame: (jpeg: Uint8Array) => void): Subprocess {
     const p = Bun.spawn(
       [
-        "ffmpeg", "-loglevel", "error", "-f", "x11grab", "-draw_mouse", "1", "-framerate", String(this.fps),
+        "ffmpeg", "-loglevel", "error", "-f", "x11grab", "-draw_mouse", "1", "-framerate", String(fps),
         "-video_size", `${SCREEN.w}x${SCREEN.h}`, "-i", DISPLAY,
-        "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "-",
+        ...encode, "-f", "image2pipe", "-vcodec", "mjpeg", "-",
       ],
       { env: env(), stdout: "pipe", stderr: "ignore" },
     );
-    this.ffmpeg = p;
     (async () => {
       let buf = new Uint8Array(0);
       for await (const chunk of p.stdout as ReadableStream<Uint8Array>) {
@@ -98,13 +120,14 @@ export class Desktop {
         for (let i = 1; i < buf.length; i++) {
           if (buf[i - 1] === 0xff && buf[i] === 0xd9) {
             const frame = buf.slice(start, i + 1);
-            if (frame[0] === 0xff && frame[1] === 0xd8) this.emit(frame);
+            if (frame[0] === 0xff && frame[1] === 0xd8) onFrame(frame);
             start = i + 1;
           }
         }
         buf = buf.slice(start);
       }
     })();
+    return p;
   }
 
   private emit(frame: Uint8Array) {
@@ -163,6 +186,7 @@ export class Desktop {
 
   stop() {
     this.ffmpeg?.kill();
+    this.setThumbs(false);
     for (const p of this.procs.reverse()) p.kill();
     this.procs = [];
   }

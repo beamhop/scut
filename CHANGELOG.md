@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.35.0 — Light tiles
+
+- Crew-grid tiles and phones now get small frames: a second capture at 2 fps, 480 px wide, roughly a third of the bytes of a full frame (less on busy pages). It runs only while someone is watching a tile and stops when they leave. The agent view on a desktop keeps the full 1280 px stream.
+- Matters most for agents in the cloud: a grid of six tiles no longer pulls six full-resolution streams.
+- Test: small viewers get frames under half the size of full ones, from a capture that stops when nobody watches.
+- The accessibility test logs what it finds and re-checks after a moment, so a toast or a finishing beam can't fail it by accident.
+
 ## v0.34.0 — One-tap Telegram pairing
 
 - The pairing card has **Pair in Telegram** (a t.me link that sends `/start <code>` to the agent's bot) and **Scan with phone** (the same link as a QR code). No more copying a six-digit code into a chat.

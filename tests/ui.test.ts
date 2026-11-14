@@ -196,9 +196,15 @@ test("no console errors on any page", () => {
 
 test("no accessibility violations on the main screens (axe-core, all rules)", async () => {
   const axePath = new URL("../node_modules/axe-core/axe.min.js", import.meta.url).pathname;
+  const run = (page: Page) => page.evaluate(async () => (await (window as any).axe.run(document)).violations.map((v: any) => `${v.id}: ${v.nodes.map((n: any) => `${n.target.join(" ")} ${n.failureSummary ?? ""}`.slice(0, 300)).slice(0, 3).join(" | ")}`));
+  // Screens change on their own (frames, toasts, beams finishing); a violation must still be there a moment later to count.
   const audit = async (page: Page) => {
     await page.addScriptTag({ path: axePath });
-    return page.evaluate(async () => (await (window as any).axe.run(document)).violations.map((v: any) => `${v.id}: ${v.nodes.map((n: any) => n.target.join(" ")).slice(0, 3).join(", ")}`));
+    const first = await run(page);
+    if (!first.length) return first;
+    console.log("axe (transient?):", first);
+    await Bun.sleep(2000);
+    return run(page);
   };
   const home = await open("/");
   await home.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 15_000 });

@@ -40,7 +40,7 @@ type ChatLine = { from: string; channel: string; text: string; ts: number };
 type Approval = { id: string; title: string; detail?: string; ts: number; shot?: string };
 type Settings = Extract<ServerMsg, { t: "settings" }>;
 type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
-function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
+function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = false) {
   const [frame, setFrame] = useState<string>();
   const [state, setState] = useState<AgentState>("starting");
   const [chat, setChat] = useState<ChatLine[]>([]);
@@ -75,7 +75,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
       ws.current = sock;
       sock.onopen = () => {
         setConnected(true);
-        sock.send(JSON.stringify({ t: "subscribe", frames, fps }));
+        sock.send(JSON.stringify({ t: "subscribe", frames, fps, small }));
         for (const m of outbox.current.splice(0)) sock.send(m);
       };
       sock.onmessage = (ev) => {
@@ -119,7 +119,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
       sock?.close();
       if (url) URL.revokeObjectURL(url);
     };
-  }, [endpoint, token, frames, beaming]);
+  }, [endpoint, token, frames, beaming, small]);
 
   // Queue messages typed before the socket is open (or while it reconnects) instead of dropping them.
   const send = useCallback((m: unknown) => {
@@ -342,7 +342,7 @@ function BeamProgress({ agent }: { agent: Agent }) {
 
 // ---------------- tile ----------------
 function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests: Destination[]; onOpen: () => void; onBeam: (to: string) => void; onStatus: (id: string, s: string) => void }) {
-  const a = useAgent(agent, true, 1);
+  const a = useAgent(agent, true, 2, true); // tiles: small 480 px frames
   const [menu, setMenu] = useState(false);
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
   const now = needsText(a) ?? a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
@@ -605,7 +605,9 @@ const KEYMAP: Record<string, string> = {
 };
 function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent: Agent; dests: Destination[]; onBack: () => void; onBeam: (to: string) => void; standalone?: boolean }) {
   const [phone, setPhone] = useState<{ url: string; local: boolean } | null>(null);
-  const a = useAgent(agent, true);
+  // On a phone-sized screen the full 1280 px stream is wasted bandwidth; the small one is plenty.
+  const [narrow] = useState(() => typeof matchMedia === "function" && matchMedia("(max-width: 700px)").matches);
+  const a = useAgent(agent, true, narrow ? 4 : 8, narrow);
   const [text, setText] = useState("");
   const [myCursor, setMyCursor] = useState<{ x: number; y: number }>();
   const [menu, setMenu] = useState(false);

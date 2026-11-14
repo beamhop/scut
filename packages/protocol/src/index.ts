@@ -129,7 +129,7 @@ export function unseal<T>(recipientSk: Uint8Array, senderPubkey: string, payload
 
 // ---- WebSocket messages between UI and agentd ----
 export type ClientMsg =
-  | { t: "subscribe"; frames: boolean; fps?: number }
+  | { t: "subscribe"; frames: boolean; fps?: number; /** small 480 px frames, for tiles and phones */ small?: boolean }
   | { t: "input"; kind: "move" | "click" | "dblclick" | "down" | "up" | "scroll" | "key" | "type"; x?: number; y?: number; button?: number; dy?: number; keys?: string; text?: string }
   | { t: "cursor"; x: number; y: number }
   | { t: "chat"; text: string }

@@ -30,6 +30,7 @@ class Client {
   ws!: WebSocket;
   msgs: ServerMsg[] = [];
   frames = 0;
+  frameBytes: number[] = [];
   constructor(public endpoint: string, public token: string) {}
   open() {
     return new Promise<void>((resolve, reject) => {
@@ -42,7 +43,10 @@ class Client {
       this.ws.onerror = (e) => reject(e);
       this.ws.onmessage = (ev) => {
         if (typeof ev.data === "string") this.msgs.push(JSON.parse(ev.data));
-        else this.frames++;
+        else {
+          this.frames++;
+          this.frameBytes.push((ev.data as ArrayBuffer).byteLength);
+        }
       };
     });
   }
@@ -732,5 +736,28 @@ describe("v0.34: one-tap Telegram pairing", () => {
     const after = await c.waitFor<any>((m) => m.t === "pairing" && !!m.channels?.telegram?.owner);
     expect(after.channels.telegram.owner).toBeTruthy();
     c.close();
+  });
+});
+
+describe("v0.35: small frames for tiles and phones", () => {
+  test("small viewers get ~480 px frames from a second capture that only runs while someone watches", async () => {
+    const rec = await scut.create({ name: "Thumby", harness: "mock" });
+    const name = rec.current.meta!.name;
+    const ffmpegs = () => Number(Bun.spawnSync(["docker", "exec", name, "sh", "-c", "pgrep -c ffmpeg || true"]).stdout.toString().trim());
+    const big = await client(rec.id);
+    const small: typeof big = new (big.constructor as any)(rec.current.endpoint, scut.auth(rec.current.endpoint));
+    await small.open();
+    small.send({ t: "subscribe", frames: true, fps: 2, small: true });
+    small.frameBytes = [];
+    big.frameBytes = [];
+    for (let i = 0; i < 6; i++) { big.send({ t: "input", kind: "type", text: `x${i}` }); await Bun.sleep(700); } // make the screen change
+    expect(ffmpegs()).toBeGreaterThanOrEqual(2); // full + small capture
+    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+    console.log("frame bytes: full", Math.round(avg(big.frameBytes)), "small", Math.round(avg(small.frameBytes)), "counts", big.frameBytes.length, small.frameBytes.length);
+    expect(small.frameBytes.length).toBeGreaterThan(0);
+    expect(avg(small.frameBytes)).toBeLessThan(avg(big.frameBytes) / 2);
+    small.close();
+    await until(() => ffmpegs() === 1 || undefined, 15_000, "small capture stops when nobody watches");
+    big.close();
   });
 });
