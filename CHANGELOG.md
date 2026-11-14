@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.48.1 — No freezes while starting agents
+
+- Starting an agent container no longer blocks the app's server (it used a synchronous `docker run`; a slow start or download froze the whole UI until it finished).
+
 ## v0.48.0 — Open at login
 
 - New in the dock: **Open Beamhop when I log in**. Local agents come back when the app starts (v0.47), so with this on they're running again after a reboot without you doing anything. It's one per-user login item: a `.desktop` file on Linux, a LaunchAgent on macOS, a Startup-folder script on Windows. Off by default.

@@ -90,9 +90,11 @@ export class DockerDriver implements HostDriver {
       ...envArgs,
       o.image,
     ];
-    const p = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
-    if (p.exitCode !== 0) throw new Error(`docker run failed: ${p.stderr.toString()}`);
-    const id = p.stdout.toString().trim();
+    // Async: a first-time image download inside `docker run` must not freeze the app's server.
+    const p = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    if (code !== 0) throw new Error(`docker run failed: ${err}`);
+    const id = out.trim();
     const port = Bun.spawnSync(["docker", "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
     return { driver: this.id, instanceId: id, endpoint: `http://${this.host}:${port}`, meta: { name } };
   }
