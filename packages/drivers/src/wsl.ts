@@ -119,13 +119,19 @@ export class WslDriver implements HostDriver {
       await rm(bdir, { recursive: true, force: true });
       await mkdir(bdir, { recursive: true });
       // The first layer is the base system: import it as is (decompressed), then pipe the others in.
-      const base = join(bdir, "base.tar");
+      // Outside the folder WSL imports into (it holds that folder open), and fully closed before WSL reads it.
+      const base = join(this.imagesDir, `base-${img.digest.slice(7, 19)}.tar`);
       await gunzipTo(img.layers[0].path, base);
       const imp = wsl(["--import", build, bdir, base, "--version", "2"], { timeout: 15 * 60_000 });
       await rm(base, { force: true });
-      // The first import is also the first time WSL starts its VM: if that can't happen here (no virtualization,
-      // e.g. a VM without nesting), WSL isn't an option on this computer.
-      if (imp.code !== 0) throw new EngineUnavailable("wsl", `WSL can't run Linux here: ${(imp.err || imp.out).trim().replace(/\s+/g, " ").slice(0, 300)}`);
+      if (imp.code !== 0) {
+        const text = (imp.err || imp.out).trim().replace(/\s+/g, " ").slice(0, 300);
+        // The first import is also the first time WSL starts its VM: when that can't happen here (no virtualization,
+        // e.g. a VM without nesting), WSL isn't an option on this computer. Anything else is an ordinary error.
+        if (/HCS_E_HYPERV_NOT_INSTALLED|0x80370102|0x80370114|0x8004032d|Virtual Machine Platform|virtuali[sz]ation|WSL_E_VM_MODE|WSL2 is not supported|HCS_E_SERVICE_NOT_AVAILABLE/i.test(text))
+          throw new EngineUnavailable("wsl", `WSL can't run Linux here: ${text}`);
+        throw new Error(`Couldn't set up the agent computer in WSL: ${text}`);
+      }
       try {
         for (const l of img.layers.slice(1)) {
           const r = wsl(["-d", build, "-u", "root", "--exec", "/bin/sh", "-c", APPLY_LAYER], { stdin: l.path, timeout: 30 * 60_000 });
@@ -240,12 +246,9 @@ export class WslDriver implements HostDriver {
 }
 
 async function gunzipTo(src: string, dest: string) {
-  const out = Bun.file(dest).writer();
-  const reader = (Bun.file(src).stream().pipeThrough(new DecompressionStream("gzip")) as ReadableStream<Uint8Array>).getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    out.write(value);
-  }
-  await out.end();
+  // node streams: the file handle is closed (not just flushed) when this resolves, which Windows needs.
+  const { createReadStream, createWriteStream } = await import("node:fs");
+  const { pipeline } = await import("node:stream/promises");
+  const { createGunzip } = await import("node:zlib");
+  await pipeline(createReadStream(src), createGunzip(), createWriteStream(dest));
 }
