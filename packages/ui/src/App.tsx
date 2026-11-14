@@ -924,15 +924,19 @@ function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
     const [h, m] = time.split(":").map(Number);
     const local = new Date();
     local.setHours(h, m, 0, 0);
-    const minuteOfDay = local.getUTCHours() * 60 + local.getUTCMinutes();
-    save([...a.schedules, { id: Math.random().toString(36).slice(2, 8), prompt, kind, minuteOfDay, minutes: Number(minutes) || 60, enabled: true, createdAt: Date.now() }]);
+    // Local wall-clock time + your time zone, so "daily at 8:00" stays 8:00 across daylight-saving changes and beams.
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const minuteOfDay = tz ? h * 60 + m : local.getUTCHours() * 60 + local.getUTCMinutes();
+    save([...a.schedules, { id: Math.random().toString(36).slice(2, 8), prompt, kind, minuteOfDay, minutes: Number(minutes) || 60, enabled: true, createdAt: Date.now(), ...(tz ? { tz } : {}) }]);
     setPrompt("");
   };
   const label = (s: Schedule) => {
     if (s.kind === "every") return `every ${s.minutes} min`;
     const d = new Date();
-    d.setUTCHours(Math.floor((s.minuteOfDay ?? 0) / 60), (s.minuteOfDay ?? 0) % 60, 0, 0);
-    return `daily ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const hh = Math.floor((s.minuteOfDay ?? 0) / 60), mm = (s.minuteOfDay ?? 0) % 60;
+    if (s.tz) d.setHours(hh, mm, 0, 0); else d.setUTCHours(hh, mm, 0, 0);
+    const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return `daily ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${s.tz && s.tz !== here ? ` (${s.tz})` : ""}`;
   };
   return (
     <div className="space-y-2">

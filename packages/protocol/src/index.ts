@@ -204,12 +204,27 @@ export interface Schedule {
   lastRun?: number;
   /** When the task was added; a daily task added after today's time first runs tomorrow. */
   createdAt?: number;
+  /** IANA time zone of the owner. When set, minuteOfDay is local wall-clock time there (DST-safe); otherwise UTC. */
+  tz?: string;
   enabled: boolean;
+}
+
+/** Local date (as a UTC-midnight number) and minute of day of instant t in time zone tz. */
+function localParts(t: number, tz: string): { day: number; mod: number } {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(t).map((x) => [x.type, x.value]));
+  return { day: Date.UTC(+p.year, +p.month - 1, +p.day), mod: +p.hour * 60 + +p.minute };
 }
 
 export function scheduleDue(s: Schedule, now = Date.now()): boolean {
   if (!s.enabled) return false;
   if (s.kind === "every") return !s.lastRun || now - s.lastRun >= (s.minutes ?? 60) * 60_000;
+  if (s.tz) {
+    // Which day's run does an instant belong to? The latest local HH:MM at or before it.
+    const m = s.minuteOfDay ?? 0;
+    const slot = (t: number) => { const { day, mod } = localParts(t, s.tz!); return mod >= m ? day : day - 86_400_000; };
+    const ref = s.lastRun ?? s.createdAt;
+    return ref === undefined ? localParts(now, s.tz).mod >= m : slot(now) > slot(ref);
+  }
   const d = new Date(now);
   const mod = d.getUTCHours() * 60 + d.getUTCMinutes();
   const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());

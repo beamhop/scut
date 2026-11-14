@@ -577,6 +577,18 @@ describe("v0.24: laptop sleep", () => {
     expect(scheduleDue({ ...at8, createdAt: day, lastRun: day + 9 * 3600_000 }, day + 12 * 3600_000)).toBe(false); // already ran today
   });
 
+  test("daily tasks follow local time across daylight-saving changes", async () => {
+    const { scheduleDue } = await import("@scut/protocol");
+    const tz = "Europe/Amsterdam";
+    const at8 = { id: "d", prompt: "x", kind: "daily" as const, minuteOfDay: 8 * 60, enabled: true, tz };
+    // Sat 24 Oct 2026 is CEST (UTC+2): 08:00 local = 06:00Z. Sun 25 Oct is CET (UTC+1): 08:00 local = 07:00Z.
+    const ranSat = Date.UTC(2026, 9, 24, 6, 0);
+    expect(scheduleDue({ ...at8, createdAt: Date.UTC(2026, 9, 23), lastRun: ranSat }, Date.UTC(2026, 9, 25, 6, 30))).toBe(false); // 07:30 local Sunday
+    expect(scheduleDue({ ...at8, createdAt: Date.UTC(2026, 9, 23), lastRun: ranSat }, Date.UTC(2026, 9, 25, 7, 0))).toBe(true); // 08:00 local Sunday
+    expect(scheduleDue({ ...at8, createdAt: Date.UTC(2026, 9, 25, 9) }, Date.UTC(2026, 9, 25, 10))).toBe(false); // added 10:00 local
+    expect(scheduleDue({ ...at8, createdAt: Date.UTC(2026, 9, 25, 9) }, Date.UTC(2026, 9, 26, 7, 1))).toBe(true); // next day 08:01
+  });
+
   test("after the host sleeps and the network drops, chat apps reconnect and answer", async () => {
     const rec = await scut.create({ name: "Sleepy", harness: "mock", autonomy: "auto", telegramToken: "TEST:TOKEN", slack: { appToken: "xapp-test", botToken: "xoxb-test" } });
     const c = await client(rec.id);

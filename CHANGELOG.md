@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.0 — Daily tasks keep local time
+
+- "Daily at 8:00" now means 8:00 where you are, every day: tasks store your time zone and wall-clock time instead of a UTC offset taken on the day you added them, so they no longer drift an hour after a daylight-saving change, wherever the agent is beamed.
+- Settings shows the task's time zone when it differs from yours. Older tasks keep working as before.
+- Tests across the 25 October 2026 change in Europe/Amsterdam.
+
 ## v0.26.0 — Security hardening
 
 - **Fixed a real hole:** any website you visited could send requests to the app's local API (cross-site POSTs are processed even when the reply can't be read), e.g. to start a beam or save a cloud token, and DNS rebinding could read it. The API now refuses requests whose Host isn't localhost or whose Origin isn't the app itself, and anything marked cross-site.
