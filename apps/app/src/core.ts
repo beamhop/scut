@@ -60,7 +60,7 @@ export class Scut {
 
   async loadDrivers() {
     const p = await loadJson<any>("providers.json", {});
-    const local = (process.env.SCUT_LOCAL_DRIVER ?? (await hasKvmOrHvf() ? "smolvm" : "docker")) as string;
+    const local = (process.env.SCUT_LOCAL_DRIVER ?? ((await SmolvmDriver.availability()).available ? "smolvm" : "docker")) as string;
     this.drivers.set("local", local === "smolvm" ? Object.assign(new SmolvmDriver(), { id: "local" }) : new DockerDriver({ id: "local", label: "This computer" }));
     // A second local container host labelled as cloud, for demos and tests without provider accounts.
     if (process.env.SCUT_SIM_CLOUD) this.drivers.set("sim-cloud", new DockerDriver({ id: "sim-cloud", label: "Cloud (simulated)" }));
@@ -296,8 +296,3 @@ export class Scut {
 
 export const MASCOTS = ["cyan", "magenta", "lime", "amber", "violet", "coral"];
 
-async function hasKvmOrHvf() {
-  if (process.platform === "darwin") return true;
-  if (process.platform === "win32") return true;
-  return Bun.file("/dev/kvm").exists();
-}

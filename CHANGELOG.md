@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.0 — 2026-11-14 02:44
+
+- smolvm driver rewritten on the official `smolmachines` SDK (v1.32.4, Apache-2.0): embedded microVM engine for Linux (KVM) and Apple Silicon, detached machines that outlive the app, published port 8080, outbound network. The driver is loaded lazily as an optional native dependency.
+- The app now asks the engine whether a local microVM is possible (`localAvailability()`) and falls back to Docker with the engine's own reason. On this build machine it reports "KVM unavailable", so microVM boot remains untested here; `tests/drivers.test.ts` boots the image automatically on a machine with KVM or Apple Silicon.
+- Still open: Windows has no prebuilt smolvm engine in the SDK, and the compiled app needs the engine's helper + guest files shipped next to it (or downloaded on first run).
+
 ## v0.11.0 — 2026-11-14 02:42
 
 - "Add a cloud" is a real flow now: pick Fly.io, Render or Railway, follow the deep link to the provider's token page, paste, and Beamhop verifies the token before adding the destination (Fly: lists apps; Render: finds your workspace; Railway: creates or reuses a "beamhop" project and environment). Wrong tokens get a plain error.
