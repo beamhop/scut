@@ -241,3 +241,19 @@ describe("telegram pairing and owner-only approvals (mock Bot API)", () => {
     c.close();
   });
 });
+
+describe("approvals survive reconnects", () => {
+  test("a client that connects late still sees the pending approval", async () => {
+    const rec = await scut.create({ name: "Patient", harness: "mock", autonomy: "ask" });
+    const c1 = await client(rec.id);
+    c1.send({ t: "chat", text: "open https://example.com" });
+    const req = await c1.waitFor<any>((m) => m.t === "approval.request");
+    c1.close();
+    const c2 = await client(rec.id);
+    const again = await c2.waitFor<any>((m) => m.t === "approval.request");
+    expect(again.id).toBe(req.id);
+    c2.send({ t: "approval", id: req.id, ok: true });
+    await c2.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    c2.close();
+  });
+});

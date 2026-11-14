@@ -58,6 +58,7 @@ export class Desktop {
       [
         bin,
         "--no-sandbox",
+        "--test-type", // hides the "unsupported command-line flag" infobar caused by --no-sandbox
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-dev-shm-usage",

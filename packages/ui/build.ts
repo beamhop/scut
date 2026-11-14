@@ -3,7 +3,7 @@ import tailwind from "bun-plugin-tailwind";
 const r = await Bun.build({
   entrypoints: ["./index.html"],
   outdir: "./dist",
-  minify: true,
+  minify: process.env.NOMIN ? false : true, sourcemap: "inline",
   plugins: [tailwind],
   define: { "process.env.NODE_ENV": '"production"' },
 });

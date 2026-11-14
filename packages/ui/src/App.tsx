@@ -134,7 +134,7 @@ const STATE_META: Record<string, { label: string; icon: string; tone: string }> 
 };
 function StateChip({ state }: { state: string }) {
   const m = STATE_META[state] ?? STATE_META.running;
-  return <span className={`inline-flex items-center gap-1 rounded-full bg-black/40 px-2 py-0.5 text-[11px] font-medium ${m.tone}`}><span aria-hidden>{m.icon}</span>{m.label}</span>;
+  return <span className={`inline-flex items-center gap-1 rounded-full bg-[#070912e6] px-2 py-0.5 text-[11px] font-medium ring-1 ring-white/10 backdrop-blur ${m.tone}`}><span aria-hidden>{m.icon}</span>{m.label}</span>;
 }
 
 // ---------------- beam menu (non-drag alternative) ----------------
@@ -184,7 +184,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
   const now = a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
   const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
   const needs = a.state === "stuck" || a.approvals.length > 0;
-  useEffect(() => onStatus(agent.id, needs ? "stuck" : a.state), [needs, a.state]);
+  useEffect(() => { onStatus(agent.id, needs ? "stuck" : a.state); }, [needs, a.state]);
   return (
     <div
       tabIndex={0}
@@ -379,7 +379,7 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
     return { x: Math.round(((e.clientX - r.left) / r.width) * SCREEN.w), y: Math.round(((e.clientY - r.top) / r.height) * SCREEN.h) };
   };
   const chatEnd = useRef<HTMLDivElement>(null);
-  useEffect(() => chatEnd.current?.scrollIntoView({ behavior: "smooth" }), [a.chat.length]);
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [a.chat.length]);
   const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
 

@@ -97,9 +97,12 @@ function pairingMsg(): ServerMsg {
 
 // ---------- approvals ----------
 const approvals = new Map<string, (ok: boolean, by: string) => void>();
+const pendingApprovals = new Map<string, Extract<ServerMsg, { t: "approval.request" }>>();
 function requestApproval(title: string, detail?: string): Promise<boolean> {
   const id = bytesToHex(crypto.getRandomValues(new Uint8Array(6)));
-  broadcast({ t: "approval.request", id, title, detail, ts: Date.now() });
+  const req = { t: "approval.request" as const, id, title, detail, ts: Date.now() };
+  pendingApprovals.set(id, req);
+  broadcast(req);
   const chat = tgOwner?.chatId;
   const tg = channels.find((c) => c.name === "telegram");
   if (tg && chat) tg.askApproval(chat, id, title).catch(() => {});
@@ -108,6 +111,7 @@ function requestApproval(title: string, detail?: string): Promise<boolean> {
   return new Promise((resolve) => {
     approvals.set(id, (ok, by) => {
       approvals.delete(id);
+      pendingApprovals.delete(id);
       broadcast({ t: "approval.resolved", id, ok, by });
       setState("busy");
       resolve(ok);
@@ -438,6 +442,7 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify({ t: "history", chat: chatLog.slice(-100), narration: narrationLog.slice(-30) } satisfies ServerMsg));
       ws.send(JSON.stringify(pairingMsg()));
       ws.send(JSON.stringify(settingsMsg()));
+      for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
     },
     async message(ws, raw) {
       let m: ClientMsg;
