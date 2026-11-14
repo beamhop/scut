@@ -1,0 +1,63 @@
+"h1"
+"main img"
+'[role="alert"]'
+'[role="alertdialog"]'
+'[role="dialog"]'
+'[role="menu"]'
+'[role="menuitem"]'
+aria-label="${label}"
+aria-label="API key"
+aria-label="Add a cloud"
+aria-label="Add a memory"
+aria-label="Agent file"
+aria-label="Edit memory"
+aria-label="Fly.io token"
+aria-label="Move Packy to a file"
+aria-label="Name"
+aria-label="Open an agent file"
+aria-label="Passphrase"
+aria-label="Repeat passphrase"
+aria-label="Runs on"
+aria-label^="Message"
+aside[aria-label="Crew room"]
+innerText.includes("Add a cloud")
+innerText.includes("Byebye")
+innerText.includes("CLOUD (SIMULATED)")
+innerText.includes("Gridy")
+innerText.includes("New agent")
+innerText.includes("Packy is here.")
+innerText.includes("Packy")
+innerText.includes("Talk to all agents")
+innerText.includes("Uiborn")
+innerText.includes("hello from the UI test")
+innerText.includes("is now in Packy.beamhop")
+innerText.includes("mock: message #1")
+innerText.includes("mock: message #2")
+innerText.includes("rejected that token")
+role="dialog"
+role="menuitem"
+textContent === "+ New agent"
+textContent === "Beam to…"
+textContent === "Connect"
+textContent === "Demo"
+textContent === "Fly.io"
+textContent === "Likes green tea, no sugar"
+textContent === "Likes tea"
+textContent === "Move to file"
+textContent === "Open an agent file"
+textContent === "Open"
+textContent === "Settings"
+textContent === "Skip this"
+textContent === "Talk to all agents"
+textContent!.includes("Autonomy")
+textContent!.includes("Continue anyway")
+textContent!.includes("Remove Byebye…")
+textContent!.includes("Safety: all good")
+textContent!.includes("What should your agent do?")
+textContent!.includes("end-to-end encrypted")
+textContent?.includes("Add a cloud")
+textContent?.includes("Ollama isn't running")
+textContent?.includes("Wrong passphrase")
+textContent?.includes("isn't offered")
+textContent?.startsWith("A file")
+textContent?.startsWith("Create agent")
