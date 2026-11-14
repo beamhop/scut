@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.60.0 — Instrument: the interface, rethought
+
+A ground-up redesign after research into 30+ agent, fleet, remote-desktop and trust products (see `research/` and `DESIGN-PLAN.md`), an independent design review, and a fix round.
+
+- **New look, one meaning per colour.** Warm neutral light theme (dark follows the OS), Mona Sans / Commit Mono / Departure Mono, Phosphor icons. Orange appears only when a person is needed. Every status is a word plus a shape: Needs you, Working, Ready, Moving, Problem. Gradients, glow, starfield and robot mascots are gone; each agent has a plate (a dot glyph derived from its own key plus a callsign).
+- **Bench (home).** A live status sentence (also in the window title), "Waiting for you" approvals at the top, one lane per place, working agents large with live screens, ready agents as compact rows with a still, "Today / While you were away", ask any agent from the bench, Pause all / Resume all, ⌘K for everything, full keyboard navigation.
+- **Approvals you can trust.** Cards say what, where, why it's risky ("High risk · Looks like a payment page"), where the request came from and when it expires. Allow is never focused and is inert for 600 ms; high risk is hold-to-allow, with an accessible "Yes, allow" step for screen readers and voice control. "Don't" can carry a reason back to the agent. Chat-app approvals read the same and are edited to show who decided.
+- **Agent view.** Conversation beside the screen; the screen is watch-only until you press Take over (fixes a keyboard trap); the bar turns orange while you drive; Esc twice leaves. The agent's browser is now full screen and the current site shows in the frame. Approvals rise over the screen. Activity timeline, focus mode, a layout that reflows at 200% zoom, settings in a drawer that never hides the chat.
+- **Honest beaming.** Pre-flight cost and what changes, inline confirm for paid places or a 5 s undo for free ones, the agent shown in two places while it travels, real staged progress, a receipt with Beam back.
+- **Job-first create.** What should it do → give it a brain (ChatGPT/Copilot subscription first) → create, with the first task typed while it downloads.
+- **Honest problems.** An agent with no brain or a rejected key says so and offers the fix; a denied step is "Skipped (you said no)", not an error; the phone link only offers a QR code when a phone can actually reach the agent.
+- **Settings.** Safety first with jump-to-fix, spending limit in euros, plain-word autonomy, chat-app health, routines with their next run, editable memory.
+- **Under the hood.** Agents created on an older image are upgraded automatically when idle (data kept, rollback on failure); pause/resume/stop-all endpoints; structured approvals (kind, risk computed by Beamhop, expiry, origin); status messages with headline, since, last result, next run, current URL and problems.
+- Accessibility: zero axe violations on every screen in light, dark and phone; WCAG 2.2 AA targets, focus never lost, live announcements throttled.
+
 ## v0.50.0 — Quiet trouble on the tile
 
 - If one of an agent's chat apps can't sign in (say a revoked Telegram token), its tile in the crew grid says so — "Telegram can't sign in — fix it in Settings" — instead of a reassuring "Ready" while messages silently never arrive. Checked against the real Telegram API with a fake token.

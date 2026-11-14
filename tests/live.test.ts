@@ -144,7 +144,7 @@ describe("nostr (real public relays)", () => {
       throw new Error(`no DM matching ${re}; inbox: ${JSON.stringify(inbox)}`);
     };
     await send("please open https://example.com");
-    const ask = await wait(/Approval needed/);
+    const ask = await wait(/wants to: Open/);
     const id = ask.match(/yes ([0-9a-f]+)/)![1];
     await send(`yes ${id}`);
     const reply = await wait(/^mock: message #1/);

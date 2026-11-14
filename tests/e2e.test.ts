@@ -988,7 +988,7 @@ describe("v0.60: transparency", () => {
     tg.message(42, "please open https://example.com");
     const ask = await until(() => tg.sent.slice(from).find((m) => m.chat_id === "42" && !!m.reply_markup), 30_000, "approval message");
     expect(ask.text).toContain("Echo wants to: Open https://example.com");
-    expect(ask.text).toContain("Check this · open");
+    expect(ask.text).toContain("Medium risk · open");
     expect(ask.text).toContain("Came from: your Telegram message");
     expect(ask.text).toMatch(/Decide within 25 min, then Echo skips it\./);
     expect(ask.reply_markup.inline_keyboard[0].map((b: any) => b.text)).toEqual(["Allow", "Don't"]);

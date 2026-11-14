@@ -276,8 +276,8 @@ export function assessApproval(title: string, detail?: string, suggested?: strin
   return { kind, risk };
 }
 
-/** Risk as words (never colour alone): Low risk / Check this / High risk. */
-export const RISK_WORD: Record<Risk, string> = { low: "Low risk", medium: "Check this", high: "High risk" };
+/** Risk as words (never colour alone): Low risk / Medium risk / High risk. */
+export const RISK_WORD: Record<Risk, string> = { low: "Low risk", medium: "Medium risk", high: "High risk" };
 
 /** "14:02" in the owner's time zone (UTC when unknown or invalid). */
 export function clock(t: number, tz?: string): string {
