@@ -2,12 +2,12 @@
 // agentd — PID 1 of the agent image. Supervises the desktop, the harness and channels,
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
-  type AgentSpec, type AgentState, type HarnessKind, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
+  type AgentSpec, type AgentState, type HarnessKind, type SigninState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
   type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg, type AgentProblem,
   SCREEN, callsign, glyphCells, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, denialText, brainMissing, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
-import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
+import { createHarness, systemPromptFor, signinStatus, startSignin, signOut, subscriptionModels, type Harness, type Signin, type SubscriptionKind } from "@scut/agent";
 import { DiscordChannel, NostrChannel, SlackChannel, TelegramChannel, type Channel } from "@scut/channels";
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
@@ -153,9 +153,51 @@ function todayTokens() {
 let skipped: { title: string; why: "no" | "timeout" } | null = null;
 /** The brain's key was rejected by the provider; cleared when the brain or key changes. */
 let keyRejected = false;
+
+// ---------- subscription sign-in (Codex: ChatGPT, Copilot CLI: GitHub Copilot) ----------
+const SUB_NAME: Record<SubscriptionKind, string> = { codex: "ChatGPT", copilot: "GitHub Copilot" };
+let signin: SigninState | null = null;
+let signinRun: Signin | null = null;
+let subModels: { id: string; name: string }[] = [];
+/** The subscription this agent thinks with, if it uses one (a CLI harness without an API brain). */
+function subKind(): SubscriptionKind | null {
+  return spec && (spec.harness === "codex" || spec.harness === "copilot") && !spec.model?.baseUrl ? spec.harness : null;
+}
+function setSignin(s: SigninState | null) {
+  signin = s;
+  if (s) broadcast({ t: "signin", ...s });
+  pushStatus();
+}
+/** Look the sign-in up again (after a switch, on start, before a task), and the models the subscription offers. */
+async function refreshSignin(): Promise<SigninState | null> {
+  const k = subKind();
+  if (!k) { signinRun?.cancel(); signinRun = null; signin = null; subModels = []; pushStatus(); return null; }
+  if (signinRun && signin?.harness === k && signin.state === "waiting") return signin;
+  const s = await signinStatus(k, `${DATA}/home`);
+  setSignin(s);
+  if (k === "codex" && !subModels.length) subModels = await subscriptionModels(k, `${DATA}/home`);
+  if (k !== "codex") subModels = [];
+  broadcast(settingsMsg());
+  return s;
+}
+function beginSignin() {
+  const k = subKind();
+  if (!k) return;
+  signinRun?.cancel();
+  setSignin({ harness: k, state: "checking" });
+  const run = startSignin(k, `${DATA}/home`, (s) => {
+    if (signinRun !== run) return; // a newer try replaced this one
+    setSignin(s);
+    if (s.state === "signed-in") narrate(`Signed in to ${SUB_NAME[k]}`);
+  });
+  signinRun = run;
+  run.done.finally(() => { if (signinRun === run) signinRun = null; });
+}
 function problem(): AgentProblem | undefined {
   const name = spec?.name ?? "Your agent";
   if (spec && brainMissing(spec)) return { text: `${name} has no brain yet. Add one in Settings → Brain.`, fix: "brain" };
+  const k = subKind();
+  if (k && signin && signin.state !== "signed-in" && signin.state !== "checking") return { text: `${name} isn't signed in to ${SUB_NAME[k]} yet. Sign in in Settings → Brain.`, fix: "signin" };
   if (keyRejected) return { text: `The brain's key was rejected. Paste a new key in Settings → Brain.`, fix: "key" };
   const names: Record<string, string> = { telegram: "Telegram", slack: "Slack", discord: "Discord" };
   const bad = Object.keys(names).find((k) => channelErrors[k] && (spec?.channels as Record<string, unknown> | undefined)?.[k]);
@@ -228,7 +270,7 @@ setInterval(async () => {
   }
 }, 1500);
 function settingsMsg(): ServerMsg {
-  return { t: "settings", unsandboxed: UNSANDBOXED, screen: desktop?.kind ?? (process.env.SCUT_SCREEN === "cdp" ? "cdp" : "x11"), harness: spec?.harness ?? "mock", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
+  return { t: "settings", unsandboxed: UNSANDBOXED, screen: desktop?.kind ?? (process.env.SCUT_SCREEN === "cdp" ? "cdp" : "x11"), harness: spec?.harness ?? "mock", subModel: spec?.subModel, subModels, autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
 }
 function pairingMsg(): ServerMsg {
   const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
@@ -473,6 +515,16 @@ function prompt(text: string, origin: PromptOrigin) {
       await reply(msg);
       return;
     }
+    // On a subscription that isn't signed in, the CLI would only retry its connection and fail: say what to do instead.
+    const k = subKind();
+    if (spec && k && (await refreshSignin())?.state !== "signed-in") {
+      const msg = `${spec.name} isn't signed in to ${SUB_NAME[k]} yet, so it can't do this. Sign in in Settings → Brain.`;
+      recordFailure({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
+      origin.onDone?.({ ok: false, text: msg, tokens: 0 });
+      narrate(`Problem: not signed in to ${SUB_NAME[k]}`);
+      await reply(msg);
+      return;
+    }
     currentTask = { prompt: text, origin: originLabel(origin), startedAt: Date.now() };
     lastStep = null;
     setState("busy");
@@ -679,6 +731,7 @@ async function run() {
   await desktop.start();
   harness = makeHarness();
   await harness.start();
+  void refreshSignin().catch((e) => log("sign-in check failed", e?.message));
   await startChannels();
   setState("running");
   narrate("Ready");
@@ -956,6 +1009,7 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify({ t: "history", chat: chatLog.slice(-100), narration: narrationLog.slice(-30) } satisfies ServerMsg));
       ws.send(JSON.stringify(pairingMsg()));
       ws.send(JSON.stringify(settingsMsg()));
+      if (signin && subKind()) ws.send(JSON.stringify({ t: "signin", ...signin } satisfies ServerMsg));
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
       ws.send(JSON.stringify(statusMsg()));
       ws.send(JSON.stringify({ t: "paused", paused, control } satisfies ServerMsg));
@@ -1005,6 +1059,9 @@ Bun.serve<WsData>({
           spec.harness = m.harness;
           rebrain = true;
         }
+        if (m.subModel !== undefined && (m.subModel ?? undefined) !== spec.subModel) {
+          if (m.subModel) spec.subModel = String(m.subModel).slice(0, 120); else delete spec.subModel;
+        }
         if (m.model === null && spec.model) {
           delete spec.model;
           rebrain = true;
@@ -1019,7 +1076,7 @@ Bun.serve<WsData>({
           keyRejected = false; // a new brain, key or agent software: give it a chance
           pushStatus();
           // Mid-task the old one finishes first, then the new one takes over.
-          restartHarnessWhenIdle().then(() => narrate(`Now thinking with ${HARNESS_NAME[spec!.harness]}`)).catch((e) => log("harness restart failed", e?.message));
+          restartHarnessWhenIdle().then(() => { narrate(`Now thinking with ${HARNESS_NAME[spec!.harness]}`); subModels = []; return refreshSignin(); }).catch((e) => log("harness restart failed", e?.message));
         }
         if (m.channels) {
           const ch = { ...spec.channels };
@@ -1040,6 +1097,13 @@ Bun.serve<WsData>({
         }
         await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
         broadcast(settingsMsg());
+      } else if (m.t === "signin") {
+        const k = subKind();
+        if (!k) ws.send(JSON.stringify({ t: "error", message: "This agent doesn't use a subscription" } satisfies ServerMsg));
+        else if (m.op === "start") beginSignin();
+        else if (m.op === "cancel") { signinRun?.cancel(); signinRun = null; await refreshSignin(); }
+        else if (m.op === "check") await refreshSignin();
+        else if (m.op === "signout") { signinRun?.cancel(); signinRun = null; setSignin(await signOut(k, `${DATA}/home`)); }
       } else if (m.t === "crew" && Array.isArray(m.members)) {
         crew = m.members.slice(0, 50);
         await Bun.write(`${DATA}/crew.json`, JSON.stringify(crew, null, 2));

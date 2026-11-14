@@ -56,6 +56,7 @@ export type Approval = {
 /** An approval that was decided (approval.resolved), kept briefly so cards can echo "Allowed by you on Telegram, 14:02". */
 export type ResolvedApproval = Approval & { ok: boolean; by: string; via?: string; at: number };
 export type Settings = Extract<ServerMsg, { t: "settings" }>;
+export type Signin = Omit<Extract<ServerMsg, { t: "signin" }>, "t">;
 export type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
 
 // ---------------- create / first run ----------------

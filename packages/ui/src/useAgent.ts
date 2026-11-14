@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun, StatusMsg } from "@scut/protocol";
-import type { Agent, ChatLine, Approval, ResolvedApproval, Settings, Pairing } from "./lib.tsx";
+import type { Agent, ChatLine, Approval, ResolvedApproval, Settings, Pairing, Signin } from "./lib.tsx";
 
 export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = false) {
   const [frame, setFrame] = useState<string>();
@@ -23,6 +23,7 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
   const [agentCursor, setAgentCursor] = useState<{ x: number; y: number }>();
   const [settings, setSettings] = useState<Settings>();
   const [pairing, setPairing] = useState<Pairing>();
+  const [signin, setSignin] = useState<Signin>();
   const [connected, setConnected] = useState(false);
   const [paused, setPaused] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -84,6 +85,7 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
         else if (m.t === "stats") setStats(m);
         else if (m.t === "settings") setSettings(m);
         else if (m.t === "pairing") setPairing(m);
+        else if (m.t === "signin") setSignin(m);
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "memory") setMemory(m.items);
@@ -129,5 +131,5 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
     if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
     else outbox.current.push(JSON.stringify(m));
   }, []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, runs, send, status, since, resolved };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, signin, connected, paused, schedules, memory, skills, runs, send, status, since, resolved };
 }

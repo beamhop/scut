@@ -72,7 +72,7 @@ export function SettingsPanel({ a, agent, onClose, section }: { a: A; agent: Age
       {problem && <ProblemCallout problem={problem} name={agent.name} />}
       <SafetyCheck a={a} agent={agent} />
       <PersonaSettings a={a} name={agent.name} />
-      <BrainSettings a={a} name={agent.name} id={agent.id} harness={agent.harness} problem={problem?.fix === "brain" || problem?.fix === "key" ? problem : undefined} autoOpen={section === "brain" && (problem?.fix === "brain" || problem?.fix === "key")} />
+      <BrainSettings a={a} name={agent.name} id={agent.id} harness={agent.harness} problem={problem?.fix === "brain" || problem?.fix === "key" || problem?.fix === "signin" ? problem : undefined} autoOpen={section === "brain" && (problem?.fix === "brain" || problem?.fix === "key")} />
       <AutonomySettings a={a} name={agent.name} />
       <SpendingSettings a={a} agent={agent} />
       <ChannelSettings a={a} agent={agent} />
@@ -109,6 +109,7 @@ export function safetyItems(a: A, agent: Agent) {
   // A brain that's missing or rejected is not "all good": the agent can't do what you ask, and the shield must say so.
   const problem = agentProblem(a, agent);
   if (problem?.fix === "brain") items.push({ ok: false, text: "No brain yet, so it can't think or do tasks", to: "brain", fix: FIX_LABEL.brain });
+  else if (problem?.fix === "signin") items.push({ ok: false, text: `${problem.text.replace(/ Sign in in Settings → Brain\.$/, "")} It can't think until it is`, to: "brain", fix: FIX_LABEL.signin });
   else if (problem?.fix === "key") items.push({ ok: false, text: `${problem.text}. It can't think until the key works`, to: "brain", fix: FIX_LABEL.key });
   items.push(s.unsandboxed
     ? { ok: false, text: "No sandbox: it runs as a normal program on this computer. It has its own browser and asks before touching anything outside its folder, but nothing walls it off. Beam it to a cloud to wall it off" }
@@ -276,7 +277,7 @@ export function BrainSettings({ a, name, id, harness: recHarness, problem, autoO
   return (
     <Section id="brain" title="Brain">
       <div ref={sectionRef} hidden />
-      {problem && (
+      {problem && problem.fix !== "signin" && (
         <Notice className="mb-3">
           <span className="font-medium">{problemLabel(problem)}.</span> {problemMeta(problem, name)}
         </Notice>
@@ -287,14 +288,16 @@ export function BrainSettings({ a, name, id, harness: recHarness, problem, autoO
             <div className="font-medium">{harness === "mock" ? "Demo" : sub && !m?.baseUrl ? `${sub.label} subscription` : m ? modelName(m.model) : "None yet"}</div>
             <div className="mt-0.5 text-small text-ink-2">
               {harness === "mock" ? "No brain: it answers with practice replies."
-                : sub && !m?.baseUrl ? `Through ${SOFTWARE_NAME[harness!]}, signed in on ${name}'s own screen. Sign in or switch accounts there.`
+                : sub && !m?.baseUrl ? `Through ${SOFTWARE_NAME[harness!]}${a.settings?.subModel ? ` · ${a.settings.subModel}` : ""}`
                 : m ? <>{SOFTWARE_NAME[harness ?? "pi"] ?? harness} · {prov ? PRESETS[prov].label : m.baseUrl} · {m.hasKey || prov === "ollama" ? "key saved" : "no key"} · <span className="font-mono text-[11.5px]">{m.model}</span></>
                 : `${name} can't think until it has one.`}
             </div>
           </div>
-          <Button size="sm" variant={problem ? "signal" : "secondary"} onClick={start}>{problem ? FIX_LABEL[problem.fix === "key" ? "key" : "brain"] : "Change"}</Button>
+          <Button size="sm" variant={problem && !(sub && !m?.baseUrl) ? "signal" : "secondary"} onClick={start}>{problem && !(sub && !m?.baseUrl) ? FIX_LABEL[problem.fix === "key" ? "key" : "brain"] : "Change"}</Button>
         </div>
-      ) : (
+      ) : null}
+      {!open && sub && !m?.baseUrl && <div className="mt-3"><SubscriptionPanel a={a} name={name} kind={sub.harness} label={sub.label} /></div>}
+      {!open ? null : (
         <div className="space-y-3">
           <fieldset>
             <legend className="mb-1.5 text-small font-medium">Thinks with</legend>
@@ -345,6 +348,79 @@ export function BrainSettings({ a, name, id, harness: recHarness, problem, autoO
         </div>
       )}
     </Section>
+  );
+}
+
+/**
+ * A subscription brain: is the agent signed in, and a way to sign in right here (a link and a one-time code from the
+ * CLI's device login, opened on any device where you're signed in), try again, or sign out. Plus the model to use.
+ */
+function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind: "codex" | "copilot"; label: string }) {
+  const s = a.signin?.harness === kind ? a.signin : undefined;
+  const [copied, setCopied] = useState(false);
+  const [custom, setCustom] = useState(a.settings?.subModel ?? "");
+  useEffect(() => setCustom(a.settings?.subModel ?? ""), [a.settings?.subModel]);
+  const send = (op: "start" | "cancel" | "check" | "signout") => a.send({ t: "signin", op });
+  const setModel = (v: string) => { a.send({ t: "settings", subModel: v || null }); announce(v ? `${name} now uses ${v}` : `${name} uses ${label}'s default model`); };
+  const models = a.settings?.subModels ?? [];
+  const state = s?.state ?? "checking";
+  return (
+    <div className="space-y-3 rounded-unit border border-line bg-surface-2 p-3">
+      <div className="flex items-start gap-2.5">
+        {state === "signed-in" ? <CheckCircleIcon size={18} weight="fill" className="mt-px shrink-0 text-ok" aria-hidden />
+          : <CircleIcon size={18} className="mt-px shrink-0 text-ink-3" aria-hidden />}
+        <div className="min-w-0 flex-1" role="status">
+          <div className="font-medium text-ink">
+            {state === "signed-in" ? `Signed in to ${label}` : state === "waiting" ? `Waiting for you to sign in to ${label}` : state === "checking" ? "Checking the sign-in…" : `Not signed in to ${label}`}
+          </div>
+          <div className="mt-0.5 text-small text-ink-2">
+            {state === "signed-in" ? (s?.account ?? `${name} uses your ${label} subscription.`)
+              : state === "waiting" ? "Open the link on any device where you're signed in, and enter the code."
+              : state === "error" ? s?.error
+              : state === "checking" ? null
+              : `${name} can't think until it's signed in. No password goes through Beamhop.`}
+          </div>
+        </div>
+        {state === "signed-in" && <Button size="sm" variant="quiet" onClick={() => send("signout")}>Sign out</Button>}
+        {(state === "signed-out" || state === "error") && <Button size="sm" variant="primary" onClick={() => send("start")}>{state === "error" ? "Try again" : "Sign in"}</Button>}
+      </div>
+      {state === "waiting" && s?.url && s.code && (
+        <div className="space-y-2 rounded-control border border-line bg-surface p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-ui-lg tracking-[0.12em] text-ink" aria-label={`Code ${s.code.split("").join(" ")}`}>{s.code}</span>
+            <IconButton size="sm" label={copied ? "Copied" : "Copy the code"} icon={copied ? CheckIcon : CopyIcon}
+              onClick={() => { navigator.clipboard?.writeText(s.code!); setCopied(true); announce("Code copied"); setTimeout(() => setCopied(false), 1500); }} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a href={s.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-body font-medium text-ink underline underline-offset-2">
+              {s.url.replace("https://", "")} <ArrowSquareOutIcon size={13} aria-hidden />
+            </a>
+            <span className="ml-auto flex gap-1">
+              <Button size="sm" variant="quiet" onClick={() => send("cancel")}>Cancel</Button>
+              <Button size="sm" variant="quiet" onClick={() => send("start")}>New code</Button>
+            </span>
+          </div>
+          {s.expiresAt && <p className="text-small text-ink-3">The code works until {clock(s.expiresAt)}.</p>}
+        </div>
+      )}
+      {models.length > 0 ? (
+        <Field label="Model">
+          <Select value={a.settings?.subModel ?? ""} onChange={(e) => setModel(e.target.value)} aria-label={`${name}'s model`}>
+            <option value="">{label}'s default</option>
+            {models.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            {a.settings?.subModel && !models.some((x) => x.id === a.settings!.subModel) && <option value={a.settings.subModel}>{a.settings.subModel}</option>}
+          </Select>
+        </Field>
+      ) : (
+        <Field label="Model" aside="Optional" hint={kind === "copilot" ? "Empty lets Copilot pick (auto). Or a model your plan offers, e.g. gpt-5.6-sol." : `Empty uses ${label}'s default.`}>
+          <div className="flex gap-2">
+            <Input mono aria-label={`${name}'s model`} value={custom} placeholder="auto" onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") setModel(custom.trim()); }} />
+            <Button size="sm" variant="secondary" disabled={custom.trim() === (a.settings?.subModel ?? "")} onClick={() => setModel(custom.trim())}>Save</Button>
+          </div>
+        </Field>
+      )}
+    </div>
   );
 }
 

@@ -15,15 +15,15 @@ export type AgentData = ReturnType<typeof useAgent>;
  * Something that stops the agent from working, with the setting that fixes it. From the agent's status
  * (`status.problem`, newer agents); older agents don't send it, so "no brain" is also worked out here from Settings.
  */
-export type AgentProblem = { text: string; fix?: "brain" | "channel" | "key" };
+export type AgentProblem = { text: string; fix?: "brain" | "channel" | "key" | "signin" };
 /** Which Settings section fixes a problem. */
-export const FIX_SECTION = { brain: "brain", key: "brain", channel: "apps" } as const;
+export const FIX_SECTION = { brain: "brain", key: "brain", signin: "brain", channel: "apps" } as const;
 /** A problem in two or three words, for the headline and the readout (the full sentence goes under it). */
 export function problemLabel(p: AgentProblem): string {
-  return p.fix === "brain" ? "Needs a brain" : p.fix === "key" ? "Needs a new key" : p.fix === "channel" ? "A chat app can't sign in" : p.text;
+  return p.fix === "brain" ? "Needs a brain" : p.fix === "key" ? "Needs a new key" : p.fix === "signin" ? "Needs to sign in" : p.fix === "channel" ? "A chat app can't sign in" : p.text;
 }
 /** The button that fixes a problem, verb first. */
-export const FIX_LABEL = { brain: "Add a brain", key: "Fix the key", channel: "Fix the chat app" } as const;
+export const FIX_LABEL = { brain: "Add a brain", key: "Fix the key", signin: "Sign in", channel: "Fix the chat app" } as const;
 
 /** Harnesses that think with a model from Settings (demo and subscription agents don't). */
 const MODEL_HARNESS = ["pi", "opencode"];
@@ -39,6 +39,7 @@ export function agentProblem(a: Pick<AgentData, "status" | "settings">, agent: P
 /** One line on what a problem means for you, for under the headline and the composer. */
 export function problemMeta(p: AgentProblem, name: string): string {
   if (p.fix === "brain") return `${name} can't think yet, so it can't do tasks. Adding a brain takes about 2 minutes.`;
+  if (p.fix === "signin") return `${name} can't think until it's signed in to its subscription. Sign in from Settings: a link and a code, no password.`;
   if (p.fix === "key") return `${name} can't think until its brain's key works. Paste a new key in Settings.`;
   if (p.fix === "channel") return `Messages and approvals from that chat app don't reach ${name}.`;
   return `${name} can't continue until this is fixed.`;

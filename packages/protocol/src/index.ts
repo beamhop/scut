@@ -17,11 +17,26 @@ export interface ModelConfig {
   model: string;
 }
 
+/** Signing an agent in to a subscription (Codex: ChatGPT, Copilot CLI: GitHub Copilot) with a device code. */
+export interface SigninState {
+  harness: "codex" | "copilot";
+  /** checking: being looked up · waiting: open `url` and enter `code` · error: the last try failed (see error). */
+  state: "checking" | "signed-in" | "signed-out" | "waiting" | "error";
+  url?: string;
+  code?: string;
+  expiresAt?: number;
+  /** "Logged in using ChatGPT", when the CLI says. */
+  account?: string;
+  error?: string;
+}
+
 export interface AgentSpec {
   id: string;
   name: string;
   harness: HarnessKind;
   model?: ModelConfig;
+  /** On a subscription (no API brain): the model to ask for; unset = the CLI's own default (Copilot: auto). */
+  subModel?: string;
   template?: "assistant" | "researcher" | "developer" | "custom";
   persona?: string;
   /** The owner's time zone (IANA), learned from the app; daily tasks the agent sets itself use it. */
@@ -140,6 +155,8 @@ export type ClientMsg =
   | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string;
       /** The agent software that thinks (Pi, opencode, Codex, Copilot CLI, Demo). Restarts it once the current task is done. */
       harness?: HarnessKind;
+      /** The subscription's model (Codex, Copilot CLI); null = the CLI's default. */
+      subModel?: string | null;
       /** A new brain; null drops it (e.g. Codex or Copilot on a subscription signed in on the agent's screen). */
       model?: { api: ModelConfig["api"]; baseUrl: string; model: string; apiKey?: string } | null; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   /**
@@ -151,7 +168,9 @@ export type ClientMsg =
   | { t: "run_schedule"; id: string }
   | { t: "crew"; members: CrewMember[] }
   | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string }
-  | { t: "skills"; op: "add" | "delete"; name?: string; content?: string; url?: string };
+  | { t: "skills"; op: "add" | "delete"; name?: string; content?: string; url?: string }
+  /** Subscription sign-in: start a device-code login, cancel it, check again, or sign out. */
+  | { t: "signin"; op: "start" | "cancel" | "check" | "signout" };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
@@ -175,7 +194,8 @@ export type ServerMsg =
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; /** Runs directly on its computer, without a sandbox. */ unsandboxed?: boolean; /** x11: a whole Linux desktop; cdp: a browser only (no sandbox). */ screen?: "x11" | "cdp"; harness: HarnessKind; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
+  | { t: "settings"; /** Runs directly on its computer, without a sandbox. */ unsandboxed?: boolean; /** x11: a whole Linux desktop; cdp: a browser only (no sandbox). */ screen?: "x11" | "cdp"; harness: HarnessKind; /** On a subscription: the model asked for (unset = default) and the ones it offers. */ subModel?: string; subModels?: { id: string; name: string }[]; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
+  | ({ t: "signin" } & SigninState)
   | { t: "paused"; paused: boolean; /** true when the owner has the screen (Take over), false for a plain pause */ control?: boolean }
   | { t: "memory"; items: MemoryItem[] }
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }
@@ -218,8 +238,8 @@ export interface ApprovalRequest {
 export interface AgentProblem {
   /** One plain sentence, e.g. "Atlas has no brain yet. Add one in Settings → Brain." */
   text: string;
-  /** Settings section that fixes it: brain = pick a brain, key = paste a new key for the brain, channel = a chat app's token. */
-  fix?: "brain" | "channel" | "key";
+  /** Settings section that fixes it: brain = pick a brain, key = paste a new key for the brain, signin = sign in to the subscription brain, channel = a chat app's token. */
+  fix?: "brain" | "channel" | "key" | "signin";
 }
 
 /** Bench data: what the agent is doing, in one place. Sent on connect and whenever any of it changes. */

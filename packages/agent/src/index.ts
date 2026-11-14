@@ -266,14 +266,16 @@ export class CliHarness implements Harness {
   }
 
   async prompt(text: string, onEvent: (e: HarnessEvent) => void): Promise<string> {
+    const m = this.ctx.spec.model;
+    // On a subscription (no API brain): the model picked in Settings, else the CLI's default.
+    const sub = !m?.baseUrl && this.ctx.spec.subModel ? this.ctx.spec.subModel : undefined;
     const argv =
       this.kind === "codex"
         ? // The agent's whole computer is the sandbox; Beamhop's own approvals (request_approval) guard risky actions.
-          ["codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", text]
+          ["codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", ...(sub ? ["-m", sub] : []), text]
         : this.kind === "copilot"
-          ? ["copilot", "-p", text, "--allow-all-tools", "-s"]
+          ? ["copilot", "-p", text, "--allow-all-tools", "-s", ...(sub ? ["--model", sub] : [])]
           : ["opencode", "run", text];
-    const m = this.ctx.spec.model;
     // Copilot CLI's bring-your-own-key mode is configured by environment; offline keeps it from calling GitHub at all.
     const copilotBrain: Record<string, string> = this.kind === "copilot" && m?.baseUrl
       ? {
@@ -342,3 +344,5 @@ export function createHarness(ctx: HarnessContext, computer: (a: Record<string, 
       return new MockHarness(ctx, computer);
   }
 }
+
+export { signinStatus, startSignin, signOut, subscriptionModels, type SubscriptionKind, type Signin } from "./signin.ts";

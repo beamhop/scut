@@ -139,8 +139,8 @@ export function AgentView({ agent, dests, onBack, onBeam, standalone = false }: 
 
   const onSettings = (section?: SettingsSection) => setSettings({ section });
   const fix = now.problem?.fix;
-  const blocked = (fix === "brain" || fix === "key") ? {
-    text: fix === "brain" ? `${agent.name} can't think yet. Add a brain first (2 min).` : `${agent.name}'s brain key doesn't work. Fix it first.`,
+  const blocked = (fix === "brain" || fix === "key" || fix === "signin") ? {
+    text: fix === "brain" ? `${agent.name} can't think yet. Add a brain first (2 min).` : fix === "signin" ? `${agent.name} isn't signed in to its subscription yet. Sign in first.` : `${agent.name}'s brain key doesn't work. Fix it first.`,
     action: <Button size="sm" variant="quiet" className="-my-1 shrink-0 underline decoration-1 underline-offset-2" onClick={() => onSettings("brain")}>{FIX_LABEL[fix]}</Button>,
   } : undefined;
   const shared = { agent, a, drive, now, stop, onSettings, queue, answer, blocked };
