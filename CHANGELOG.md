@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.42.0 — Approvals can wait for you
+
+- **Fixed a real bug:** if you took more than a minute to answer an approval, the agent's tool call timed out ("MCP request timed out after 60000ms") and the model carried on without your answer. Now:
+  - the computer tools send progress every 15 s while they wait, which keeps clients like Pi waiting;
+  - Pi and Codex give the agent's computer tools 30 minutes;
+  - an approval nobody answers within 25 minutes is treated as "no" (the agent says so) instead of hanging forever.
+- Test: an approval answered after 75 seconds reaches the model as "approved".
+- Re-ran the live CLI harness tests on a real model: pass (one Copilot run hit a transient provider error and passed on retry).
+
 ## v0.41.0 — A quieter browser
 
 - The agent's Chromium ships with managed policies: no "Sign in to Chromium?" bubble, no sync, promo tabs, default-browser or translate prompts — fewer things for the model to trip over and for you to see on its screen. Its password manager stays on, so logins you make on its screen stay in its profile and beam with it.

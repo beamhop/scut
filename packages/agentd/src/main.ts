@@ -123,6 +123,7 @@ function pairingMsg(): ServerMsg {
 }
 
 // ---------- approvals ----------
+const APPROVAL_TTL_MIN = Number(process.env.SCUT_APPROVAL_TTL_MIN ?? 25);
 const approvals = new Map<string, (ok: boolean, by: string) => void>();
 const pendingApprovals = new Map<string, Extract<ServerMsg, { t: "approval.request" }>>();
 function requestApproval(title: string, detail?: string): Promise<boolean> {
@@ -140,8 +141,15 @@ function requestApproval(title: string, detail?: string): Promise<boolean> {
   if (nc && no) nc.askApproval(no, id, title).catch(() => {});
   setState("stuck");
   narrate(`Waiting for approval: ${title}`);
+  // Nobody answered in time: don't leave the agent hanging forever, and don't do the risky thing.
+  const expire = setTimeout(() => {
+    if (!approvals.has(id)) return;
+    narrate(`No answer about "${title}" in ${APPROVAL_TTL_MIN} minutes — not doing it`);
+    resolveApproval(id, false, "timeout");
+  }, APPROVAL_TTL_MIN * 60_000);
   return new Promise((resolve) => {
     approvals.set(id, (ok, by) => {
+      clearTimeout(expire);
       approvals.delete(id);
       pendingApprovals.delete(id);
       broadcast({ t: "approval.resolved", id, ok, by });

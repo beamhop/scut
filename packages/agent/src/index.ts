@@ -97,6 +97,8 @@ export class PiHarness implements Harness {
           args: this.ctx.mcpCommand.slice(1),
           env: this.ctx.mcpEnv,
           exposure: "direct",
+          // tools can wait on the owner's approval; give them half an hour (progress beats also keep it alive)
+          timeout: 1800,
           description: "Your own computer: screen, mouse, keyboard and Chromium browser",
         },
       },
@@ -220,6 +222,7 @@ export class CliHarness implements Harness {
         ...brain,
         "[mcp_servers.computer]",
         `command = ${JSON.stringify(cmd)}`,
+        "tool_timeout_sec = 1800", // tools can wait on the owner's approval
         `args = ${JSON.stringify(args)}`,
         `env = { ${Object.entries(this.ctx.mcpEnv).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(", ")} }`,
       ].join("\n");

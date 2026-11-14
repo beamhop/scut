@@ -825,3 +825,25 @@ describe("v0.39: change an agent's brain", () => {
     c.close();
   });
 });
+
+describe("v0.42: slow approvals", () => {
+  test("an approval answered after 75 s still reaches the agent (no tool-call timeout)", async () => {
+    const rec = await scut.create({
+      name: "Patient",
+      harness: "pi",
+      autonomy: "ask",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: 'CALL request_approval {"title":"Pay the invoice"}\n' });
+    const req = await c.waitFor<any>((m) => m.t === "approval.request", 120_000);
+    await Bun.sleep(75_000);
+    const before = llm.requests.length;
+    c.send({ t: "approval", id: req.id, ok: true });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
+    const toolMsgs = JSON.stringify(llm.requests.slice(before).flatMap((r: any) => r.messages.filter((m: any) => m.role === "tool")));
+    console.log("tool result seen by the model:", toolMsgs.slice(0, 300));
+    expect(toolMsgs).toContain("approved");
+    c.close();
+  }, 400_000);
+});

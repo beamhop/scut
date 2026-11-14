@@ -27,6 +27,28 @@ async function shot() {
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 
 const server = new McpServer({ name: "computer", version: "0.1.0" });
+
+// Any tool can block on the owner's approval (autonomy policy), and people take minutes to answer, while MCP clients
+// give up on a request after a minute or so. While a tool runs, send progress every 15 s: clients that support it
+// (Pi does) restart their timeout on each one.
+const registerTool = server.tool.bind(server) as (...a: any[]) => any;
+(server as any).tool = (...a: any[]) => {
+  const handler = a[a.length - 1];
+  a[a.length - 1] = async (...args: any[]) => {
+    const extra = args[args.length - 1];
+    const token = extra?._meta?.progressToken;
+    let n = 0;
+    const beat = token === undefined ? undefined : setInterval(() => {
+      extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: ++n, message: "still working (maybe waiting for your owner)" } }).catch(() => {});
+    }, 15_000);
+    try {
+      return await handler(...args);
+    } finally {
+      if (beat) clearInterval(beat);
+    }
+  };
+  return registerTool(...a);
+};
 const xy = { x: z.number().describe("x in pixels (0-1279)"), y: z.number().describe("y in pixels (0-799)") };
 
 server.tool("screenshot", "Take a screenshot of your 1280x800 screen", {}, async () => shot());
