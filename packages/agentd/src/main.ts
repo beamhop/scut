@@ -156,7 +156,7 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
   if (!desktop) return new Response("desktop not running", { status: 409 });
   if (a.kind === "screenshot") {
     const png = await desktop.screenshotPng();
-    return new Response(png, { headers: { "content-type": "image/png" } });
+    return new Response(png as Uint8Array<ArrayBuffer>, { headers: { "content-type": "image/png" } });
   }
   if (a.kind === "crew_post") {
     const ok = await postCrew(String(a.text ?? ""));
@@ -609,7 +609,7 @@ Bun.serve<WsData>({
       if (p === "/status") return Response.json({ state, hostPubkey, spec: spec && { ...spec, model: spec.model && { ...spec.model, apiKey: undefined }, channels: Object.keys(spec.channels) }, holdsLease: holdsLease(), tokens });
       if (p === "/screenshot") {
         if (!desktop?.latest) return new Response("no frame", { status: 404 });
-        return new Response(desktop.latest, { headers: { "content-type": "image/jpeg" } });
+        return new Response(desktop.latest as Uint8Array<ArrayBuffer>, { headers: { "content-type": "image/jpeg" } });
       }
       if (p === "/beam/prepare" && req.method === "POST") {
         if (!spec || !agentSk || state === "retired" || state === "awaiting") return new Response(`cannot beam from ${state}`, { status: 409 });
@@ -627,7 +627,7 @@ Bun.serve<WsData>({
       }
       if (p.startsWith("/beam/bundle/") && req.method === "GET") {
         const c = outgoing.get(p.split("/").pop()!);
-        return c ? new Response(c, { headers: { "content-type": "application/octet-stream" } }) : new Response("no bundle", { status: 404 });
+        return c ? new Response(c as Uint8Array<ArrayBuffer>, { headers: { "content-type": "application/octet-stream" } }) : new Response("no bundle", { status: 404 });
       }
       if (p === "/beam/commit" && req.method === "POST") {
         const { lease: next } = (await req.json()) as { lease: Event };

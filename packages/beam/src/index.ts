@@ -23,7 +23,7 @@ export async function unpackDir(dir: string, tgz: Uint8Array): Promise<void> {
 }
 
 export async function sha256Hex(data: Uint8Array): Promise<string> {
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", data)));
+  return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", data as Uint8Array<ArrayBuffer>)));
 }
 
 /** Encrypt: output = iv(12) || ciphertext+tag. */
@@ -31,7 +31,7 @@ export async function encrypt(plain: Uint8Array): Promise<{ cipher: Uint8Array; 
   const raw = crypto.getRandomValues(new Uint8Array(32));
   const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain as Uint8Array<ArrayBuffer>));
   const cipher = new Uint8Array(12 + ct.length);
   cipher.set(iv, 0);
   cipher.set(ct, 12);

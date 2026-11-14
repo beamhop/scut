@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.20.0 — Clean typecheck
+
+- The whole repo now typechecks cleanly (`bun run typecheck`), and CI fails if it doesn't.
+- Fixed typing around binary responses, Web Crypto inputs, async-iterated streams, and the mock chat servers.
+- Tiles in the crew grid no longer stretch to match a taller neighbour (e.g. one showing a beam receipt).
+
 ## v0.19.0 — Run history for scheduled tasks
 
 - Every scheduled run is kept (last 10, survives beams): whether it worked, what the agent answered, how long it took, tokens used, and the screen when it finished.

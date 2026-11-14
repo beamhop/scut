@@ -5,12 +5,12 @@ export function startMockSlack() {
   const posts: any[] = [];
   const sockets = new Set<ServerWebSocket<unknown>>();
   let env = 0;
-  const server = Bun.serve({
+  const server: ReturnType<typeof Bun.serve> = Bun.serve({
     port: 0,
     hostname: "0.0.0.0",
-    async fetch(req, srv) {
+    async fetch(req, srv): Promise<Response | undefined> {
       const path = new URL(req.url).pathname;
-      if (path === "/ws") return srv.upgrade(req) ? undefined : new Response("no", { status: 400 });
+      if (path === "/ws") return srv.upgrade(req, { data: undefined }) ? undefined : new Response("no", { status: 400 });
       const method = path.split("/").pop();
       const body = (await req.json().catch(() => ({}))) as any;
       if (method === "auth.test") return Response.json({ ok: true, user: "mock_slack", user_id: "UBOT" });
@@ -51,12 +51,12 @@ export function startMockDiscord() {
   const callbacks: string[] = [];
   const sockets = new Set<ServerWebSocket<unknown>>();
   let seq = 1;
-  const server = Bun.serve({
+  const server: ReturnType<typeof Bun.serve> = Bun.serve({
     port: 0,
     hostname: "0.0.0.0",
-    async fetch(req, srv) {
+    async fetch(req, srv): Promise<Response | undefined> {
       const path = new URL(req.url).pathname;
-      if (path === "/gw") return srv.upgrade(req) ? undefined : new Response("no", { status: 400 });
+      if (path === "/gw") return srv.upgrade(req, { data: undefined }) ? undefined : new Response("no", { status: 400 });
       if (path.endsWith("/users/@me")) return Response.json({ id: "BOT1", username: "mock_discord" });
       if (path.endsWith("/gateway/bot")) return Response.json({ url: `ws://host.docker.internal:${server.port}/gw` });
       const m = path.match(/\/channels\/([^/]+)\/messages$/);

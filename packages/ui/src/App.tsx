@@ -1157,7 +1157,7 @@ function CrewApp() {
         <button onClick={() => setCrewOpen(!crewOpen)} className="ml-auto rounded-full bg-panel2 px-4 py-2 text-sm hover:bg-white/10">Talk to all agents</button>
         <button onClick={() => setCreating(true)} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-5 py-2 font-semibold text-black">+ New agent</button>
       </header>
-      <main className={`grid grid-cols-1 gap-6 px-8 md:grid-cols-2 xl:grid-cols-3 ${crewOpen ? "xl:pr-[440px]" : ""}`}>
+      <main className={`grid grid-cols-1 items-start gap-6 px-8 md:grid-cols-2 xl:grid-cols-3 ${crewOpen ? "xl:pr-[440px]" : ""}`}>
         {sorted.map((ag) => (
           <Tile key={ag.id} agent={ag} dests={dests} onOpen={() => (location.hash = `#/agent/${ag.id}`)} onBeam={(to) => beam(ag.id, to)} onStatus={onStatus} />
         ))}
