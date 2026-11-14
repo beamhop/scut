@@ -428,6 +428,7 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
           </Select>
         </Field>
       ) : (
+        kind === "codex" && state !== "signed-in" ? <p className="text-small text-ink-2">Sign in to pick one of the models your {label} plan offers. Until then {name} uses the default.</p> :
         <Field label="Model" aside="Optional" hint={kind === "copilot" ? "Empty lets Copilot pick (auto). Or a model your plan offers, e.g. gpt-5.6-sol." : `Empty uses ${label}'s default.`}>
           <div className="flex gap-2">
             <Input mono aria-label={`${name}'s model`} value={custom} placeholder="auto" onChange={(e) => setCustom(e.target.value)}

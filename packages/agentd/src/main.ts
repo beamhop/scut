@@ -177,10 +177,21 @@ async function refreshSignin(): Promise<SigninState | null> {
   if (signinRun && signin?.harness === k && signin.state === "waiting") return signin;
   const s = await signinStatus(k, `${DATA}/home`);
   setSignin(s);
-  if (k === "codex" && !subModels.length) subModels = await subscriptionModels(k, `${DATA}/home`);
-  if (k !== "codex") subModels = [];
+  await refreshSubModels(k, s);
   broadcast(settingsMsg());
   return s;
+}
+/**
+ * The models the subscription offers. Only once signed in: before that Codex shows its general catalog, which has
+ * models a ChatGPT plan may not include. A picked model the plan doesn't offer is dropped (back to the default).
+ */
+async function refreshSubModels(k: SubscriptionKind, s: SigninState) {
+  subModels = k === "codex" && s.state === "signed-in" ? await subscriptionModels(k, `${DATA}/home`) : [];
+  if (spec?.subModel && subModels.length && !subModels.some((m) => m.id === spec!.subModel)) {
+    narrate(`${spec.subModel} isn't offered on this ${SUB_NAME[k]} plan; using its default model`);
+    delete spec.subModel;
+    await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
+  }
 }
 function beginSignin(mode: "screen" | "code" = "screen") {
   const k = subKind();
@@ -191,7 +202,10 @@ function beginSignin(mode: "screen" | "code" = "screen") {
   const run = startSignin(k, `${DATA}/home`, (s) => {
     if (signinRun !== run) return; // a newer try replaced this one
     setSignin(s);
-    if (s.state === "signed-in") narrate(`Signed in to ${SUB_NAME[k]}`);
+    if (s.state === "signed-in") {
+      narrate(`Signed in to ${SUB_NAME[k]}`);
+      void refreshSubModels(k, s).then(() => broadcast(settingsMsg()));
+    }
     if (s.state === "waiting" && s.via === "screen") narrate(`Opened the ${SUB_NAME[k]} sign-in on my screen: take over to sign in`);
   }, { mode, open });
   signinRun = run;
