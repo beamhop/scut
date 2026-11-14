@@ -13,17 +13,23 @@ import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
 import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { timingSafeEqual } from "node:crypto";
-import { Desktop } from "./desktop.ts";
+import { createScreen, type Screen } from "./screen.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
 const PORT = Number(process.env.PORT ?? 8080);
 const UI_DIR = process.env.SCUT_UI_DIR ?? "/opt/scut/ui";
-const MCP_CMD = (process.env.SCUT_MCP_CMD ?? "bun /opt/scut/packages/agent/src/mcp-computer.ts").split(" ");
+/** Running directly on a computer (no sandbox): said everywhere the agent is shown, and in its instructions. */
+const UNSANDBOXED = process.env.SCUT_UNSANDBOXED === "1";
+// A JSON array (paths with spaces, e.g. C:\Users\Jane Doe\…) or a plain space-separated command.
+const MCP_RAW = process.env.SCUT_MCP_CMD ?? "bun /opt/scut/packages/agent/src/mcp-computer.ts";
+const MCP_CMD: string[] = MCP_RAW.trim().startsWith("[") ? JSON.parse(MCP_RAW) : MCP_RAW.split(" ");
 const INTERNAL_TOKEN = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[agentd]", ...a);
 
 // ---------- persistent identity of this host (excluded from bundles) ----------
 await mkdir(`${DATA}/.host`, { recursive: true });
+// Without a sandbox, the app stops an agent by this pid (and everything it started: browser, harness).
+await Bun.write(`${DATA}/.host/pid`, String(process.pid));
 const hostKeyFile = Bun.file(`${DATA}/.host/key`);
 const hostSk = (await hostKeyFile.exists()) ? hexToBytes((await hostKeyFile.text()).trim()) : generateSecretKey();
 if (!(await hostKeyFile.exists())) await Bun.write(hostKeyFile, bytesToHex(hostSk));
@@ -35,7 +41,7 @@ let state: AgentState = "awaiting";
 let spec: AgentSpec | null = null;
 let agentSk: Uint8Array | null = null;
 let lease: Event | null = null;
-let desktop: Desktop | null = null;
+let desktop: Screen | null = null;
 let harness: Harness | null = null;
 const channels: Channel[] = [];
 const tokens = { input: 0, output: 0 };
@@ -220,7 +226,7 @@ setInterval(async () => {
   }
 }, 1500);
 function settingsMsg(): ServerMsg {
-  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
+  return { t: "settings", unsandboxed: UNSANDBOXED, screen: desktop?.kind ?? (process.env.SCUT_SCREEN === "cdp" ? "cdp" : "x11"), autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
 }
 function pairingMsg(): ServerMsg {
   const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
@@ -667,7 +673,7 @@ async function run() {
   if (last) lastResult = { text: firstLine(last.text), ts: last.ts };
   setState("starting");
   await mkdir(`${DATA}/workspace`, { recursive: true });
-  desktop = new Desktop(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}`);
+  desktop = await createScreen(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}`);
   await desktop.start();
   harness = makeHarness();
   await harness.start();
@@ -677,13 +683,15 @@ async function run() {
 }
 
 function makeHarness() {
+  // Without a sandbox, "this computer" is simply localhost (host.docker.internal is how sandboxes reach it).
+  const own = UNSANDBOXED && spec!.model?.baseUrl ? { ...spec!, model: { ...spec!.model, baseUrl: spec!.model.baseUrl.replace("host.docker.internal", "127.0.0.1") } } : spec!;
   return createHarness(
     {
-      spec: spec!,
+      spec: own,
       dataDir: DATA,
       mcpCommand: MCP_CMD,
       mcpEnv: { SCUT_CONTROL_URL: `http://127.0.0.1:${PORT}`, SCUT_INTERNAL_TOKEN: INTERNAL_TOKEN },
-      systemPrompt: systemPromptFor(spec!),
+      systemPrompt: systemPromptFor(spec!, { unsandboxed: UNSANDBOXED }),
     },
     async (a) => {
       const r = await computer(a, "agent");
@@ -741,9 +749,8 @@ async function quiesce() {
   await stopChannels();
   await harness?.stop();
   harness = null;
-  desktop?.stop();
+  await desktop?.stop();
   desktop = null;
-  await Bun.sleep(300);
 }
 
 // ---------- incoming beam (awaiting state) ----------
@@ -840,7 +847,8 @@ function authed(req: Request, url: URL) {
 
 Bun.serve<WsData>({
   port: PORT,
-  hostname: "0.0.0.0",
+  // In a sandbox the host maps the port; directly on a computer (no sandbox) only this computer may reach it.
+  hostname: process.env.SCUT_BIND ?? "0.0.0.0",
   idleTimeout: 255,
   // Beam bundles carry the whole workspace + browser profile; Bun's default request limit is 128 MB.
   maxRequestBodySize: Number(process.env.SCUT_MAX_BUNDLE_MB ?? 8192) * 1024 * 1024,
@@ -848,7 +856,7 @@ Bun.serve<WsData>({
     const url = new URL(req.url);
     const p = url.pathname;
     try {
-      if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null });
+      if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null, ...(UNSANDBOXED ? { unsandboxed: true } : {}) });
       if (p === "/beam/hello") return Response.json({ hostPubkey, state, ticket });
       if (p === "/start") return new Response(startPage(spec?.name ?? "", spec?.agentPubkey ?? ""), { headers: { "content-type": "text/html; charset=utf-8", ...UI_HEADERS } });
 
@@ -1132,7 +1140,7 @@ body{display:grid;place-items:center}
 <div class="p" aria-hidden="true"><svg width="64" height="64" viewBox="0 0 7 7"><rect x=".25" y=".25" width="6.5" height="6.5" rx="1.1" fill="#f6f5f2" stroke="#d6d3cc" stroke-width=".08"/>${dots}</svg><span class="cs">${esc(callsign(name, pubkey))}</span></div>
 <h1 class="n">${n}</h1>
 <p class="s">Ready for a task. Message ${n} in Beamhop or in a chat app.</p>
-</main><p class="f">This is ${n}'s own computer. Anything it does happens here, away from your files.</p></body></html>`;
+</main><p class="f">${UNSANDBOXED ? `This is ${n}'s own browser. ${n} runs on this computer without a sandbox, and asks before touching anything outside its folder.` : `This is ${n}'s own computer. Anything it does happens here, away from your files.`}</p></body></html>`;
 }
 const UI_HEADERS = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "referrer-policy": "no-referrer" };
 async function serveUi(p: string) {

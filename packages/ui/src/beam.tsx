@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { ArrowCounterClockwiseIcon, ArrowsLeftRightIcon, CaretDownIcon, CheckIcon, CloudIcon, DesktopIcon, FileArrowDownIcon, WarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
-import { Agent, Destination, BEAM_STAGES } from "./lib.tsx";
+import { Agent, Destination, BEAM_STAGES, unsandboxed, type Instance } from "./lib.tsx";
 import { Button, IconButton, Menu, Dialog, Field, Input, Select, Progress, Plate, announce, money, usdToEur, duration, durationWords, bytes, plural, list, cx, prefersReducedMotion, type MenuSection } from "./ui/index.ts";
 
 // ---------------- places ----------------
@@ -31,6 +31,11 @@ export function placeChange(d: Destination, agentName: string) {
 
 export function placeLabel(dests: Destination[], id?: string) {
   return dests.find((d) => d.id === id)?.label ?? (id === "local" ? "This computer" : id ?? "here");
+}
+
+/** Where an agent is, by its instance: an agent running without a sandbox says so even if this computer has one now. */
+export function placeOf(dests: Destination[], inst: Instance) {
+  return unsandboxed(inst) ? "This computer (no sandbox)" : placeLabel(dests, inst.driver);
 }
 
 // ---------------- beam menu (the non-drag path; keeps the "Beam to…" label and role=menu/menuitem contract) ----------------

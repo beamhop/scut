@@ -91,8 +91,8 @@ const PIECES: [string, string][] = [
   ["packages/ui", "the app you're looking at bits of right now"],
 ];
 
-const UNTESTED = ["smolvm boot (needs KVM or Apple Silicon)", "Real Fly.io, Render and Railway accounts", "Real Slack and Discord apps", "Codex, Copilot and opencode logins"];
-const TESTED = ["Docker driver, create → beam → restore end to end", "Live Telegram + OpenRouter test", "Zero axe violations on every screen, light, dark and phone", "Typecheck enforced in CI"];
+const UNTESTED = ["smolvm on a real Mac (CI Macs can't nest VMs)", "Real Fly.io, Render and Railway accounts", "Real Slack and Discord apps", "Codex, Copilot and opencode logins"];
+const TESTED = ["Whole agents on smolvm (Linux/KVM), WSL2 (Windows), gVisor and Docker, in CI", "No-sandbox agents under systemd, LaunchAgents and Windows logon tasks", "No sandbox: real Pi, beams to a sandbox and back", "Live Telegram + OpenRouter test", "Zero axe violations on every screen, light, dark and phone", "Typecheck enforced in CI"];
 
 function App() {
   return (
@@ -110,7 +110,7 @@ function App() {
                 [MonitorPlayIcon, "Live screen", "Every agent's computer in the same frame. The readout under it ticks: status, time, money, steps."],
                 [CursorClickIcon, "Take over", "The bar turns orange while you drive. Press Esc twice and it's the agent's turn again."],
                 [KeyboardIcon, "Asks at the screen", "Payments, sending, deleting: the approval rises over the screen and in your chat app."],
-                [DesktopIcon, "smolvm or Docker", "microVMs on Linux with KVM and on Apple Silicon. Docker everywhere else. Same image in your cloud."],
+                [DesktopIcon, "Nothing to install", "A microVM where the hardware allows, else WSL2 on Windows or gVisor on Linux. Docker only if you already have it. Same image in your cloud."],
               ].map(([I, t, d]) => {
                 const Icon = I as typeof DesktopIcon;
                 return (

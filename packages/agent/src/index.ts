@@ -28,7 +28,7 @@ export interface HarnessContext {
   systemPrompt: string;
 }
 
-export function systemPromptFor(spec: AgentSpec): string {
+export function systemPromptFor(spec: AgentSpec, opts: { unsandboxed?: boolean } = {}): string {
   const role =
     spec.template === "researcher"
       ? "You research topics on the web and write clear, sourced reports."
@@ -36,7 +36,12 @@ export function systemPromptFor(spec: AgentSpec): string {
         ? "You are a software developer working in your workspace."
         : "You are a personal assistant who gets errands done in your own web browser.";
   return [
-    `You are ${spec.name}, an AI agent with your own Linux computer (1280x800 screen) and a Chromium browser.`,
+    opts.unsandboxed
+      ? `You are ${spec.name}, an AI agent with your own Chromium browser (a 1280x800 screen of its own).`
+      : `You are ${spec.name}, an AI agent with your own Linux computer (1280x800 screen) and a Chromium browser.`,
+    opts.unsandboxed
+      ? "You run directly on your owner's computer, not in a sandbox: your shell and files are theirs. Work only inside your workspace folder. Before reading, changing or deleting anything outside it, or installing software, call request_approval and wait."
+      : "",
     role,
     spec.persona ? `Persona: ${spec.persona}` : "",
     "Use the `computer` MCP tools (screenshot, click, type_text, key, scroll, open_url) to operate your computer.",

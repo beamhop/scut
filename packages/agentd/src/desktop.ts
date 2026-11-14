@@ -1,14 +1,16 @@
 import { rm } from "node:fs/promises";
-// The agent's own computer: Xvfb + Openbox + Chromium, MJPEG frames via ffmpeg, input via xdotool.
+// The agent's own computer inside a sandbox: Xvfb + Openbox + Chromium, MJPEG frames via ffmpeg, input via xdotool.
+// The other implementation of Screen (screen.ts) is CdpScreen, for agents running directly on the host.
 import { SCREEN } from "@scut/protocol";
 import type { Subprocess } from "bun";
+import type { Screen, ScreenAction } from "./screen.ts";
 
 const DISPLAY = process.env.SCUT_DISPLAY ?? ":99";
 const env = () => ({ ...process.env, DISPLAY });
 const CDP_PORT = Number(process.env.SCUT_CDP_PORT ?? 9222);
 
 /** One DevTools protocol call on a page target (short-lived socket). */
-async function cdp(ws: string, method: string, params: Record<string, unknown> = {}): Promise<any> {
+export async function cdp(ws: string, method: string, params: Record<string, unknown> = {}): Promise<any> {
   const sock = new WebSocket(ws);
   try {
     return await new Promise((resolve, reject) => {
@@ -28,7 +30,8 @@ async function cdp(ws: string, method: string, params: Record<string, unknown> =
   }
 }
 
-export class Desktop {
+export class X11Screen implements Screen {
+  readonly kind = "x11" as const;
   private procs: Subprocess[] = [];
   private ffmpeg?: Subprocess;
   latest?: Uint8Array;
@@ -215,7 +218,7 @@ export class Desktop {
     return (await new Response(p.stdout).text()).trim();
   }
 
-  async act(a: { kind: string; x?: number; y?: number; button?: number; dy?: number; keys?: string; text?: string; url?: string }) {
+  async act(a: ScreenAction) {
     const b = String(a.button ?? 1);
     const move = a.x !== undefined && a.y !== undefined ? ["mousemove", String(Math.round(a.x)), String(Math.round(a.y))] : [];
     switch (a.kind) {
@@ -257,9 +260,14 @@ export class Desktop {
     return !!this.browser && this.browser.exitCode === null && !this.browser.killed;
   }
 
-  stop() {
+  /** Close the browser first and wait for it, so its profile (cookies, logins) is on disk before a beam packs it. */
+  async stop() {
     this.ffmpeg?.kill();
     this.setThumbs(false);
+    if (this.browser && this.browserAlive()) {
+      this.browser.kill("SIGTERM");
+      await Promise.race([this.browser.exited, Bun.sleep(5000)]);
+    }
     for (const p of this.procs.reverse()) p.kill();
     this.procs = [];
   }

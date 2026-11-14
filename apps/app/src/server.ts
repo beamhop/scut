@@ -124,6 +124,18 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           }
         }
         if (p === "/api/prefetch") return json(scut.prefetch);
+        // Where agents run on this computer, how it was picked, and the choice when nothing works.
+        if (p === "/api/local" && req.method === "GET") {
+          const d = scut.drivers.get("local");
+          return json({ ...scut.local, label: d?.label, isolation: d?.isolation, clouds: [...scut.drivers.keys()].filter((k) => k !== "local") });
+        }
+        if (p === "/api/local" && req.method === "POST") {
+          const { allowHost } = (await req.json()) as { allowHost?: boolean };
+          await scut.allowHost(!!allowHost);
+          const d = scut.drivers.get("local");
+          return json({ ...scut.local, label: d?.label, isolation: d?.isolation });
+        }
+        if (p === "/api/local/enable-wsl" && req.method === "POST") return json(scut.enableWsl());
         if (p === "/api/autostart") {
           if (req.method === "POST") await setAutostart(!!((await req.json()) as { on: boolean }).on);
           return json({ on: await autostartEnabled() });

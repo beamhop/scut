@@ -1,14 +1,22 @@
 import type { ServerMsg } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
 
-export type Instance = { driver: string; instanceId: string; endpoint: string };
+export type Instance = { driver: string; instanceId: string; endpoint: string; meta?: Record<string, string> };
 export type Agent = {
   id: string; name: string; mascot: string; harness: string; agentPubkey: string;
   current: Instance; history: Instance[]; token: string;
   model?: { baseUrl?: string; model: string }; price?: { in: number; out: number };
   beam?: { to: string; from?: string; stage: string; error?: string; startedAt: number; doneAt?: number; summary?: { bytes: number; carried: Record<string, number | undefined> } };
 };
-export type Destination = { id: string; label: string; isolation: "vm" | "container"; monthlyUsd: number };
+export type Destination = { id: string; label: string; isolation: "vm" | "container" | "sandbox" | "none"; monthlyUsd: number };
+/** How agents run on this computer (GET /api/local): the engine the ladder picked, and why the others weren't. */
+export type LocalState = {
+  engine: "smolvm" | "wsl" | "gvisor" | "docker" | "podman" | "host" | null;
+  probes: { engine: string; available: boolean; reason?: string; action?: "enable-wsl" }[];
+  hostAllowed: boolean; unsupported?: string; label?: string; isolation?: Destination["isolation"]; clouds?: string[];
+};
+/** Runs directly on its computer, without a sandbox (said wherever the agent's place is shown). */
+export const unsandboxed = (i?: Instance) => i?.meta?.engine === "host" || i?.meta?.isolation === "none";
 
 export const api = {
   agents: (): Promise<Agent[]> => fetch("/api/agents").then((r) => r.json()),
@@ -16,6 +24,9 @@ export const api = {
   create: (body: unknown) => fetch("/api/agents", { method: "POST", body: JSON.stringify(body) }).then((r) => r.json()),
   beam: (id: string, to: string) => fetch(`/api/agents/${id}/beam`, { method: "POST", body: JSON.stringify({ to }) }).then((r) => r.json()),
   remove: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }).then((r) => r.json()),
+  local: (): Promise<LocalState> => fetch("/api/local").then((r) => r.json()),
+  allowHost: (allow: boolean): Promise<LocalState> => fetch("/api/local", { method: "POST", body: JSON.stringify({ allowHost: allow }) }).then((r) => r.json()),
+  enableWsl: (): Promise<{ started: boolean; error?: string }> => fetch("/api/local/enable-wsl", { method: "POST" }).then((r) => r.json()),
   brain: (): Promise<{ api: string; baseUrl: string; model: string; hasKey: boolean } | null> => fetch("/api/brain").then((r) => r.json()).catch(() => null),
   verifyBrain: (m: unknown): Promise<{ ok: boolean; error?: string; modelFound?: boolean; models?: string[] }> =>
     fetch("/api/brain/verify", { method: "POST", body: JSON.stringify(m) }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) })),

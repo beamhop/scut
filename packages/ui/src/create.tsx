@@ -3,7 +3,7 @@
 // same flow as a section, for a bench that shows it in place on first run.
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckIcon, CodeIcon, CreditCardIcon, EnvelopeIcon, FileArrowUpIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { api, PRESETS, TEMPLATES, npubToHex, type Destination } from "./lib.tsx";
+import { api, PRESETS, TEMPLATES, npubToHex, type Destination, type LocalState } from "./lib.tsx";
 import { Button, Dialog, Field, Input, PlateGlyph, Progress, Segmented, Select, Switch, Textarea, announce, callsign, cx, money, usdToEur } from "./ui/index.ts";
 import { ChoiceTile, KEY_URL, modelName, Notice, PROVIDER_NOTE, SUBSCRIPTIONS } from "./settings-parts.tsx";
 
@@ -32,7 +32,7 @@ async function sendFirstTask(id: string, text: string) {
   location.hash = `#/agent/${id}`;
 }
 
-export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: boolean; onDone: () => void; inline?: boolean }) {
+export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { firstRun: boolean; onDone: () => void; inline?: boolean; onAddCloud?: () => void }) {
   const [step, setStep] = useState(0);
   // 1 · the job
   const [template, setTemplate] = useState("assistant");
@@ -65,7 +65,9 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
   const moved = useRef(false);
   const jobRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { api.destinations().then(setDests).catch(() => {}); }, []);
+  const [local, setLocal] = useState<LocalState>();
+  const [pfRun, setPfRun] = useState(0);
+  useEffect(() => { api.destinations().then(setDests).catch(() => {}); api.local().then(setLocal).catch(() => {}); }, []);
   // This computer can't run agents (no engine): start the agent on a connected cloud instead.
   useEffect(() => {
     const cloud = dests.find((d) => d.id !== "local");
@@ -82,7 +84,7 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
     };
     poll();
     return () => { alive = false; clearTimeout(t); };
-  }, []);
+  }, [pfRun]);
   // A brain saved on this computer (from the first agent) is the default: later agents don't ask again.
   useEffect(() => {
     api.brain().then((b) => {
@@ -252,6 +254,15 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
   const pulling = pf?.state === "pulling";
   // Skipped the brain and there's no saved one: say plainly what that means before creating (not after a silent no-op).
   const noBrain = skipped && !usesSavedKey && harness !== "mock" && harness !== "codex" && harness !== "copilot";
+  // This computer has no engine for agents (and no cloud is picked): the choice, instead of a create that would fail.
+  const noHere = !!local && !local.engine && where === "local";
+  async function runHere() {
+    setLocal(await api.allowHost(true));
+    setDests(await api.destinations());
+    setWhere("local");
+    setPfRun((n) => n + 1);
+    announce("Agents can run on this computer without a sandbox");
+  }
   const stepCreate = (
     <div className="space-y-5">
       <div className="flex items-start gap-3 rounded-unit border border-line bg-surface-2 p-3">
@@ -284,6 +295,13 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
         </Field>
       )}
 
+      {noHere && <HereChoice local={local!} agentName={agentName} onAddCloud={onAddCloud} onRunHere={runHere} />}
+      {local?.engine === "host" && where === "local" && (
+        <Notice tone="info">
+          <span className="font-medium">No sandbox.</span> {agentName} runs as a normal program on this computer, with a browser of its own (it never uses your screen or mouse). It asks before touching anything outside its own folder.
+        </Notice>
+      )}
+
       {!noBrain && <Field label="First task" aside="Optional" hint={pulling ? `Type it now. ${agentName} starts on it as soon as it's ready.` : `${agentName} starts on it right away, and you can watch.`}>
         <Textarea rows={2} value={firstTask} onChange={(e) => setFirstTask(e.target.value)} placeholder={tpl.example} aria-label="First task" />
       </Field>}
@@ -292,7 +310,7 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
         <Progress label="Getting the agent computer ready (first time only)" value={pf!.total ? pf!.done / pf!.total : 0}
           aside={pf!.total ? `${pf!.done} of ${pf!.total} parts` : "Starting"} valueText={pf!.total ? `${pf!.done} of ${pf!.total} parts downloaded` : "Starting the download"} />
       )}
-      {pf?.state === "error" && <Notice tone="info">{pf.error}</Notice>}
+      {pf?.state === "error" && !noHere && <Notice tone="info">{pf.error}</Notice>}
 
       <details className="text-small text-ink-2" open={template === "developer" || undefined}>
         <summary className="w-fit rounded-control">More options</summary>
@@ -355,7 +373,7 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
       </>
     : <>
         <span className="mr-auto">{back}</span>
-        <Button variant="primary" loading={busy} onClick={go}>
+        <Button variant="primary" loading={busy} onClick={go} disabled={noHere}>
           {busy ? (pulling ? "Waiting for the download…" : `Starting ${agentName}…`) : "Create agent"}
         </Button>
       </>;
@@ -378,5 +396,48 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
     <Dialog open onClose={firstRun || busy ? () => {} : onDone} title={title} description={description} size="lg" hideClose={firstRun} footer={footer} initialFocus={jobRef}>
       {body}
     </Dialog>
+  );
+}
+
+/**
+ * This computer can't run agents in a sandbox (no microVM, WSL/gVisor, Docker or Podman). Plain words for why, and
+ * the ways forward: turn WSL on (Windows), run it in your cloud, or, last, run it here without a sandbox.
+ */
+function HereChoice({ local, agentName, onAddCloud, onRunHere }: { local: LocalState; agentName: string; onAddCloud?: () => void; onRunHere: () => Promise<void> }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [wsl, setWsl] = useState<string>();
+  if (local.unsupported) return <Notice tone="needs">{local.unsupported} You can still run agents in your cloud.</Notice>;
+  const wslProbe = local.probes.find((p) => p.action === "enable-wsl");
+  const why = local.probes.filter((p) => !p.available && p.engine !== "host");
+  return (
+    <div className="space-y-3 rounded-unit border border-signal/40 bg-signal-wash p-4" role="group" aria-label="Where should it run?">
+      <p className="font-medium text-ink">This computer can't run {agentName} in a sandbox.</p>
+      {why.length > 0 && (
+        <details className="text-small text-ink-2">
+          <summary className="w-fit rounded-control">Why</summary>
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-5">{why.map((p) => <li key={p.engine}>{p.reason ?? `${p.engine} isn't available`}</li>)}</ul>
+        </details>
+      )}
+      {wslProbe && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="primary" onClick={async () => { const r = await api.enableWsl(); setWsl(r.started ? "Windows asks for permission, then to restart. Open Beamhop again after the restart." : r.error); }}>Turn on WSL</Button>
+          <span className="text-small text-ink-2">{wsl ?? "Built into Windows: one permission prompt and a restart. The best option here."}</span>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {onAddCloud && <Button size="sm" onClick={onAddCloud}>Run it in your cloud</Button>}
+        {!confirm && <Button size="sm" variant="quiet" onClick={() => setConfirm(true)}>Run it here without a sandbox…</Button>}
+      </div>
+      {confirm && (
+        <div className="space-y-2 rounded-control border border-line bg-surface p-3 text-small text-ink">
+          <p>Without a sandbox, {agentName} runs as a normal program on this computer. It gets a browser of its own and never uses your screen or mouse, and it asks before touching anything outside its own folder. But nothing walls it off: its shell and files are yours.</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="danger" loading={busy} onClick={async () => { setBusy(true); await onRunHere().finally(() => setBusy(false)); }}>Run here without a sandbox</Button>
+            <Button size="sm" variant="quiet" onClick={() => setConfirm(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
