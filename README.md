@@ -65,4 +65,4 @@ Checks: `bun run typecheck` (CI-enforced), `bun scripts/axe.ts <app-url>` for an
 
 ## Status
 
-See [CHANGELOG.md](CHANGELOG.md). Not yet tested against real services: smolvm boot (needs KVM or Apple Silicon), WSL2 on real Windows (tested against a stand-in `wsl.exe`), the per-user services that keep no-sandbox agents running on macOS (LaunchAgent) and Windows (logon task), Fly/Render/Railway accounts, real Slack/Discord apps, Codex/Copilot/opencode logins.
+See [CHANGELOG.md](CHANGELOG.md). The `engines` workflow runs on real Linux (with KVM), macOS (Apple Silicon) and Windows runners: a whole agent boots on smolvm (Linux/KVM), WSL2 (Windows) and gVisor; the no-sandbox services (systemd, LaunchAgent, logon task) are registered, recover from a crash and are removed. Not yet tested: smolvm booting on a real Mac (the macOS runner has no nested virtualization; Beamhop detects that and moves on), Fly/Render/Railway accounts, real Slack/Discord apps, Codex/Copilot/opencode logins.

@@ -11,6 +11,8 @@ Agents used to need either a microVM (Apple Silicon, Linux with KVM) or Docker. 
 - **Pi without Node.** On a computer without a sandbox, Pi is installed for that computer using the app itself as bun.
 - **Cleaner beams.** The browser now closes cleanly before a beam packs its profile, so cookies set seconds before a beam come along.
 - Old unpacked images are removed when a new one arrives. Intel Macs aren't supported (said plainly).
+- **Checked for real, not just "available".** smolvm boots a tiny VM and gVisor runs its own test during setup; WSL's first import is its test. An engine that fails is remembered (for a week) and the app moves down the ladder, also when the failure only shows at create. Docker in Windows-containers mode doesn't count.
+- Verified on real platforms in CI (`engines` workflow): whole agents on smolvm (Linux/KVM), WSL2 (Windows) and gVisor; no-sandbox services on systemd, macOS LaunchAgents and Windows logon tasks. Real runs found and fixed: a snap Chromium that can't use Beamhop's folder, AppArmor-restricted user namespaces (Ubuntu 24.04), a WSL file lock and /run in image layers, smolvm "available" where no VM can start, Windows paths and process trees.
 - Tests: the ladder; the DevTools screen against a real browser; no sandbox end to end (beam to Docker and back, revive, update, real Pi); gVisor rootless and as root, a whole agent and beams; WSL2 against a stand-in `wsl.exe` that really builds and runs the distro; the compiled app.
 
 ## v0.60.0 — Instrument: the interface, rethought

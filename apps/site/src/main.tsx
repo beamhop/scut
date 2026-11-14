@@ -91,8 +91,8 @@ const PIECES: [string, string][] = [
   ["packages/ui", "the app you're looking at bits of right now"],
 ];
 
-const UNTESTED = ["smolvm boot (needs KVM or Apple Silicon)", "WSL2 on real Windows (tested against a stand-in wsl.exe)", "Real Fly.io, Render and Railway accounts", "Real Slack and Discord apps", "Codex, Copilot and opencode logins"];
-const TESTED = ["Docker and gVisor (rootless), create → beam → restore end to end", "No sandbox: real Pi, beams to a sandbox and back", "Live Telegram + OpenRouter test", "Zero axe violations on every screen, light, dark and phone", "Typecheck enforced in CI"];
+const UNTESTED = ["smolvm on a real Mac (CI Macs can't nest VMs)", "Real Fly.io, Render and Railway accounts", "Real Slack and Discord apps", "Codex, Copilot and opencode logins"];
+const TESTED = ["Whole agents on smolvm (Linux/KVM), WSL2 (Windows), gVisor and Docker, in CI", "No-sandbox agents under systemd, LaunchAgents and Windows logon tasks", "No sandbox: real Pi, beams to a sandbox and back", "Live Telegram + OpenRouter test", "Zero axe violations on every screen, light, dark and phone", "Typecheck enforced in CI"];
 
 function App() {
   return (
