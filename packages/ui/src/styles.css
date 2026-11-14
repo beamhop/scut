@@ -1,51 +1,400 @@
 @import "tailwindcss";
 
-:root { color-scheme: dark; }
+/*
+ * Beamhop "Instrument" design tokens. Spec: DESIGN-PLAN.md §2, guide: DESIGN.md.
+ * Light is the default. Dark follows the OS unless <html data-theme="light">; any subtree can force a theme with
+ * data-theme="light" | "dark" (the #/design page shows both side by side that way).
+ * Every colour in the product must be one of these tokens. No gradients, no coloured shadows.
+ */
 
+/* ---------- fonts (self-hosted; build.ts copies the files to dist/fonts) ---------- */
+@font-face {
+  font-family: "Mona Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  src: url("/fonts/mona-sans-latin-wdth-normal.woff2") format("woff2-variations"), url("/fonts/mona-sans-latin-wdth-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Mona Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  src: url("/fonts/mona-sans-latin-ext-wdth-normal.woff2") format("woff2-variations"), url("/fonts/mona-sans-latin-ext-wdth-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Commit Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/fonts/commit-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Departure Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/fonts/DepartureMono-Regular.woff2") format("woff2");
+}
+
+/* ---------- theme (light values; names become Tailwind utilities: bg-surface, text-ink-2, border-line-strong…) ---------- */
 @theme {
-  --color-space: #070912;
-  --color-panel: #0e1324;
-  --color-panel2: #141b33;
-  --color-beam: #38e1ff;
-  --color-beam2: #b06bff;
-  --font-sans: ui-sans-serif, system-ui, "Inter", sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", monospace;
+  --color-*: initial; /* only our tokens: no slate/indigo/cyan defaults to reach for */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-bg: oklch(0.925 0.006 85);
+  --color-surface: oklch(0.975 0.004 85);
+  --color-surface-2: oklch(0.95 0.005 85);
+  --color-line: oklch(0.86 0.006 85);
+  --color-line-strong: oklch(0.6 0.006 85);
+  --color-ink: oklch(0.23 0.008 85);
+  --color-ink-2: oklch(0.46 0.008 85);
+  --color-ink-3: oklch(0.505 0.006 85);
+  --color-screen: oklch(0.17 0.004 85);
+  --color-bezel: oklch(0.21 0.005 85);
+  --color-screen-ink: oklch(0.9 0.005 85);
+  --color-screen-ink-2: oklch(0.7 0.005 85);
+  --color-screen-line: oklch(0.3 0.005 85);
+  --color-signal: oklch(0.66 0.2 42);
+  --color-signal-ink: oklch(0.53 0.17 38);
+  --color-signal-wash: oklch(0.94 0.03 50);
+  --color-on-signal: oklch(0.23 0.008 85);
+  --color-ok: oklch(0.49 0.115 150);
+  --color-warn: oklch(0.52 0.11 75);
+  --color-err: oklch(0.53 0.19 27);
+  --color-scrim: oklch(0.23 0.008 85 / 0.32);
+  --color-focus: oklch(0.23 0.008 85);
+
+  --font-sans: "Mona Sans Variable", ui-sans-serif, sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, monospace;
+  --font-readout: "Departure Mono", "Commit Mono", ui-monospace, monospace;
+
+  /* type scale (13 px base, 4 px grid) */
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+  --text-small: 12px;
+  --text-small--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 19px;
+  --text-ui-lg: 15px;
+  --text-ui-lg--line-height: 20px;
+  --text-ui-lg--font-weight: 550;
+  --text-h3: 18px;
+  --text-h3--line-height: 24px;
+  --text-h3--font-weight: 650;
+  --text-h2: 24px;
+  --text-h2--line-height: 28px;
+  --text-h2--font-weight: 650;
+  --text-h2--letter-spacing: -0.01em;
+  --text-display: 40px;
+  --text-display--line-height: 40px;
+  --text-display--font-weight: 700;
+  --text-display--letter-spacing: -0.02em;
+
+  /* weights: 400 / 550 / 650 / 750 only */
+  --font-weight-normal: 400;
+  --font-weight-medium: 550;
+  --font-weight-semibold: 650;
+  --font-weight-bold: 750;
+
+  --radius-control: 6px;
+  --radius-unit: 12px;
+
+  --shadow-float: 0 1px 0 var(--color-line), 0 8px 24px -12px rgb(0 0 0 / 0.18);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-inout: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-pop: pop-in 150ms var(--ease-out);
+  --animate-scrim: fade-in 150ms var(--ease-out);
+  --animate-drawer: drawer-in 240ms var(--ease-drawer);
+  --animate-bar-down: bar-down 160ms var(--ease-out);
+  --animate-lamp: lamp-pulse 1.8s ease-in-out infinite;
+  --animate-spin: spin 0.9s linear infinite;
+
+  @keyframes pop-in { from { opacity: 0; transform: scale(0.97); } }
+  @keyframes fade-in { from { opacity: 0; } }
+  @keyframes drawer-in { from { transform: translateX(100%); } }
+  @keyframes bar-down { from { transform: translateY(-100%); } }
+  @keyframes lamp-pulse { 50% { opacity: 0.4; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
 }
 
-body {
-  overflow-anchor: none; /* live frames resize the screen; never let the browser scroll the page to compensate */
-  background:
-    radial-gradient(1200px 600px at 80% -10%, rgba(176, 107, 255, 0.12), transparent 60%),
-    radial-gradient(900px 500px at 0% 110%, rgba(56, 225, 255, 0.1), transparent 60%),
-    var(--color-space);
-  min-height: 100vh;
+/*
+ * LEGACY names used by screens that have not been rewritten yet (old dark template: white = foreground, black = backdrop).
+ * Mapped onto tokens so those screens stay readable in both themes. DO NOT use in new code; delete once no screen uses them.
+ */
+@theme inline {
+  --color-space: var(--color-bg);
+  --color-panel: var(--color-surface);
+  --color-panel2: var(--color-surface-2);
+  --color-beam: var(--color-signal);
+  --color-beam2: var(--color-signal);
+  --color-white: var(--color-ink);
+  --color-black: var(--color-surface);
+  --color-slate-100: var(--color-ink);
+  --color-slate-200: var(--color-ink);
+  --color-slate-300: var(--color-ink);
+  --color-slate-400: var(--color-ink-2);
+  --color-slate-600: var(--color-ink-3);
+  --color-red-200: var(--color-err);
+  --color-red-300: var(--color-err);
+  --color-red-400: var(--color-err);
+  --color-red-500: var(--color-err);
+  --color-red-950: var(--color-surface-2);
+  --color-amber-200: var(--color-signal-ink);
+  --color-amber-300: var(--color-signal-ink);
+  --color-amber-400: var(--color-signal);
+  --color-sky-300: var(--color-ink-2);
+  --color-emerald-300: var(--color-ok);
+  --color-cyan-400: var(--color-ink);
 }
 
-.stars::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(1px 1px at 20% 30%, #fff8, transparent),
-    radial-gradient(1px 1px at 70% 80%, #fff6, transparent),
-    radial-gradient(1px 1px at 40% 60%, #fff5, transparent),
-    radial-gradient(1px 1px at 90% 20%, #fff7, transparent),
-    radial-gradient(1px 1px at 10% 90%, #fff4, transparent);
-  background-size: 400px 400px;
-  opacity: 0.6;
+/* Durations (plain vars: use as duration-(--dur-tray)). */
+:root {
+  --dur-press: 120ms;
+  --dur-pop: 150ms;
+  --dur-tray: 240ms;
+  --dur-view: 280ms;
 }
 
-.glow { box-shadow: 0 0 0 1px rgba(56, 225, 255, 0.35), 0 0 24px rgba(56, 225, 255, 0.15); }
-.glow-stuck { box-shadow: 0 0 0 2px rgba(255, 176, 59, 0.85), 0 0 28px rgba(255, 176, 59, 0.3); animation: pulse 2s ease-in-out 3; }
-@keyframes pulse { 50% { box-shadow: 0 0 0 1px rgba(255, 176, 59, 0.9), 0 0 40px rgba(255, 176, 59, 0.5); } }
+/* ---------- theme switching ---------- */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: oklch(0.925 0.006 85);
+  --color-surface: oklch(0.975 0.004 85);
+  --color-surface-2: oklch(0.95 0.005 85);
+  --color-line: oklch(0.86 0.006 85);
+  --color-line-strong: oklch(0.6 0.006 85);
+  --color-ink: oklch(0.23 0.008 85);
+  --color-ink-2: oklch(0.46 0.008 85);
+  --color-ink-3: oklch(0.505 0.006 85);
+  --color-screen: oklch(0.17 0.004 85);
+  --color-bezel: oklch(0.21 0.005 85);
+  --color-signal: oklch(0.66 0.2 42);
+  --color-signal-ink: oklch(0.53 0.17 38);
+  --color-signal-wash: oklch(0.94 0.03 50);
+  --color-on-signal: oklch(0.23 0.008 85);
+  --color-ok: oklch(0.49 0.115 150);
+  --color-warn: oklch(0.52 0.11 75);
+  --color-err: oklch(0.53 0.19 27);
+  --color-scrim: oklch(0.23 0.008 85 / 0.32);
+  --color-focus: oklch(0.23 0.008 85);
+  --shadow-float: 0 1px 0 oklch(0.86 0.006 85), 0 8px 24px -12px rgb(0 0 0 / 0.18);
+}
 
-.beam-overlay { background: repeating-linear-gradient(0deg, rgba(56,225,255,0.18) 0 2px, transparent 2px 6px); animation: scan 1.2s linear infinite; }
-@keyframes scan { from { background-position-y: 0; } to { background-position-y: 60px; } }
-.teleport { animation: teleport 1.4s ease-in-out infinite; }
-@keyframes teleport { 0%,100% { opacity: 1; filter: none; transform: scaleY(1); } 50% { opacity: .35; filter: hue-rotate(60deg) blur(1px); transform: scaleY(.96); } }
-.drop-hot { box-shadow: 0 0 0 2px var(--color-beam), 0 0 40px rgba(56,225,255,.45); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: oklch(0.185 0.004 85);
+    --color-surface: oklch(0.225 0.005 85);
+    --color-surface-2: oklch(0.26 0.005 85);
+    --color-line: oklch(0.3 0.006 85);
+    --color-line-strong: oklch(0.52 0.006 85);
+    --color-ink: oklch(0.93 0.006 85);
+    --color-ink-2: oklch(0.74 0.006 85);
+    --color-ink-3: oklch(0.64 0.006 85);
+    --color-screen: oklch(0.12 0.003 85);
+    --color-bezel: oklch(0.155 0.003 85);
+    --color-signal: oklch(0.72 0.18 45);
+    --color-signal-ink: oklch(0.78 0.14 55);
+    --color-signal-wash: oklch(0.28 0.05 45);
+    --color-on-signal: oklch(0.185 0.004 85);
+    --color-ok: oklch(0.76 0.14 150);
+    --color-warn: oklch(0.82 0.14 80);
+    --color-err: oklch(0.7 0.17 25);
+    --color-scrim: oklch(0.08 0.003 85 / 0.6);
+    --color-focus: oklch(0.93 0.006 85);
+    --shadow-float: 0 1px 0 oklch(0.3 0.006 85), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  }
+}
 
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: oklch(0.185 0.004 85);
+  --color-surface: oklch(0.225 0.005 85);
+  --color-surface-2: oklch(0.26 0.005 85);
+  --color-line: oklch(0.3 0.006 85);
+  --color-line-strong: oklch(0.52 0.006 85);
+  --color-ink: oklch(0.93 0.006 85);
+  --color-ink-2: oklch(0.74 0.006 85);
+  --color-ink-3: oklch(0.64 0.006 85);
+  --color-screen: oklch(0.12 0.003 85);
+  --color-bezel: oklch(0.155 0.003 85);
+  --color-signal: oklch(0.72 0.18 45);
+  --color-signal-ink: oklch(0.78 0.14 55);
+  --color-signal-wash: oklch(0.28 0.05 45);
+  --color-on-signal: oklch(0.185 0.004 85);
+  --color-ok: oklch(0.76 0.14 150);
+  --color-warn: oklch(0.82 0.14 80);
+  --color-err: oklch(0.7 0.17 25);
+  --color-scrim: oklch(0.08 0.003 85 / 0.6);
+  --color-focus: oklch(0.93 0.006 85);
+  --shadow-float: 0 1px 0 oklch(0.3 0.006 85), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+}
+
+/* Inside a bezel the background is near-black in both themes: the focus ring flips to light. */
+.on-screen {
+  --color-focus: oklch(0.9 0.005 85);
+  --color-ok: oklch(0.76 0.14 150);
+  --color-err: oklch(0.7 0.17 25);
+  --color-signal-ink: oklch(0.78 0.14 55);
+}
+
+/* ---------- base ---------- */
+@layer base {
+  html {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 19px;
+    font-weight: 400;
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow-anchor: none; /* live frames resize the screen; never let the browser scroll the page to compensate */
+  }
+  [data-theme] {
+    color: var(--color-ink);
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--color-ink) 18%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary,
+  label:has(> input[type="checkbox"], > input[type="radio"]) {
+    cursor: pointer;
+  }
+  a {
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+  code,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+  }
+  hr {
+    border-color: var(--color-line);
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-ink-3);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border: 3px solid transparent;
+    border-radius: 10px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-line-strong);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ---------- small named utilities ---------- */
+/* The wordmark: Mona Sans expanded, ink, no gradient. */
+@utility wordmark {
+  font-family: var(--font-sans);
+  font-stretch: 115%;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+/* Engraved-style micro label: condensed, sentence case, never uppercase-tracked. */
+@utility label-micro {
+  font-size: 11px;
+  line-height: 14px;
+  font-stretch: 85%;
+  letter-spacing: 0.02em;
+  font-weight: 550;
+}
+/* LCD readout strip: the one place uppercase is allowed. */
+@utility readout {
+  font-family: var(--font-readout);
+  font-size: 11px;
+  line-height: 14px;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+/* Press feedback for buttons: scale .97 for 120 ms. */
+@utility pressable {
+  transition-property: transform, background-color, border-color, color, opacity, box-shadow;
+  transition-duration: var(--dur-press);
+  transition-timing-function: var(--ease-out);
+  &:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.97);
+  }
+}
+@utility sr-only-focusable {
+  &:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* ---------- legacy classes still referenced by old screens (neutral, no glow) ---------- */
+.glow-stuck {
+  box-shadow: 0 0 0 2px var(--color-signal);
+}
+.drop-hot {
+  box-shadow: 0 0 0 2px var(--color-ink);
+}
+.beam-overlay {
+  background: color-mix(in oklch, var(--color-screen) 72%, transparent);
+  color: var(--color-screen-ink);
+}
+
+/* ---------- reduced motion: drop travel and scale, keep colour/opacity feedback ---------- */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: opacity, color, background-color, border-color, box-shadow, outline-color !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Readout separators live in CSS so the <dl> only contains dt/dd groups. */
+.readout-item + .readout-item::before {
+  content: "·" / "";
+  order: 0;
+  margin-right: 0.5rem;
+  opacity: 0.6;
 }

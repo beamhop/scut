@@ -6,6 +6,7 @@ import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, 
 import { useAgent } from "./useAgent.ts";
 import { BeamMenu, ExportDialog, ImportDialog, BeamReceipt, BeamProgress } from "./beam.tsx";
 import { CreateAgent } from "./create.tsx";
+import { DesignPage } from "./design.tsx";
 import { AgentView, TelegramPairQr, PhoneLink } from "./agentView.tsx";
 import { SettingsPanel, BrainSettings, PersonaSettings, RemoveAgent, safetyItems, SafetyCheck, SkillSettings, MemoryText, MemorySettings, ChannelStatus, ChannelSettings, SecretRow, RecentRuns, Schedules } from "./settings.tsx";
 
@@ -198,6 +199,9 @@ export function CrewRoomPanel({ onClose, agentNames }: { onClose: () => void; ag
 
 export function App() {
   const solo = useMemo(standaloneAgent, []);
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => { const h = () => setHash(location.hash); addEventListener("hashchange", h); return () => removeEventListener("hashchange", h); }, []);
+  if (hash === "#/design") return <DesignPage />;
   if (solo) return <SoloAgent agent={solo} />;
   return <CrewApp />;
 }
