@@ -126,36 +126,6 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 }
 
-/*
- * LEGACY names used by screens that have not been rewritten yet (old dark template: white = foreground, black = backdrop).
- * Mapped onto tokens so those screens stay readable in both themes. DO NOT use in new code; delete once no screen uses them.
- */
-@theme inline {
-  --color-space: var(--color-bg);
-  --color-panel: var(--color-surface);
-  --color-panel2: var(--color-surface-2);
-  --color-beam: var(--color-signal);
-  --color-beam2: var(--color-signal);
-  --color-white: var(--color-ink);
-  --color-black: var(--color-surface);
-  --color-slate-100: var(--color-ink);
-  --color-slate-200: var(--color-ink);
-  --color-slate-300: var(--color-ink);
-  --color-slate-400: var(--color-ink-2);
-  --color-slate-600: var(--color-ink-3);
-  --color-red-200: var(--color-err);
-  --color-red-300: var(--color-err);
-  --color-red-400: var(--color-err);
-  --color-red-500: var(--color-err);
-  --color-red-950: var(--color-surface-2);
-  --color-amber-200: var(--color-signal-ink);
-  --color-amber-300: var(--color-signal-ink);
-  --color-amber-400: var(--color-signal);
-  --color-sky-300: var(--color-ink-2);
-  --color-emerald-300: var(--color-ok);
-  --color-cyan-400: var(--color-ink);
-}
-
 /* Durations (plain vars: use as duration-(--dur-tray)). */
 :root {
   --dur-press: 120ms;
@@ -365,18 +335,6 @@
     clip-path: inset(50%);
     white-space: nowrap;
   }
-}
-
-/* ---------- legacy classes still referenced by old screens (neutral, no glow) ---------- */
-.glow-stuck {
-  box-shadow: 0 0 0 2px var(--color-signal);
-}
-.drop-hot {
-  box-shadow: 0 0 0 2px var(--color-ink);
-}
-.beam-overlay {
-  background: color-mix(in oklch, var(--color-screen) 72%, transparent);
-  color: var(--color-screen-ink);
 }
 
 /* ---------- reduced motion: drop travel and scale, keep colour/opacity feedback ---------- */

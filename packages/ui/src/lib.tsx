@@ -1,13 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun } from "@scut/protocol";
+import type { ServerMsg } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
-import qrcode from "qrcode-generator";
-import { useAgent } from "./useAgent.ts";
-import { BeamMenu, ExportDialog, ImportDialog, BeamReceipt, BeamProgress } from "./beam.tsx";
-import { Tile, AutostartToggle, Dock, AddCloud, CrewRoomPanel, App, SoloAgent, CrewApp } from "./crew.tsx";
-import { CreateAgent } from "./create.tsx";
-import { AgentView, TelegramPairQr, PhoneLink } from "./agentView.tsx";
-import { SettingsPanel, BrainSettings, PersonaSettings, RemoveAgent, safetyItems, SafetyCheck, SkillSettings, MemoryText, MemorySettings, ChannelStatus, ChannelSettings, SecretRow, RecentRuns, Schedules } from "./settings.tsx";
 
 export type Instance = { driver: string; instanceId: string; endpoint: string };
 export type Agent = {
@@ -30,10 +22,6 @@ export const api = {
 };
 
 export const SCREEN = { w: 1280, h: 800 };
-export const MASCOT_COLORS: Record<string, [string, string]> = {
-  cyan: ["#38e1ff", "#0b5566"], magenta: ["#ff4fd8", "#661f57"], lime: ["#a8ff4f", "#3d661f"],
-  amber: ["#ffb03b", "#664409"], violet: ["#b06bff", "#3f1f66"], coral: ["#ff6b6b", "#662424"],
-};
 export const BEAM_STAGES = ["packing", "provisioning", "transferring", "restoring", "online"] as const;
 export const STAGE_LABEL: Record<string, string> = {
   packing: "Packing workspace, browser and memory", provisioning: "Starting the new computer", transferring: "Sending the encrypted bundle",
@@ -51,76 +39,6 @@ export type Approval = {
 export type ResolvedApproval = Approval & { ok: boolean; by: string; via?: string; at: number };
 export type Settings = Extract<ServerMsg, { t: "settings" }>;
 export type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
-
-// ---------------- mascot: one base bot, silhouettes differ per variant, visor shows status ----------------
-export function Mascot({ variant = "cyan", size = 40, state = "running" }: { variant?: string; size?: number; state?: string }) {
-  const [c, d] = MASCOT_COLORS[variant] ?? MASCOT_COLORS.cyan;
-  const top =
-    variant === "magenta" ? <path d="M20 18 L14 6 M44 18 L50 6" stroke={c} strokeWidth="3" strokeLinecap="round" />
-    : variant === "lime" ? <path d="M22 17 Q32 2 42 17" fill="none" stroke={c} strokeWidth="3" />
-    : variant === "amber" ? <rect x="26" y="6" width="12" height="10" rx="3" fill={c} />
-    : variant === "violet" ? <path d="M32 4 L36 16 L28 16 Z" fill={c} />
-    : variant === "coral" ? <><circle cx="20" cy="12" r="4" fill={c} /><circle cx="44" cy="12" r="4" fill={c} /></>
-    : <><line x1="32" y1="6" x2="32" y2="17" stroke={c} strokeWidth="3" strokeLinecap="round" /><circle cx="32" cy="6" r="4" fill={c} /></>;
-  const body = variant === "amber" || variant === "lime" ? <rect x="10" y="17" width="44" height="34" rx="8" fill={d} stroke={c} strokeWidth="3" /> : <rect x="10" y="17" width="44" height="34" rx="17" fill={d} stroke={c} strokeWidth="3" />;
-  const visor =
-    state === "stuck" ? <text x="32" y="38.5" textAnchor="middle" fontSize="13" fontWeight="800" fill="#ffb03b">!</text>
-    : state === "busy" ? <rect x="21" y="31" width="22" height="3" rx="1.5" fill={c}><animate attributeName="x" values="21;29;21" dur="1.2s" repeatCount="indefinite" /><animate attributeName="width" values="8;14;8" dur="1.2s" repeatCount="indefinite" /></rect>
-    : state === "retired" || state === "awaiting" ? <path d="M23 33 h6 M35 33 h6" stroke={c} strokeWidth="2.5" strokeLinecap="round" />
-    : <><circle cx="26" cy="33" r="3.5" fill={c} /><circle cx="38" cy="33" r="3.5" fill={c} /></>;
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label={`${variant} bot, ${state}`}>
-      {top}
-      {body}
-      <rect x="17" y="26" width="30" height="14" rx="7" fill="#070912" />
-      {visor}
-      <path d="M22 51 l-3 8 M42 51 l3 8" stroke={c} strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Plain-language version of an approval title like "open_url https://example.com at 3,4". */
-export function humanize(title: string) {
-  const m = title.match(/^(\w+)\s*(.*)$/);
-  if (!m) return title;
-  const [, kind, rest] = m;
-  const host = rest.match(/https?:\/\/([^/\s]+)/)?.[1];
-  switch (kind) {
-    case "open_url": return `open ${host ?? rest}`;
-    case "click": return "click on the screen";
-    case "dblclick": return "double-click on the screen";
-    case "type": return `type ${rest.match(/"(.*)"/)?.[0] ?? "text"}`;
-    case "key": return `press ${rest}`;
-    case "scroll": return "scroll";
-    default: return title.charAt(0).toLowerCase() + title.slice(1);
-  }
-}
-export function needsText(a: { approvals: { title: string }[]; state: string }) {
-  return a.approvals.length || a.state === "stuck" ? "Waiting for you" : undefined;
-}
-
-export function cost(agent: Agent, t: { input: number; output: number }) {
-  if (!agent.price) return t.input + t.output ? `${((t.input + t.output) / 1000).toFixed(1)}k tokens` : "";
-  const usd = (t.input * agent.price.in + t.output * agent.price.out) / 1e6;
-  return `$${usd.toFixed(2)} spent`;
-}
-
-export const STATE_META: Record<string, { label: string; icon: string; tone: string }> = {
-  awaiting: { label: "Beaming in", icon: "◌", tone: "text-sky-300" },
-  starting: { label: "Booting", icon: "◌", tone: "text-sky-300" },
-  running: { label: "Ready", icon: "●", tone: "text-slate-400" },
-  busy: { label: "Working", icon: "◆", tone: "text-beam" },
-  stuck: { label: "Needs you", icon: "▲", tone: "text-amber-300" },
-  quiescing: { label: "Packing up", icon: "◌", tone: "text-sky-300" },
-  retired: { label: "Beamed away", icon: "○", tone: "text-slate-400" },
-};
-export function StateChip({ state }: { state: string }) {
-  const m = STATE_META[state] ?? STATE_META.running;
-  return <span className={`inline-flex items-center gap-1 rounded-full bg-[#070912e6] px-2 py-0.5 text-[11px] font-medium ring-1 ring-white/10 backdrop-blur ${m.tone}`}><span aria-hidden>{m.icon}</span>{m.label}</span>;
-}
-
-export function plural(n: number, one: string, many = one + "s") { return `${n} ${n === 1 ? one : many}`; }
-export function bytesLabel(n: number) { return n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`; }
 
 // ---------------- create / first run ----------------
 export const TEMPLATES = [
@@ -173,39 +91,6 @@ export const CLOUD_SETUP = (provider: string, url: string) => [
   "3. Create an API key/token named \"beamhop\".",
   `4. Call give_cloud_key with provider "${provider.toLowerCase().replace(".io", "")}" and the key. Never write the key in chat.`,
 ].join("\n");
-
-export function ago(ts: number) {
-  const m = Math.round((Date.now() - ts) / 60_000);
-  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(ts).toLocaleDateString();
-}
-
-export function Cursor({ p, color, label }: { p: { x: number; y: number }; color: string; label: string }) {
-  return (
-    <div className="pointer-events-none absolute transition-all duration-150" style={{ left: `${(p.x / SCREEN.w) * 100}%`, top: `${(p.y / SCREEN.h) * 100}%` }}>
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden><path d="M1 1 L1 15 L5 11 L8 17 L10 16 L7 10 L13 10 Z" fill={color} stroke="#000" strokeWidth="1" /></svg>
-      <span className="ml-3 rounded px-1 text-[11px] font-semibold text-black" style={{ background: color }}>{label}</span>
-    </div>
-  );
-}
-
-// ---------------- toasts ----------------
-export type Toast = { id: number; text: string; tone: "ok" | "err" };
-export function useToasts() {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const push = useCallback((text: string, tone: Toast["tone"] = "ok") => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, text, tone }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
-  }, []);
-  const view = (
-    <div className="fixed bottom-32 right-6 z-40 space-y-2" aria-live="polite">
-      {toasts.map((t) => (
-        <div key={t.id} className={`max-w-sm rounded-xl px-4 py-3 text-sm shadow-xl ring-1 ${t.tone === "ok" ? "bg-panel2 ring-beam/40" : "bg-red-950 ring-red-400/40"}`}>{t.text}</div>
-      ))}
-    </div>
-  );
-  return { push, view };
-}
 
 // ---------------- add a cloud ----------------
 /** Send a one-off task to an agent over its socket, then open its view so the owner can watch. */

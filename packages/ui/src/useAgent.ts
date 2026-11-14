@@ -1,13 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun, StatusMsg } from "@scut/protocol";
-import { nip19 } from "nostr-tools";
-import qrcode from "qrcode-generator";
-import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, STAGE_LABEL, ChatLine, Approval, type ResolvedApproval, Settings, Pairing, Mascot, humanize, needsText, cost, STATE_META, StateChip, plural, bytesLabel, TEMPLATES, HARNESSES, PRESETS, npubToHex, KEYMAP, TELEGRAM_SETUP, CLOUD_SETUP, ago, Cursor, Toast, useToasts, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
-import { BeamMenu, ExportDialog, ImportDialog, BeamReceipt, BeamProgress } from "./beam.tsx";
-import { Tile, AutostartToggle, Dock, AddCloud, CrewRoomPanel, App, SoloAgent, CrewApp } from "./crew.tsx";
-import { CreateAgent } from "./create.tsx";
-import { AgentView, TelegramPairQr, PhoneLink } from "./agentView.tsx";
-import { SettingsPanel, BrainSettings, PersonaSettings, RemoveAgent, safetyItems, SafetyCheck, SkillSettings, MemoryText, MemorySettings, ChannelStatus, ChannelSettings, SecretRow, RecentRuns, Schedules } from "./settings.tsx";
+import type { Agent, ChatLine, Approval, ResolvedApproval, Settings, Pairing } from "./lib.tsx";
 
 export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = false) {
   const [frame, setFrame] = useState<string>();
@@ -25,6 +18,8 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
   const approvalsRef = useRef(approvals);
   approvalsRef.current = approvals;
   const notified = useRef(new Set<string>());
+  /** Approval ids resent since the last hello (null when not resyncing). */
+  const resync = useRef<Set<string> | null>(null);
   const [agentCursor, setAgentCursor] = useState<{ x: number; y: number }>();
   const [settings, setSettings] = useState<Settings>();
   const [pairing, setPairing] = useState<Pairing>();
@@ -69,8 +64,18 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
         if (m.t === "hello" || m.t === "state") {
           setState(m.state);
           if (m.t === "state" && m.since) setSince(m.since);
-          // On (re)connect the agent resends every approval still pending; start from a clean list so none doubles up.
-          if (m.t === "hello") { approvalsRef.current = []; setApprovals([]); }
+          // On (re)connect the agent resends every approval still pending. Keep the cards on screen (a card that blinks out
+          // and back loses its focus and restarts its 600 ms arm delay) and drop only the ones not resent within 1.5 s.
+          if (m.t === "hello") {
+            const seen = new Set<string>();
+            resync.current = seen;
+            setTimeout(() => {
+              if (resync.current !== seen) return;
+              resync.current = null;
+              approvalsRef.current = approvalsRef.current.filter((x) => seen.has(x.id));
+              setApprovals((a) => a.filter((x) => seen.has(x.id)));
+            }, 1500);
+          }
         }
         else if (m.t === "status") { setStatus(m); setSince(m.since); setState(m.state); }
         else if (m.t === "history") { setChat(m.chat); setNarration(m.narration); }
@@ -99,6 +104,7 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
         }
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
         else if (m.t === "approval.request") {
+          resync.current?.add(m.id);
           if (!approvalsRef.current.some((x) => x.id === m.id)) approvalsRef.current = [...approvalsRef.current, m];
           setApprovals((a) => (a.some((x) => x.id === m.id) ? a : [...a, m]));
           if (!notified.current.has(m.id) && (notified.current.add(m.id), true) && "Notification" in window && Notification.permission === "granted") new Notification(`${agent?.name} needs you`, { body: m.title });

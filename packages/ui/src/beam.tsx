@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState, type ReactElement } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { ArrowCounterClockwiseIcon, ArrowsLeftRightIcon, CaretDownIcon, CheckIcon, CloudIcon, DesktopIcon, FileArrowDownIcon, WarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { Agent, Destination, BEAM_STAGES } from "./lib.tsx";
-import { Button, IconButton, Menu, Dialog, Field, Input, Select, Progress, Plate, announce, money, usdToEur, duration, durationWords, bytes, plural, list, cx, type MenuSection } from "./ui/index.ts";
+import { Button, IconButton, Menu, Dialog, Field, Input, Select, Progress, Plate, announce, money, usdToEur, duration, durationWords, bytes, plural, list, cx, prefersReducedMotion, type MenuSection } from "./ui/index.ts";
 
 // ---------------- places ----------------
 
@@ -13,9 +13,13 @@ export function placeIcon(d?: Pick<Destination, "id" | "monthlyUsd">): Icon {
 }
 const isHere = (d: Pick<Destination, "id" | "monthlyUsd">) => d.id === "local" || d.id === "docker" || d.id === "smolvm";
 
-/** "free" · "~€18/month" (per agent). */
+/** "€0/month" · "~€18/month" (per agent). Never "free": that word reads as a status. */
 export function placeCost(d: Pick<Destination, "monthlyUsd">) {
-  return d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : "free";
+  return d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : money(0, { whole: true, period: "month" });
+}
+/** For lane headers: "no running cost" · "~€18/month each". */
+export function placeRunningCost(d: Pick<Destination, "monthlyUsd">) {
+  return d.monthlyUsd ? `${placeCost(d)} each` : "no running cost";
 }
 
 /** The pre-flight line: what changes if the agent moves there. */
@@ -133,7 +137,7 @@ export function BeamProgress({ agent, dests = [], className }: { agent: Agent; d
 export function BeamGhost({ agent, dests }: { agent: Agent; dests: Destination[] }) {
   const from = placeLabel(dests, agent.beam?.from ?? agent.current.driver);
   return (
-    <article aria-label={`${agent.name}, arriving from ${from}`} className="w-[min(320px,100%)] rounded-unit border border-dashed border-line-strong bg-surface/60 p-3.5">
+    <article data-ghost={agent.id} aria-label={`${agent.name}, arriving from ${from}`} className="w-full animate-pop rounded-unit border border-dashed border-line-strong bg-surface/60 p-3.5">
       <header className="mb-3 flex items-center gap-2">
         <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
         <h3 className="min-w-0 truncate text-body font-semibold text-ink">{agent.name}</h3>
@@ -144,43 +148,163 @@ export function BeamGhost({ agent, dests }: { agent: Agent; dests: Destination[]
   );
 }
 
-/** Free destinations: the beam starts after 5 s unless undone. */
+/**
+ * Free destinations: the beam starts after 5 s unless undone. Shown on the agent's own unit, where you acted
+ * ("Beaming to Cloud in 4 s · Undo · Beam now"); the target dock shows a quiet BeamPendingGhost.
+ */
 export function BeamCountdown({ agent, to, at, onUndo, onNow }: { agent: Agent; to: Destination; at: number; onUndo: () => void; onNow: () => void }) {
   useTick(true, 250);
+  const undo = useRef<HTMLButtonElement>(null);
+  // Undo takes focus when the beam was asked for from this unit (its menu just closed) or from nowhere (⌘K).
+  useEffect(() => {
+    const t = setTimeout(() => { const ae = document.activeElement; if (!ae || ae === document.body || undo.current?.closest("[data-unit]")?.contains(ae)) undo.current?.focus({ preventScroll: true }); }, 0);
+    return () => clearTimeout(t);
+  }, []);
   const left = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+  const total = 5;
   return (
-    <article aria-label={`${agent.name}, about to beam to ${to.label}`} className="w-[min(320px,100%)] animate-pop rounded-unit border border-dashed border-line-strong bg-surface/60 p-3.5">
-      <header className="mb-2 flex items-center gap-2">
-        <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
-        <h3 className="min-w-0 truncate text-body font-semibold text-ink">{agent.name}</h3>
-        <span className="ml-auto text-small tabular-nums text-ink-2">Starting in {left} s</span>
-      </header>
-      <p className="text-small text-ink-2">{placeChange(to, agent.name)}</p>
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" icon={ArrowCounterClockwiseIcon} onClick={onUndo}>Undo</Button>
+    <div role="group" aria-label={`${agent.name} beams to ${to.label} in ${left} seconds`}
+      onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onUndo(); } }}
+      className="animate-pop space-y-2 rounded-control border border-ink bg-surface px-2.5 py-2">
+      <p className="flex items-baseline gap-2 text-small">
+        <span className="min-w-0 flex-1 font-medium text-ink">Beaming to {to.label} in <span className="tabular-nums">{left} s</span></span>
+      </p>
+      <span aria-hidden className="block h-[3px] overflow-hidden rounded-full bg-line">
+        <span className="block h-full rounded-full bg-ink transition-[width] duration-(--dur-tray) ease-linear" style={{ width: `${Math.round(((total - left) / total) * 100)}%` }} />
+      </span>
+      <div className="flex flex-wrap gap-2">
+        <Button ref={undo} size="sm" icon={ArrowCounterClockwiseIcon} onClick={onUndo}>Undo</Button>
         <Button size="sm" variant="quiet" onClick={onNow}>Beam now</Button>
       </div>
-    </article>
+    </div>
   );
 }
 
-/** Paid destinations: one confirm line in the target dock. Enter confirms (focus starts on Beam), Esc cancels. */
+/** In the target dock while a beam waits for its countdown or for your OK. Information only: the controls are on the unit. */
+export function BeamPendingGhost({ agent, at, confirm }: { agent: Agent; at?: number; confirm?: boolean }) {
+  useTick(!confirm, 250);
+  const left = at ? Math.max(0, Math.ceil((at - Date.now()) / 1000)) : 0;
+  return (
+    <div data-ghost={agent.id} aria-hidden className="flex min-h-[112px] w-full animate-pop items-center gap-3 rounded-unit border border-dashed border-line-strong px-3.5 py-3 text-small text-ink-2">
+      <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
+      <span className="min-w-0"><span className="font-medium text-ink">{agent.name}</span> {confirm ? "comes here once you confirm" : <>arrives here, starting in <span className="tabular-nums">{left} s</span></>}</span>
+    </div>
+  );
+}
+
+/**
+ * Paid destinations: one confirm line on the agent's unit. Focus starts on Cancel (the Enter that picked the menu item
+ * must not spend money); Beam is inert for 600 ms. Esc cancels.
+ */
 export function BeamConfirm({ agent, to, onConfirm, onCancel }: { agent: Agent; to: Destination; onConfirm: () => void; onCancel: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => { ref.current?.focus({ preventScroll: false }); }, []);
+  const [armed, setArmed] = useState(false);
+  useEffect(() => { ref.current?.focus({ preventScroll: true }); const t = setTimeout(() => setArmed(true), 600); return () => clearTimeout(t); }, []);
   return (
-    <div role="group" aria-label={`Beam ${agent.name} to ${to.label}?`} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
-      className="flex w-full animate-pop flex-wrap items-center gap-x-3 gap-y-2 rounded-unit border border-ink bg-surface px-3.5 py-2.5">
-      <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
-      <p className="min-w-0 flex-1 text-body text-ink">
-        <span className="font-medium">Beam {agent.name} to {to.label}</span>
-        <span className="text-ink-2"> · {placeCost(to)} · {placeChange(to, agent.name)}</span>
+    <div role="group" aria-label={`Beam ${agent.name} to ${to.label}?`} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); } }}
+      className="animate-pop space-y-2 rounded-control border border-ink bg-surface px-2.5 py-2">
+      <p className="text-small text-ink">
+        <span className="font-medium">Beam {agent.name} to {to.label}?</span>
+        <span className="text-ink-2"> <span className="tabular-nums">{placeCost(to)}</span>. {placeChange(to, agent.name)}</span>
       </p>
-      <div className="flex gap-2">
-        <Button size="sm" variant="quiet" onClick={onCancel}>Cancel</Button>
-        <Button ref={ref} size="sm" variant="primary" onClick={onConfirm}>Beam</Button>
+      <div className="flex flex-wrap gap-2">
+        <Button ref={ref} size="sm" onClick={onCancel}>Cancel</Button>
+        <Button size="sm" variant="primary" aria-disabled={!armed || undefined} className={cx(!armed && "cursor-not-allowed opacity-50")} onClick={() => armed && onConfirm()}>Beam</Button>
       </div>
     </div>
+  );
+}
+
+// ---------------- the crafted moment: a cartridge travels the track between docks ----------------
+
+type Pt = { x: number; y: number };
+/** The point at fraction t along a polyline (by length). */
+function along(pts: Pt[], t: number): Pt {
+  const seg = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+  let d = seg.reduce((a, b) => a + b, 0) * t;
+  for (let i = 0; i < seg.length; i++) {
+    if (d <= seg[i] || i === seg.length - 1) { const k = seg[i] ? Math.min(1, d / seg[i]) : 0; return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * k, y: pts[i].y + (pts[i + 1].y - pts[i].y) * k }; }
+    d -= seg[i];
+  }
+  return pts.at(-1)!;
+}
+/** An orthogonal path through the points with rounded corners (r px). */
+function rounded(pts: Pt[], r = 10) {
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const r1 = Math.min(r, Math.hypot(b.x - a.x, b.y - a.y) / 2, Math.hypot(c.x - b.x, c.y - b.y) / 2);
+    const u = (p: Pt, q: Pt) => { const l = Math.hypot(q.x - p.x, q.y - p.y) || 1; return { x: (q.x - p.x) / l, y: (q.y - p.y) / l }; };
+    const i1 = u(b, a), o1 = u(b, c);
+    d += ` L ${b.x + i1.x * r1} ${b.y + i1.y * r1} Q ${b.x} ${b.y} ${b.x + o1.x * r1} ${b.y + o1.y * r1}`;
+  }
+  const z = pts.at(-1)!;
+  return `${d} L ${z.x} ${z.y}`;
+}
+
+/**
+ * While an agent travels, a track runs from its unit (which stays in the old dock, its screen collapsed to a line) down
+ * the gap between the docks to its ghost in the new dock, and a labelled cartridge moves along it by real stage. The
+ * track sits behind the units (it shows in the gaps); the cartridge rides on top. The fill is the one gradient in the
+ * product (ink → signal). Reduced motion: no cartridge travel; the track fills in place and the ghost's log tells it.
+ * Decorative (aria-hidden): the ghost carries the progressbar, and the live region the announcements.
+ */
+export function BeamFlights({ agents, dests, container }: { agents: Agent[]; dests: Destination[]; container: RefObject<HTMLElement | null> }) {
+  const flying = agents.filter(beamInFlight);
+  useTick(flying.length > 0, 400);
+  if (!flying.length) return null;
+  return <>{flying.map((ag) => <Flight key={ag.id} agent={ag} dests={dests} container={container} />)}</>;
+}
+
+function Flight({ agent, container }: { agent: Agent; dests: Destination[]; container: RefObject<HTMLElement | null> }) {
+  const [pts, setPts] = useState<Pt[]>();
+  const gid = useId().replace(/:/g, "");
+  useLayoutEffect(() => {
+    const root = container.current;
+    const box = root?.getBoundingClientRect();
+    const srcEl = root?.querySelector<HTMLElement>(`[data-unit="${CSS.escape(agent.id)}"]`);
+    const dstEl = root?.querySelector<HTMLElement>(`[data-ghost="${CSS.escape(agent.id)}"]`);
+    const src = srcEl?.getBoundingClientRect(), dst = dstEl?.getBoundingClientRect();
+    const lane = dstEl?.closest("section")?.getBoundingClientRect();
+    if (!box || !src || !dst || !lane) { if (pts) setPts(undefined); return; }
+    const down = dst.top >= src.bottom - 4;
+    const x0 = src.left + src.width / 2 - box.left, x1 = dst.left + dst.width / 2 - box.left;
+    const y0 = (down ? src.bottom : src.top) - box.top, y1 = (down ? dst.top : dst.bottom) - box.top;
+    const ym = (down ? lane.top - 12 : lane.bottom + 12) - box.top; // the gap between the docks
+    const next = Math.abs(x0 - x1) < 2 ? [{ x: x0, y: y0 }, { x: x1, y: y1 }] : [{ x: x0, y: y0 }, { x: x0, y: ym }, { x: x1, y: ym }, { x: x1, y: y1 }];
+    if (!pts || pts.length !== next.length || pts.some((p, i) => Math.abs(p.x - next[i].x) + Math.abs(p.y - next[i].y) > 1)) setPts(next);
+  });
+  if (!pts) return null;
+  const idx = Math.max(0, STAGES.indexOf(agent.beam!.stage));
+  const p = Math.min(1, (idx + 0.5) / STAGES.length);
+  const at = along(pts, p);
+  const d = rounded(pts);
+  const still = prefersReducedMotion();
+  const stage = STAGE_SENTENCE(agent.name)[agent.beam!.stage] ?? "Moving";
+  const a = pts[0], b = pts.at(-1)!;
+  return (
+    <>
+      <svg aria-hidden className="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible">
+        <defs>
+          <linearGradient id={gid} gradientUnits="userSpaceOnUse" x1={a.x} y1={a.y} x2={b.x} y2={b.y}>
+            <stop offset="0" style={{ stopColor: "var(--color-ink)" }} />
+            <stop offset="1" style={{ stopColor: "var(--color-signal)" }} />
+          </linearGradient>
+        </defs>
+        <path d={d} fill="none" stroke="var(--color-line-strong)" strokeWidth={1.5} strokeDasharray="2 5" strokeLinecap="round" />
+        <path d={d} fill="none" stroke={`url(#${gid})`} strokeWidth={2.5} strokeLinecap="round" pathLength={1} strokeDasharray={`${p} 1`}
+          style={{ transition: "stroke-dasharray 600ms var(--ease-out)" }} />
+        <circle cx={b.x} cy={b.y} r={3.5} fill="var(--color-bg)" stroke="var(--color-line-strong)" strokeWidth={1.5} />
+      </svg>
+      {!still && (
+        <div aria-hidden className="pointer-events-none absolute left-0 top-0 z-[2] flex items-center gap-1.5 whitespace-nowrap rounded-control border border-line-strong bg-surface py-1 pl-1.5 pr-2.5 text-small shadow-float"
+          style={{ transform: `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)`, transition: "transform 600ms var(--ease-out)" }}>
+          <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
+          <span className="font-medium text-ink">{agent.name}</span>
+          <span className="text-ink-2">{stage}…</span>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -203,8 +327,8 @@ export function BeamReceipt({ agent, where, from, onBeamBack }: { agent: Agent; 
     <div className="flex items-start gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-2 text-small">
       <CheckIcon size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0 text-ink" />
       <div className="min-w-0 flex-1">
-        <p className="text-ink"><span className="font-medium">Arrived on {where}</span> from {from} in {durationWords(secs)} · <span className="whitespace-nowrap">{bytes(b.summary.bytes)}</span></p>
-        <p className="text-ink-2">Came along: {list(items)}.{c.channels ? ` ${plural(c.channels, "chat app")} reconnected.` : ""}</p>
+        <p className="text-ink"><span className="font-medium">Arrived on {where}</span> <span className="whitespace-nowrap tabular-nums text-ink-2">· {durationWords(secs)} · {bytes(b.summary.bytes)}</span></p>
+        <p className="text-ink-2">From {from}. Came along: {list(items)}.{c.channels ? ` ${plural(c.channels, "chat app")} reconnected.` : ""}</p>
         {onBeamBack && <Button size="sm" variant="quiet" className="-ml-2 mt-1" icon={ArrowCounterClockwiseIcon} onClick={onBeamBack}>Beam back to {from}</Button>}
       </div>
       <IconButton size="sm" label="Dismiss" icon={XIcon} className="-mr-1 -mt-1" onClick={() => { try { localStorage.setItem(key, "1"); } catch {} setHidden(true); }} />

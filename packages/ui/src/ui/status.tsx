@@ -5,7 +5,7 @@ import { cx } from "./cx.ts";
  * The five states. Every status is word + shape (+ colour). Never colour alone.
  *   needs   ▲ signal   a person is needed (approval, stuck, take-over requested)
  *   working ● ok       doing a task (the lamp pulses gently unless reduced motion)
- *   free    ○ ink-3    idle, ready for work
+ *   free    ○ ink-3    idle, ready for work (the word is "Ready": "Free" read as "costs nothing")
  *   moving  ↗ ink      beaming between places, booting, packing
  *   problem ✕ err      failed, offline, can't sign in
  */
@@ -14,15 +14,15 @@ export type Status = "needs" | "working" | "free" | "moving" | "problem";
 export const STATUS: Record<Status, { word: string; tone: string }> = {
   needs: { word: "Needs you", tone: "text-signal-ink" },
   working: { word: "Working", tone: "text-ink" },
-  free: { word: "Free", tone: "text-ink-2" },
+  free: { word: "Ready", tone: "text-ink-2" },
   moving: { word: "Moving", tone: "text-ink" },
   problem: { word: "Problem", tone: "text-err" },
 };
 
 /** Map an agent's protocol state (+ what the UI knows) to one of the five statuses. */
-export function toStatus(state: string | undefined, o: { needs?: boolean; failed?: boolean; beaming?: boolean } = {}): Status {
+export function toStatus(state: string | undefined, o: { needs?: boolean; failed?: boolean; beaming?: boolean; problem?: boolean } = {}): Status {
   if (o.needs || state === "stuck") return "needs";
-  if (o.failed) return "problem";
+  if (o.failed || o.problem) return "problem";
   if (o.beaming || state === "awaiting" || state === "starting" || state === "quiescing" || state === "retired") return "moving";
   if (state === "busy") return "working";
   return "free";

@@ -98,7 +98,7 @@ test("crew grid shows a live tile with state and location", async () => {
   await page.waitForSelector("main img", { timeout: 15_000 }); // a live frame arrived
   const text = await page.evaluate(() => document.body.innerText);
   expect(text).toContain("This computer");
-  expect(text).toContain("Free");
+  expect(text).toContain("Ready");
   await page.close();
 });
 
@@ -130,6 +130,18 @@ test("agent view: chat round trip, settings panel, history", async () => {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.body.innerText.includes("hello from the UI test"), { timeout: 15_000 }); // history replay
   await page.screenshot({ path: `${process.env.SCUT_SHOTS ?? tmpdir()}/ui-test-agent.png` });
+  await page.close();
+});
+
+test("agent view at 200% zoom (720 px) stacks, and the name never truncates", async () => {
+  const page = await open(`/#/agent/${agentId}`);
+  await page.setViewport({ width: 720, height: 450 });
+  await page.waitForSelector('textarea[aria-label^="Message"]', { timeout: 15_000 });
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => /^(Show|Hide) the screen$/.test(b.textContent ?? "")), { timeout: 5000 });
+  expect(await page.$eval("h1", (h) => h.scrollWidth <= h.clientWidth)).toBe(true);
+  // Settings opens at a section from the address (the bench's "Add a brain" links like this).
+  await page.goto(`${base}/#/agent/${agentId}?settings=memory`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('input[aria-label="Add a memory"]', { timeout: 15_000 });
   await page.close();
 });
 
@@ -333,6 +345,33 @@ test("the crew room opens beside the grid and closes again", async () => {
   await page.waitForSelector('aside[aria-label="Crew room"]', { timeout: 5000 });
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Talk to all agents")!.click());
   await page.waitForFunction(() => !document.querySelector('aside[aria-label="Crew room"]'), { timeout: 5000 });
+  await page.close();
+});
+
+test("bench: a high-risk approval works without holding (screen readers, voice control), and focus never drops to <body>", async () => {
+  const ag = scut.get(agentId);
+  const ws = new WebSocket(`${ag.current.endpoint.replace(/^http/, "ws")}/ws?auth=${scut.auth(ag.current.endpoint)}`);
+  let autonomy: string | undefined;
+  ws.onmessage = (e) => { if (typeof e.data === "string") { const m = JSON.parse(e.data); if (m.t === "settings") autonomy ??= m.autonomy; } };
+  await new Promise((r) => (ws.onopen = r));
+  ws.send(JSON.stringify({ t: "subscribe", frames: false }));
+  await Bun.sleep(500);
+  ws.send(JSON.stringify({ t: "settings", autonomy: "ask" }));
+  ws.send(JSON.stringify({ t: "chat", text: "Pay the invoice at https://shop.example.com/checkout" }));
+  const page = await open("/");
+  await page.waitForSelector("[data-approval][data-pending]", { timeout: 30_000 });
+  await Bun.sleep(2000); // Allow is inert for 600 ms; let the unit settle (it reconnects when it grows to show its screen)
+  // A plain click (what VoiceOver, NVDA, Dragon and switch access send) opens the second step instead of doing nothing.
+  await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-approval] button")].find((b) => b.textContent!.includes("Hold to allow"))!.click());
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Yes, allow"), { timeout: 3000 });
+  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  await Bun.sleep(700); // "Yes, allow" is inert for 600 ms too
+  await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === "Yes, allow")!.click());
+  await page.waitForFunction(() => document.body.innerText.includes("Allowed by you"), { timeout: 15_000 });
+  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  ws.send(JSON.stringify({ t: "settings", autonomy: autonomy ?? "risky" }));
+  await Bun.sleep(300);
+  ws.close();
   await page.close();
 });
 

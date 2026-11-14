@@ -19,7 +19,8 @@ export type BezelProps = {
 
 /**
  * Near-black screen frame, identical in both themes, so every agent's computer is framed the same way.
- * Focus rings inside flip to light automatically (.on-screen).
+ * Focus rings inside flip to light automatically (.on-screen). The outer hairline (ring-line) and the lit top edge keep the
+ * frame visible in dark, where the bezel sits close to the card colour.
  */
 export function Bezel({ bar, state = "watching", aspect = "16 / 10", label, size = "md", className, children }: BezelProps) {
   const driving = state === "driving";
@@ -28,7 +29,7 @@ export function Bezel({ bar, state = "watching", aspect = "16 / 10", label, size
       role={label ? "group" : undefined}
       aria-label={label}
       data-state={state}
-      className={cx("on-screen bg-bezel shadow-[inset_0_0_0_1px_oklch(1_0_0/0.06)]", size === "sm" ? "rounded-[10px] p-1" : "rounded-unit p-1.5", className)}
+      className={cx("on-screen bg-bezel shadow-[inset_0_1px_0_oklch(1_0_0/0.12),inset_0_0_0_1px_oklch(1_0_0/0.06)] ring-1 ring-line", size === "sm" ? "rounded-[10px] p-1" : "rounded-unit p-1.5", className)}
     >
       <div className={cx("overflow-hidden bg-screen", size === "sm" ? "rounded-[7px]" : "rounded-[8px]")}>
         {bar !== undefined && (

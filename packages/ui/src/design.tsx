@@ -114,7 +114,7 @@ function Type() {
         <Spec n="h3 18" /><div className="text-h3">How much it may do on its own</div>
         <Spec n="ui-lg 15" /><div className="text-ui-lg">Comparing e-bike prices on bol.com</div>
         <Spec n="body 13" /><div className="text-body">Atlas keeps working while this computer is off. You pay Fly.io directly.</div>
-        <Spec n="small 12" /><div className="text-small text-ink-2">Free since 14:02 · Tomorrow 08:00 · HN digest</div>
+        <Spec n="small 12" /><div className="text-small text-ink-2">Ready since 14:02 · Tomorrow 08:00 · HN digest</div>
         <Spec n="micro 11" /><div className="label-micro text-ink-2">€ today · CPU · Memory</div>
         <Spec n="mono" /><div className="font-mono text-[12.5px] text-ink">sk-or-…9f2c · anthropic/claude-haiku-5.5</div>
         <Spec n="readout" /><div className="readout text-ink">Working · 01:42 · €0.03 today</div>
@@ -174,7 +174,7 @@ function StatusSection() {
           <StatusBadge status="needs" emphasis label="Waiting for you" />
           <StatusBadge status="moving" label="Beaming to Fly.io" size="sm" />
           <StatusBadge status="problem" label="Telegram can't sign in" size="sm" />
-          <StatusBadge status="free" label="Free since 14:02" size="sm" />
+          <StatusBadge status="free" label="Ready since 14:02" size="sm" />
         </Row>
         <div className="on-screen inline-flex items-center gap-4 rounded-control bg-screen px-3 py-2">
           {STATES.map((s) => <StatusBadge key={s} status={s} onScreen size="sm" />)}
@@ -247,7 +247,7 @@ function Screens() {
           <Readout label="Atlas" items={[{ value: "Working", status: "working" }, { value: fmt.duration(102_000), srLabel: "elapsed" }, { value: fmt.money(0.03), label: "today" }, { value: 12, label: "steps" }]} />
         </div>
         <div className="min-w-0 space-y-2">
-          <Bezel size="sm" label="Nova's screen" bar={<><Lamp status="free" onScreen /><span className="truncate text-screen-ink-2">Free since 14:02</span></>}>
+          <Bezel size="sm" label="Nova's screen" bar={<><Lamp status="free" onScreen /><span className="truncate text-screen-ink-2">Ready since 14:02</span></>}>
             <FakePage dim />
           </Bezel>
           <Bezel size="sm" label="Scout's screen">

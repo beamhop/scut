@@ -65,7 +65,7 @@ for active. Only where an icon speeds up scanning (places, primary actions, stat
 | Button on the signal "driving" bar | `<Button variant="on-signal">` | Give back |
 | Icon-only | `<IconButton label="Settings" icon={GearIcon}/>` | label is required; it is also the tooltip. `pressed` for toggles |
 | Shortcut hint | `<Kbd keys="mod+k"/>`, `<Button shortcut="mod+k">` | ⌘ on macOS, Ctrl elsewhere |
-| Agent status | `<StatusBadge status={toStatus(state, {needs, beaming, failed})}/>` | 5 states: needs, working, free, moving, problem. `emphasis` puts needs-you on a wash. `onScreen` inside a bezel |
+| Agent status | `<StatusBadge status={toStatus(state, {needs, beaming, failed})}/>` | 5 states: needs, working, free (word: "Ready"), moving, problem. `emphasis` puts needs-you on a wash. `onScreen` inside a bezel |
 | Status shape only | `<Lamp status="working"/>` | decorative unless `label` |
 | Agent identity | `<Plate pubkey={agent.agentPubkey} name={agent.name} size="sm|md|lg"/>` | replaces `Mascot`. Decorative by default (put the name next to it). `callsign(name)` gives "ATL" |
 | An agent's live screen | `<Bezel label="Atlas's screen" bar={…} state="watching|driving">{img}</Bezel>` | bar holds lamp + headline + Take over. `ScreenNote` for empty screens |
@@ -111,8 +111,8 @@ for active. Only where an icon speeds up scanning (places, primary actions, stat
 - No three equal cards with half a screen of nothing. Give the thing that matters more room.
 - No toasts for things that need a decision. Approvals go in the tray or on the unit.
 - `font-mono` only for machine strings.
-- The legacy colour names in `styles.css` (`panel`, `panel2`, `beam`, `space`, `white`, `black`, `slate-*`, `red-*`, `amber-*`…) only
-  keep the old screens readable. Don't use them in new code. Delete them once no screen does.
+- The legacy colour names (`panel`, `panel2`, `beam`, `space`, `white`, `black`, `slate-*`, `red-*`, `amber-*`…) and classes
+  (`glow-stuck`, `drop-hot`, `beam-overlay`) are gone from `styles.css` (v0.60). Tailwind's palettes are off, so they no longer exist.
 
 ## 5. Copy rules
 
@@ -120,7 +120,7 @@ for active. Only where an icon speeds up scanning (places, primary actions, stat
 - Lead with the person's question: what needs me, what's happening, what it cost, what's next.
 - No jargon on the main path. Say "Brain: Claude Haiku (OpenRouter)", not a model id. Put CPU/RAM behind "Computer health".
 - Name the agent: "Atlas wants to…", "Atlas stayed on This computer".
-- Money with a period. Times as "Free since 14:02", "2 min ago", "Decide within 23 min".
+- Money with a period. Times as "Ready since 14:02", "2 min ago", "Decide within 23 min".
 - Don't stack em dashes. Use a colon or a new line.
 - Keep labels the UI tests rely on (`research/ui-test-contract.txt`): "Beam to…", "Open", "Settings", "Talk to all agents", "Move to file", …
 

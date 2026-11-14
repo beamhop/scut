@@ -5,7 +5,7 @@ import { ExportDialog, ImportDialog, placeLabel, beamInFlight } from "./beam.tsx
 import { CreateAgent } from "./create.tsx";
 import { DesignPage } from "./design.tsx";
 import { AgentView } from "./agentView.tsx";
-import { Bench, Unit, AutostartToggle, type UnitReport, type PendingBeam } from "./bench.tsx";
+import { Bench, Unit, AutostartToggle, pauseAgents, type UnitReport, type PendingBeam } from "./bench.tsx";
 import { Button, IconButton, Dialog, Field, Input, Plate, announce, clock, durationWords, money, usdToEur, cx, useCommands } from "./ui/index.ts";
 
 // Names other screens still import from here (old barrel style). Kept so their files keep compiling.
@@ -171,6 +171,31 @@ export function SoloAgent({ agent }: { agent: Agent }) {
   return <AgentView agent={{ ...agent, ...info }} dests={[]} onBack={() => {}} onBeam={() => {}} standalone />;
 }
 
+/**
+ * When the owner was last here, for the bench's "While you were away" line. Marked every 30 s while the window is
+ * visible (in any view); a gap of 10 min or more (closed, hidden, asleep) counts as away.
+ */
+const AWAY_MS = 10 * 60_000;
+function useAway() {
+  const [since, setSince] = useState<number | undefined>(() => {
+    try { const v = Number(localStorage.getItem("beamhop-seen")); return v && Date.now() - v >= AWAY_MS ? v : undefined; } catch { return undefined; }
+  });
+  useEffect(() => {
+    const mark = () => { try { localStorage.setItem("beamhop-seen", String(Date.now())); } catch {} };
+    let hiddenAt: number | undefined;
+    const vis = () => {
+      if (document.hidden) { hiddenAt = Date.now(); mark(); }
+      else if (hiddenAt && Date.now() - hiddenAt >= AWAY_MS) setSince(hiddenAt);
+    };
+    mark();
+    const t = setInterval(() => { if (!document.hidden) mark(); }, 30_000);
+    document.addEventListener("visibilitychange", vis);
+    addEventListener("pagehide", mark);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", vis); removeEventListener("pagehide", mark); };
+  }, []);
+  return { since, dismiss: () => setSince(undefined) };
+}
+
 export function CrewApp() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [dests, setDests] = useState<Destination[]>([]);
@@ -188,6 +213,7 @@ export function CrewApp() {
   const focusOnLand = useRef<string | undefined>(undefined);
   const destsRef = useRef(dests);
   destsRef.current = dests;
+  const away = useAway();
 
   const refresh = useCallback(async () => {
     const list = await api.agents().catch(() => null);
@@ -254,8 +280,8 @@ export function CrewApp() {
     const ag = agents.find((a) => a.id === id);
     const d = dests.find((x) => x.id === to);
     if (!ag || !d || ag.current.driver === to || beamInFlight(ag)) return;
-    if (d.monthlyUsd > 0) { setPending({ agentId: id, to, mode: "confirm", at: Date.now() }); announce(`Beam ${ag.name} to ${d.label}? It costs about ${money(usdToEur(d.monthlyUsd), { period: "month" })}. Press Beam to confirm.`); }
-    else { setPending({ agentId: id, to, mode: "undo", at: Date.now() + 5000 }); announce(`${ag.name} beams to ${d.label} in 5 seconds. Undo is in the ${d.label} dock.`); }
+    if (d.monthlyUsd > 0) { setPending({ agentId: id, to, mode: "confirm", at: Date.now() }); announce(`Beam ${ag.name} to ${d.label}? It costs about ${money(usdToEur(d.monthlyUsd), { period: "month" })}. Press Beam to confirm, or Cancel.`); }
+    else { setPending({ agentId: id, to, mode: "undo", at: Date.now() + 5000 }); announce(`${ag.name} beams to ${d.label} in 5 seconds. Press Undo to stay.`); }
   }, [agents, dests]);
   useEffect(() => {
     if (pending?.mode !== "undo") return;
@@ -272,17 +298,23 @@ export function CrewApp() {
   };
 
   // ---- palette: agents and beams (everywhere in the crew app) ----
+  const routeId = route.match(/^#\/agent\/([^?]+)/)?.[1];
+  useCommands([
+    { id: "all.pause", title: "Pause all agents", group: "Agents", synonyms: ["stop everything", "emergency", "hold", "freeze"], disabled: !agents.length, run: () => pauseAgents(agents, true, routeId ? undefined : reports) },
+    { id: "all.resume", title: "Resume all agents", group: "Agents", synonyms: ["continue", "unpause", "give back"], disabled: !agents.length, run: () => pauseAgents(agents, false, routeId ? undefined : reports) },
+  ], [agents, routeId, reports]);
   useCommands(agents.flatMap((ag) => [
-    { id: `open.${ag.id}`, title: `Open ${ag.name}`, group: "Agents", synonyms: ["show", "go to", "watch"], hint: placeLabel(dests, ag.current.driver), run: () => (location.hash = `#/agent/${ag.id}`) },
+    { id: `open.${ag.id}`, title: `Open ${ag.name}`, group: "Agents", synonyms: ["show", "go to", "watch"], hint: placeLabel(dests, ag.current.driver), disabled: ag.id === routeId, run: () => (location.hash = `#/agent/${ag.id}`) },
     ...dests.filter((d) => d.id !== ag.current.driver).map((d) => ({
       id: `beam.${ag.id}.${d.id}`, title: `Beam ${ag.name} to ${d.label}`, group: "Beam", synonyms: ["move", "send", "transfer", "migrate"],
-      hint: d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : "free", disabled: beamInFlight(ag),
+      hint: d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : money(0, { whole: true, period: "month" }), disabled: beamInFlight(ag),
       run: () => { location.hash = ""; requestBeam(ag.id, d.id); },
     })),
     { id: `file.${ag.id}`, title: `Move ${ag.name} to a file`, group: "Beam", synonyms: ["export", "send to another computer", "save"], disabled: beamInFlight(ag), run: () => setExportId(ag.id) },
-  ]), [agents, dests, requestBeam]);
+  ]), [agents, dests, requestBeam, routeId]);
 
-  const open = useMemo(() => agents.find((x) => route === `#/agent/${x.id}`), [agents, route]);
+  // #/agent/<id>, optionally ?settings or ?settings=<section> (the agent view opens its Settings drawer there).
+  const open = useMemo(() => agents.find((x) => x.id === routeId), [agents, routeId]);
   const exportAgent = agents.find((x) => x.id === exportId);
   const dialogs = <>
     {exportAgent && <ExportDialog agent={exportAgent} onClose={() => setExportId(undefined)} onDone={(name) => { setExportId(undefined); location.hash = ""; refresh(); notices.push(`${exportAgent.name} is now in ${name}. Open it in Beamhop on the other computer.`); }} />}
@@ -296,7 +328,7 @@ export function CrewApp() {
       <Bench agents={agents} dests={dests} loaded={loaded} reports={reports} onReport={onReport}
         pending={pending} onConfirmBeam={() => pending && doBeam(pending.agentId, pending.to)} onCancelBeam={cancelBeam} requestBeam={requestBeam}
         landed={{}} onCreate={() => setCreating(true)} onAddCloud={() => setAddCloud(true)} onImport={() => setImporting(true)} onExport={setExportId}
-        crewOpen={crewOpen} onToggleCrew={() => setCrewOpen((v) => !v)}
+        crewOpen={crewOpen} onToggleCrew={() => setCrewOpen((v) => !v)} awaySince={away.since} onDismissAway={away.dismiss}
         empty={!creating && <CreateAgent firstRun inline onDone={refresh} />} />
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
       {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); notices.push(`${label} added. Use Beam to… on an agent to move it there.`); }} />}
