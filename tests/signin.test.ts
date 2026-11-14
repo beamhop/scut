@@ -30,7 +30,7 @@ async function connect(id: string) {
     }
     throw new Error(`timeout; last: ${JSON.stringify(msgs.slice(-3))}`);
   };
-  return { sock, msgs, waitFor, send: (m: unknown) => sock.send(JSON.stringify(m)) };
+  return { id, sock, msgs, waitFor, send: (m: unknown) => sock.send(JSON.stringify(m)) };
 }
 
 beforeAll(async () => { scut = await Scut.open(); });
@@ -60,9 +60,23 @@ test("Codex's models are offered, and the one picked is kept", async () => {
   expect((await c.waitFor((m) => m.t === "settings", 10_000, from)).subModel).toBe(pick);
 });
 
-test("sign in shows a link and a one-time code; cancel goes back to signed out", async () => {
+test("sign in opens ChatGPT's sign-in page in the agent's own browser", async () => {
   let from = c.msgs.length;
   c.send({ t: "signin", op: "start" });
+  const w = await c.waitFor((m) => m.t === "signin" && m.state === "waiting", 60_000, from);
+  expect(w.via).toBe("screen");
+  expect(w.url).toMatch(/^https:\/\/auth\.openai\.com\/oauth\/authorize/);
+  // the agent's browser is on it (status.url is the page on its screen)
+  await c.waitFor((m) => m.t === "status" && /^https:\/\/auth\.openai\.com\//.test(m.url ?? ""), 30_000, from);
+  from = c.msgs.length;
+  c.send({ t: "signin", op: "cancel" });
+  // Without a sandbox on a Mac, Codex also sees a login in the owner's keychain: either answer ends the wait.
+  await c.waitFor((m) => m.t === "signin" && m.state !== "waiting" && m.state !== "checking", 30_000, from);
+}, 120_000);
+
+test("or with a link and a one-time code; cancel goes back to signed out", async () => {
+  let from = c.msgs.length;
+  c.send({ t: "signin", op: "start", mode: "code" });
   const w = await c.waitFor((m) => m.t === "signin" && m.state === "waiting", 60_000, from);
   expect(w.url).toMatch(/^https:\/\/auth\.openai\.com\//);
   expect(w.code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4,6}$/);

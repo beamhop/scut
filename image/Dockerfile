@@ -8,7 +8,7 @@ FROM ${REGISTRY}library/debian:bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/beamhop/scut" org.opencontainers.image.description="Beamhop agent: a sandboxed Linux desktop + agent harness"
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xvfb x11-utils openbox xdotool ffmpeg chromium \
+      xvfb x11-utils x11-xserver-utils openbox tint2 xterm xdotool ffmpeg chromium \
       fonts-liberation fonts-noto-color-emoji fonts-dejavu-core \
       ca-certificates curl tar gzip procps tini libnss3-tools \
     && rm -rf /var/lib/apt/lists/*

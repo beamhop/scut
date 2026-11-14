@@ -31,6 +31,8 @@ export interface Screen {
   screenshotPng(): Promise<Uint8Array>;
   act(a: ScreenAction): Promise<unknown>;
   navigate(url: string): Promise<void>;
+  /** Open a page in a new tab on screen (falls back to navigate where there are no tabs). */
+  openTab?(url: string): Promise<void>;
   currentUrl(): Promise<string | undefined>;
 }
 

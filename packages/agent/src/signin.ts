@@ -1,7 +1,9 @@
 // Subscription sign-in for the CLI harnesses (ChatGPT through Codex, GitHub Copilot through Copilot CLI).
-// Both CLIs offer a device-code login: they print a link and a one-time code, the owner opens the link on any device
-// where they are already signed in and enters the code, and the CLI stores its token under the agent's own $HOME
-// (/data/home, so it beams with the agent). Nothing here sees a password.
+// By default the sign-in happens in the agent's own browser: the CLI's browser login prints a page that redirects back
+// to a small server the CLI runs on the agent's loopback, so the page is opened on the agent's screen and the owner
+// finishes it there (Take over). The fallback is a device code: a link and a one-time code, entered on any device.
+// Either way the CLI stores its token under the agent's own $HOME (/data/home, so it beams with the agent). Nothing
+// here sees a password.
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import type { SigninState } from "@scut/protocol";
@@ -14,7 +16,8 @@ const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const clean = (s: string) => s.replace(ANSI, "");
 
 function env(home: string): Record<string, string> {
-  return { ...(process.env as Record<string, string>), HOME: home, NO_COLOR: "1", TERM: "dumb" };
+  // BROWSER: the CLI must not open a browser of its own; Beamhop opens the page in the agent's browser.
+  return { ...(process.env as Record<string, string>), HOME: home, NO_COLOR: "1", TERM: "dumb", BROWSER: "true" };
 }
 /** Copilot CLI keeps no status command: Beamhop notes a finished login itself (a token in the env counts too). */
 const copilotMarker = (home: string) => `${home}/.copilot/.scut-signed-in`;
@@ -40,11 +43,15 @@ export async function signinStatus(kind: SubscriptionKind, home: string): Promis
 export type Signin = { cancel(): void; done: Promise<SigninState> };
 
 /**
- * Start a device-code sign-in. `onUpdate` gets "waiting" with the link and code as soon as the CLI prints them, then
- * the result. The code expires after about 15 minutes; the CLI gives up then.
+ * Start a sign-in. `screen` (with `open`): the CLI's browser login, its page opened in the agent's own browser.
+ * `code`: a device code. `onUpdate` gets "waiting" as soon as the CLI prints its link (and code), then the result.
+ * A device code expires after about 15 minutes; the CLI gives up then.
  */
-export function startSignin(kind: SubscriptionKind, home: string, onUpdate: (s: SigninState) => void): Signin {
-  const argv = kind === "codex" ? ["codex", "login", "--device-auth"] : ["copilot", "login", "--device-code"];
+export function startSignin(kind: SubscriptionKind, home: string, onUpdate: (s: SigninState) => void, opts: { mode?: "screen" | "code"; open?: (url: string) => Promise<void> } = {}): Signin {
+  const screen = (opts.mode ?? "screen") === "screen" && !!opts.open;
+  const argv = screen
+    ? (kind === "codex" ? ["codex", "login"] : ["copilot", "login", "--web-flow"])
+    : (kind === "codex" ? ["codex", "login", "--device-auth"] : ["copilot", "login", "--device-code"]);
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn(argv, { env: env(home), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -61,11 +68,18 @@ export function startSignin(kind: SubscriptionKind, home: string, onUpdate: (s: 
     for await (const chunk of stream) {
       text += clean(dec.decode(chunk, { stream: true }));
       if (shown) continue;
-      const url = text.match(/https:\/\/\S+/)?.[0];
+      // Only a whole link: the output arrives in pieces, and a long sign-in link can be split across them.
+      const url = text.match(/https:\/\/\S+(?=\s)/)?.[0]?.replace(/[).,]+$/, "");
+      if (screen && url) {
+        shown = true;
+        onUpdate({ harness: kind, state: "waiting", url, via: "screen" });
+        opts.open!(url).catch(() => {});
+        continue;
+      }
       const code = text.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4,6})\b/)?.[1];
       if (url && code) {
         shown = true;
-        onUpdate({ harness: kind, state: "waiting", url: url.replace(/[).,]+$/, ""), code, expiresAt: Date.now() + 15 * 60_000 });
+        onUpdate({ harness: kind, state: "waiting", url, code, via: "code", expiresAt: Date.now() + 15 * 60_000 });
       }
     }
   };

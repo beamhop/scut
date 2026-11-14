@@ -1,5 +1,6 @@
-import { rm } from "node:fs/promises";
-// The agent's own computer inside a sandbox: Xvfb + Openbox + Chromium, MJPEG frames via ffmpeg, input via xdotool.
+import { mkdir, rm, writeFile } from "node:fs/promises";
+// The agent's own computer inside a sandbox: a small Linux desktop (Xvfb, Openbox windows, a tint2 dock with Browser
+// and Terminal, a Chromium window with tabs and an address bar), MJPEG frames via ffmpeg, input via xdotool.
 // The other implementation of Screen (screen.ts) is CdpScreen, for agents running directly on the host.
 import { SCREEN } from "@scut/protocol";
 import type { Subprocess } from "bun";
@@ -8,6 +9,84 @@ import type { Screen, ScreenAction } from "./screen.ts";
 const DISPLAY = process.env.SCUT_DISPLAY ?? ":99";
 const env = () => ({ ...process.env, DISPLAY });
 const CDP_PORT = Number(process.env.SCUT_CDP_PORT ?? 9222);
+const HOME = () => process.env.HOME ?? "/root";
+/** Height of the dock at the bottom of the screen. */
+const DOCK_H = 40;
+
+/** apt-get install, quietly; false when it couldn't (no network, no apt). */
+async function installPackages(pkgs: string[]): Promise<boolean> {
+  if (!Bun.which("apt-get")) return false;
+  const run = async (args: string[]) => {
+    const p = Bun.spawn(args, { env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" }, stdout: "ignore", stderr: "pipe" });
+    return (await p.exited) === 0;
+  };
+  if (!(await run(["apt-get", "update", "-qq"]))) return false;
+  return run(["apt-get", "install", "-y", "-qq", "--no-install-recommends", ...pkgs]);
+}
+
+/** Openbox: a calm theme, window titles, and maximized windows stop at the dock. One desktop. */
+const OPENBOX_RC = `<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <theme><name>Clearlooks</name><titleLayout>NLIMC</titleLayout><keepBorder>yes</keepBorder>
+    <font place="ActiveWindow"><name>DejaVu Sans</name><size>9</size><weight>bold</weight></font>
+    <font place="InactiveWindow"><name>DejaVu Sans</name><size>9</size></font></theme>
+  <desktops><number>1</number></desktops>
+  <margins><top>0</top><bottom>0</bottom><left>0</left><right>0</right></margins>
+  <placement><policy>Smart</policy><center>yes</center></placement>
+  <applications><application class="*" type="normal"><maximized>true</maximized></application></applications>
+</openbox_config>
+`;
+
+/** The dock: Browser and Terminal launchers, the open windows, a clock. */
+function tint2rc(dataDir: string) {
+  return `panel_items = LTSC
+panel_size = 100% ${DOCK_H}
+panel_position = bottom center horizontal
+panel_layer = top
+strut_policy = follow_size
+panel_background_id = 1
+panel_padding = 8 4 8
+font_shadow = 0
+rounded = 0
+border_width = 0
+background_color = #161512 100
+border_color = #000000 0
+rounded = 8
+border_width = 0
+background_color = #2c2a25 100
+border_color = #000000 0
+rounded = 8
+border_width = 0
+background_color = #3a3730 100
+border_color = #000000 0
+taskbar_mode = single_desktop
+taskbar_padding = 4 0 6
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+task_icon = 1
+task_text = 1
+task_maximum_size = 220 32
+task_padding = 8 4 6
+task_font = DejaVu Sans 9
+task_font_color = #c9c6bf 100
+task_active_font_color = #ffffff 100
+task_background_id = 2
+task_active_background_id = 3
+launcher_padding = 4 4 6
+launcher_background_id = 0
+launcher_icon_size = 24
+launcher_item_app = ${dataDir}/desktop/browser.desktop
+launcher_item_app = ${dataDir}/desktop/terminal.desktop
+systray_padding = 0 0 0
+time1_format = %H:%M
+time1_font = DejaVu Sans 10
+clock_font_color = #e6e3dc 100
+clock_padding = 8 0
+`;
+}
+
+const ICON_BROWSER = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" fill="#3d7bd9"/><ellipse cx="24" cy="24" rx="9" ry="21" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M3 24h42M7 13h34M7 35h34" stroke="#fff" stroke-width="2.5"/></svg>`;
+const ICON_TERMINAL = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="3" y="6" width="42" height="36" rx="6" fill="#2f2d28" stroke="#5a564d" stroke-width="2"/><path d="M12 18l8 6-8 6" fill="none" stroke="#e6e3dc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 31h12" stroke="#e6e3dc" stroke-width="3" stroke-linecap="round"/></svg>`;
 
 /** One DevTools protocol call on a page target (short-lived socket). */
 export async function cdp(ws: string, method: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -54,10 +133,57 @@ export class X11Screen implements Screen {
     this.procs.push(xvfb);
     await this.waitForX();
     this.trustExtraCa();
-    this.procs.push(Bun.spawn(["openbox"], { env: env(), stdout: "ignore", stderr: "ignore" }));
+    await this.writeDesktopConfig();
+    this.procs.push(Bun.spawn(["openbox", "--config-file", `${HOME()}/.config/openbox/rc.xml`], { env: env(), stdout: "ignore", stderr: "ignore" }));
+    void this.startDesktop();
     this.startBrowser(this.homeUrl);
     this.startFrames();
     await this.waitForBrowser(20_000); // "running" means its browser can be driven
+  }
+
+  /** Openbox (window frames, maximized windows above the dock) and the dock itself (tint2). */
+  private async writeDesktopConfig() {
+    const h = HOME();
+    await mkdir(`${h}/.config/openbox`, { recursive: true });
+    await mkdir(`${h}/.config/tint2`, { recursive: true });
+    await writeFile(`${h}/.config/openbox/rc.xml`, OPENBOX_RC);
+    await writeFile(`${h}/.config/tint2/tint2rc`, tint2rc(this.dataDir));
+    // Dock launchers. The browser one opens a new window of the agent's own browser (same profile, same logins).
+    const d = `${this.dataDir}/desktop`;
+    await mkdir(d, { recursive: true });
+    const bin = process.env.SCUT_BROWSER ?? "chromium";
+    await writeFile(`${d}/browser.svg`, ICON_BROWSER);
+    await writeFile(`${d}/terminal.svg`, ICON_TERMINAL);
+    await writeFile(`${d}/browser.desktop`, `[Desktop Entry]\nType=Application\nName=Browser\nIcon=${d}/browser.svg\nExec=${bin} --no-sandbox --test-type --user-data-dir=${this.dataDir}/chrome --new-window\n`);
+    await writeFile(`${d}/terminal.desktop`, `[Desktop Entry]\nType=Application\nName=Terminal\nIcon=${d}/terminal.svg\nExec=xterm -fa "DejaVu Sans Mono" -fs 11 -bg "#1b1a17" -fg "#e6e3dc" -cr "#e6e3dc" -bc -geometry 110x32\nPath=${this.dataDir}/workspace\n`);
+  }
+
+  /**
+   * Wallpaper and dock. Agent images from before the desktop lack tint2/xterm: those are installed once here (in the
+   * background, the agent works meanwhile) and kept on its disk.
+   */
+  private async startDesktop() {
+    if (!Bun.which("tint2") || !Bun.which("xterm") || !Bun.which("xsetroot")) {
+      const ok = await installPackages(["tint2", "xterm", "x11-xserver-utils"]);
+      if (!ok) return;
+    }
+    Bun.spawnSync(["xsetroot", "-solid", "#23211d"], { env: env(), stdout: "ignore", stderr: "ignore" });
+    const dock = () => {
+      const p = Bun.spawn(["tint2", "-c", `${HOME()}/.config/tint2/tint2rc`], { env: env(), stdout: "ignore", stderr: "ignore" });
+      this.procs.push(p);
+      // The dock is part of the computer: bring it back if it ever exits.
+      p.exited.then(() => { if (this.procs.includes(p) && !this.stopping) setTimeout(dock, 2000); });
+    };
+    dock();
+  }
+  private stopping = false;
+
+  /** Open a page in a new browser tab, on screen (e.g. a sign-in page the owner finishes with Take over). */
+  async openTab(url: string) {
+    // Through the browser's own DevTools target: the URL goes as data, never re-parsed from a query string.
+    const v = (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json()).catch(() => null)) as { webSocketDebuggerUrl?: string } | null;
+    const ok = v?.webSocketDebuggerUrl && (await cdp(v.webSocketDebuggerUrl, "Target.createTarget", { url }).catch(() => null));
+    if (!ok) await this.navigate(url);
   }
 
   /** Wait until the browser answers on its debugging port (false after `ms`). */
@@ -100,6 +226,14 @@ export class X11Screen implements Screen {
   startBrowser(url = "about:blank") {
     // A profile left by a host that stopped uncleanly (restart, beam) still says it's in use; Chromium would refuse it.
     for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) require("node:fs").rmSync(`${this.dataDir}/chrome/${f}`, { force: true });
+    // A restart of the agent's computer isn't a crash to the person watching: no "Restore pages?" bubble.
+    try {
+      const fs = require("node:fs");
+      const pf = `${this.dataDir}/chrome/Default/Preferences`;
+      const prefs = JSON.parse(fs.readFileSync(pf, "utf8"));
+      prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
+      fs.writeFileSync(pf, JSON.stringify(prefs));
+    } catch {}
     const bin = process.env.SCUT_BROWSER ?? "chromium";
     const p = Bun.spawn(
       [
@@ -112,10 +246,10 @@ export class X11Screen implements Screen {
         "--disable-gpu",
         `--user-data-dir=${this.dataDir}/chrome`,
         "--window-position=0,0",
-        `--window-size=${SCREEN.w},${SCREEN.h}`,
-        // The whole screen is the page: no tab strip, no address bar, no window frame (Beamhop's bezel shows where it is).
-        // Links that open a new tab still work (the new tab becomes the screen; ctrl+w goes back).
-        "--kiosk",
+        `--window-size=${SCREEN.w},${SCREEN.h - DOCK_H}`,
+        // A normal browser window on the desktop: tabs and an address bar, maximized above the dock.
+        "--start-maximized",
+        "--hide-crash-restore-bubble",
         // Navigation (open_url) and "where is it" go through the DevTools protocol, on this computer's loopback only.
         `--remote-debugging-port=${CDP_PORT}`,
         "--remote-debugging-address=127.0.0.1",
@@ -248,7 +382,7 @@ export class X11Screen implements Screen {
       if (!this.browserAlive()) break;
       await Bun.sleep(500);
     } while (Date.now() - t0 < 15_000);
-    // Gone, or running but not answering: (re)start it on that page. There is no address bar to type into.
+    // Gone, or running but not answering: (re)start it on that page.
     if (this.browserAlive()) {
       this.browser!.kill();
       await this.browser!.exited.catch(() => {});
@@ -262,6 +396,7 @@ export class X11Screen implements Screen {
 
   /** Close the browser first and wait for it, so its profile (cookies, logins) is on disk before a beam packs it. */
   async stop() {
+    this.stopping = true;
     this.ffmpeg?.kill();
     this.setThumbs(false);
     if (this.browser && this.browserAlive()) {

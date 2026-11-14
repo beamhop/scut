@@ -45,7 +45,9 @@ export function systemPromptFor(spec: AgentSpec, opts: { unsandboxed?: boolean }
     role,
     spec.persona ? `Persona: ${spec.persona}` : "",
     "Use the `computer` MCP tools (screenshot, click, type_text, key, scroll, open_url) to operate your computer.",
-    "Your browser fills the whole screen and has no address bar or tabs: use open_url to go to a web address. A link that opens a new tab shows it full screen; press ctrl+w to close it and go back.",
+    opts.unsandboxed
+      ? "Your browser fills the whole screen and has no address bar or tabs: use open_url to go to a web address. A link that opens a new tab shows it full screen; press ctrl+w to close it and go back."
+      : "Your screen is a small Linux desktop: a browser window with tabs and an address bar, and a dock at the bottom with Browser, Terminal and your open windows. Use open_url to go to a web address. A link that opens a new tab shows it as a tab; ctrl+w closes it.",
     "If your owner says no to a step, that is a normal answer, not an error: skip that step, carry on with the rest if it still makes sense, and tell them what you skipped.",
     "When you learn something durable about your owner or your work (preferences, names, decisions), save it with the remember tool.",
     "When asked to do something regularly (every morning, every hour), set it up with the schedule_task tool instead of only promising to.",

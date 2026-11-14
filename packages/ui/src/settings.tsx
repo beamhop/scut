@@ -360,7 +360,7 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
   const [copied, setCopied] = useState(false);
   const [custom, setCustom] = useState(a.settings?.subModel ?? "");
   useEffect(() => setCustom(a.settings?.subModel ?? ""), [a.settings?.subModel]);
-  const send = (op: "start" | "cancel" | "check" | "signout") => a.send({ t: "signin", op });
+  const send = (op: "start" | "cancel" | "check" | "signout", mode?: "screen" | "code") => a.send({ t: "signin", op, ...(mode ? { mode } : {}) });
   const setModel = (v: string) => { a.send({ t: "settings", subModel: v || null }); announce(v ? `${name} now uses ${v}` : `${name} uses ${label}'s default model`); };
   const models = a.settings?.subModels ?? [];
   // Agents made before sign-in existed (their software comes from the agent image) never answer: say so, don't spin.
@@ -383,6 +383,7 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
           </div>
           <div className="mt-0.5 text-small text-ink-2">
             {state === "signed-in" ? (s?.account ?? `${name} uses your ${label} subscription.`)
+              : state === "waiting" && s?.via === "screen" ? `The ${label} sign-in page is open on ${name}'s screen. Use Take over on its screen to sign in there.`
               : state === "waiting" ? "Open the link on any device where you're signed in, and enter the code."
               : state === "error" ? s?.error
               : state === "checking" ? null
@@ -392,6 +393,13 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
         {state === "signed-in" && <Button size="sm" variant="quiet" onClick={() => send("signout")}>Sign out</Button>}
         {(state === "signed-out" || state === "error") && <Button size="sm" variant="primary" onClick={() => send("start")}>{state === "error" ? "Try again" : "Sign in"}</Button>}
       </div>
+      {state === "waiting" && s?.via === "screen" && (
+        <div className="flex flex-wrap justify-end gap-1">
+          <Button size="sm" variant="quiet" onClick={() => send("start", "code")}>Use a code instead</Button>
+          <Button size="sm" variant="quiet" onClick={() => send("start")}>Open it again</Button>
+          <Button size="sm" variant="quiet" onClick={() => send("cancel")}>Cancel</Button>
+        </div>
+      )}
       {state === "waiting" && s?.url && s.code && (
         <div className="space-y-2 rounded-control border border-line bg-surface p-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -405,7 +413,7 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
             </a>
             <span className="ml-auto flex gap-1">
               <Button size="sm" variant="quiet" onClick={() => send("cancel")}>Cancel</Button>
-              <Button size="sm" variant="quiet" onClick={() => send("start")}>New code</Button>
+              <Button size="sm" variant="quiet" onClick={() => send("start", "code")}>New code</Button>
             </span>
           </div>
           {s.expiresAt && <p className="text-small text-ink-3">The code works until {clock(s.expiresAt)}.</p>}

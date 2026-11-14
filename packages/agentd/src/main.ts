@@ -182,16 +182,18 @@ async function refreshSignin(): Promise<SigninState | null> {
   broadcast(settingsMsg());
   return s;
 }
-function beginSignin() {
+function beginSignin(mode: "screen" | "code" = "screen") {
   const k = subKind();
   if (!k) return;
   signinRun?.cancel();
   setSignin({ harness: k, state: "checking" });
+  const open = desktop ? async (url: string) => { await (desktop!.openTab ?? desktop!.navigate).call(desktop, url); } : undefined;
   const run = startSignin(k, `${DATA}/home`, (s) => {
     if (signinRun !== run) return; // a newer try replaced this one
     setSignin(s);
     if (s.state === "signed-in") narrate(`Signed in to ${SUB_NAME[k]}`);
-  });
+    if (s.state === "waiting" && s.via === "screen") narrate(`Opened the ${SUB_NAME[k]} sign-in on my screen: take over to sign in`);
+  }, { mode, open });
   signinRun = run;
   run.done.finally(() => { if (signinRun === run) signinRun = null; });
 }
@@ -1102,7 +1104,7 @@ Bun.serve<WsData>({
       } else if (m.t === "signin") {
         const k = subKind();
         if (!k) ws.send(JSON.stringify({ t: "error", message: "This agent doesn't use a subscription" } satisfies ServerMsg));
-        else if (m.op === "start") beginSignin();
+        else if (m.op === "start") beginSignin(m.mode === "code" ? "code" : "screen");
         else if (m.op === "cancel") { signinRun?.cancel(); signinRun = null; await refreshSignin(); }
         else if (m.op === "check") await refreshSignin();
         else if (m.op === "signout") { signinRun?.cancel(); signinRun = null; setSignin(await signOut(k, `${DATA}/home`)); }

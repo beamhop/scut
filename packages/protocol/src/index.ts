@@ -25,6 +25,8 @@ export interface SigninState {
   url?: string;
   code?: string;
   expiresAt?: number;
+  /** screen: the sign-in page is open in the agent's own browser (finish it with Take over) · code: a device code. */
+  via?: "screen" | "code";
   /** "Logged in using ChatGPT", when the CLI says. */
   account?: string;
   error?: string;
@@ -170,7 +172,7 @@ export type ClientMsg =
   | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string }
   | { t: "skills"; op: "add" | "delete"; name?: string; content?: string; url?: string }
   /** Subscription sign-in: start a device-code login, cancel it, check again, or sign out. */
-  | { t: "signin"; op: "start" | "cancel" | "check" | "signout" };
+  | { t: "signin"; op: "start" | "cancel" | "check" | "signout"; /** start: in the agent's own browser (default), or a device code. */ mode?: "screen" | "code" };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
