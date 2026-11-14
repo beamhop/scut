@@ -619,7 +619,8 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
     return { x: Math.round(((e.clientX - r.left) / r.width) * SCREEN.w), y: Math.round(((e.clientY - r.top) / r.height) * SCREEN.h) };
   };
   const chatEnd = useRef<HTMLDivElement>(null);
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [a.chat.length]);
+  // Scroll only the chat list: scrollIntoView would also scroll the page, hiding the header on phones.
+  useEffect(() => { const box = chatEnd.current?.parentElement; if (box) box.scrollTop = box.scrollHeight; }, [a.chat.length]);
   const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
 
@@ -1282,7 +1283,7 @@ function CrewRoomPanel({ onClose, agentNames }: { onClose: () => void; agentName
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth" }); }, [data?.lines.length]);
+  useEffect(() => { const box = end.current?.parentElement; if (box) box.scrollTop = box.scrollHeight; }, [data?.lines.length]);
   return (
     <aside className="fixed inset-y-0 right-0 z-30 flex w-[420px] flex-col border-l border-white/10 bg-panel shadow-2xl" aria-label="Crew room">
       <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.43.0 — Phone view fixes
+
+- Fixed: on a phone, the agent page scrolled itself down as soon as it loaded, hiding the agent's name, state and Settings button. Chat updates now scroll only the chat list, never the page. A UI test checks the page stays at the top with the header visible.
+- A Beamhop favicon (the mascot) and a dark theme colour for phone browsers; no more failed favicon requests.
+
 ## v0.42.1 — Needs-you in the title
 
 - The window title shows how many agents need you ("(2) Beamhop — agents need you"), so a waiting approval is visible in the taskbar or dock while you're in another app.

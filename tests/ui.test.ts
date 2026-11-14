@@ -138,6 +138,9 @@ test("phone link opens the agent alone on a phone-sized screen, signed in", asyn
   await page.goto(link.url, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 20_000 });
   expect(page.url()).not.toContain("auth="); // token moved out of the address bar
+  await Bun.sleep(2500); // let live frames arrive: they must not scroll the page and hide the header
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  expect(await page.$eval("h1", (h) => h.getBoundingClientRect().top >= 0)).toBe(true);
   await page.waitForSelector('input[aria-label^="Message"]');
   await page.type('input[aria-label^="Message"]', "from my phone");
   await page.keyboard.press("Enter");
