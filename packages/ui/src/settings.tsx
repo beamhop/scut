@@ -16,6 +16,7 @@ import {
   durationWords, money, num, percent, plural, relativeTime,
 } from "./ui/index.ts";
 import { ChoiceTile, eurToTokens, KEY_URL, modelName, Notice, parseEuro, PROVIDER_NOTE, providerOf, SUBSCRIPTIONS, tokensToEur } from "./settings-parts.tsx";
+import { agentProblem, FIX_LABEL, FIX_SECTION, problemLabel, problemMeta, type AgentProblem } from "./agent-status.ts";
 
 type A = ReturnType<typeof useAgent>;
 
@@ -26,10 +27,17 @@ export const SETTINGS_SECTIONS = {
 } as const;
 export type SettingsSection = keyof typeof SETTINGS_SECTIONS;
 
-function jumpTo(section: SettingsSection) {
+function jumpTo(section: SettingsSection, open = false) {
   const el = document.getElementById(SETTINGS_SECTIONS[section]);
   if (!el) return;
-  el.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  // "Add a brain" from the problem callout or the safety list opens the brain form, not just the section.
+  if (open && section === "brain") el.dispatchEvent(new CustomEvent("beamhop:open-brain"));
+  // Scroll only the drawer's own scroller: scrollIntoView would also shift overflow-hidden ancestors (the drawer frame).
+  const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  let sc = el.parentElement;
+  while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement;
+  if (sc) sc.scrollTo({ top: sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 16, behavior });
+  else el.scrollIntoView({ block: "start", behavior });
   el.querySelector<HTMLElement>("h3")?.focus({ preventScroll: true });
 }
 
@@ -58,11 +66,13 @@ export function SettingsPanel({ a, agent, onClose, section }: { a: A; agent: Age
     if (section && a.settings) requestAnimationFrame(() => jumpTo(section));
   }, [section, !!a.settings]);
   if (!a.settings) return <p className="text-body text-ink-2" role="status">Loading {agent.name}'s settings…</p>;
+  const problem = agentProblem(a, agent);
   return (
     <div className="text-body text-ink">
+      {problem && <ProblemCallout problem={problem} name={agent.name} />}
       <SafetyCheck a={a} agent={agent} />
       <PersonaSettings a={a} name={agent.name} />
-      <BrainSettings a={a} name={agent.name} id={agent.id} harness={agent.harness} />
+      <BrainSettings a={a} name={agent.name} id={agent.id} harness={agent.harness} problem={problem?.fix === "brain" || problem?.fix === "key" ? problem : undefined} autoOpen={section === "brain" && (problem?.fix === "brain" || problem?.fix === "key")} />
       <AutonomySettings a={a} name={agent.name} />
       <SpendingSettings a={a} agent={agent} />
       <ChannelSettings a={a} agent={agent} />
@@ -75,12 +85,31 @@ export function SettingsPanel({ a, agent, onClose, section }: { a: A; agent: Age
   );
 }
 
+/** What stops the agent from working, first thing in the drawer, with the button that goes to the fix. */
+function ProblemCallout({ problem, name }: { problem: AgentProblem; name: string }) {
+  const to = problem.fix ? FIX_SECTION[problem.fix] : undefined;
+  return (
+    <div className="mb-5 flex items-start gap-2.5 rounded-unit border border-err/45 bg-surface px-3 py-2.5">
+      <Lamp status="problem" size={14} className="mt-[3px]" />
+      <div className="min-w-0 flex-1">
+        <p className="text-ui-lg text-ink">{problemLabel(problem)}</p>
+        <p className="mt-0.5 text-small text-ink-2">{problem.fix === "channel" ? problem.text : problemMeta(problem, name)}</p>
+      </div>
+      {to && <Button size="sm" variant="signal" onClick={() => jumpTo(to, true)} className="shrink-0">{FIX_LABEL[problem.fix!]}</Button>}
+    </div>
+  );
+}
+
 // ---------------- safety ----------------
 
 /** Plain-language safety posture for one agent: what protects you, and what to look at (`to` = the section that fixes it). */
 export function safetyItems(a: A, agent: Agent) {
   const s = a.settings!;
-  const items: { ok: boolean; text: string; to?: SettingsSection }[] = [];
+  const items: { ok: boolean; text: string; to?: SettingsSection; fix?: string }[] = [];
+  // A brain that's missing or rejected is not "all good": the agent can't do what you ask, and the shield must say so.
+  const problem = agentProblem(a, agent);
+  if (problem?.fix === "brain") items.push({ ok: false, text: "No brain yet, so it can't think or do tasks", to: "brain", fix: FIX_LABEL.brain });
+  else if (problem?.fix === "key") items.push({ ok: false, text: `${problem.text}. It can't think until the key works`, to: "brain", fix: FIX_LABEL.key });
   items.push({ ok: true, text: "Works on its own separate computer, away from your files and accounts" });
   items.push(s.autonomy === "auto"
     ? { ok: false, text: "Never asks before acting. \"Risky only\" still lets it work alone but checks payments, messages and logins with you", to: "autonomy" }
@@ -135,7 +164,7 @@ export function SafetyCheck({ a, agent }: { a: A; agent: Agent }) {
                 ? <CheckIcon size={14} weight="bold" aria-label="OK" role="img" className="mt-[3px] shrink-0 text-ink-2" />
                 : <TriangleIcon size={13} weight="fill" aria-label="Look at this" role="img" className="mt-[3px] shrink-0 text-signal" />}
               <span className={cx("min-w-0 flex-1", i.ok ? "text-ink-2" : "text-ink")}>{i.text}</span>
-              {!i.ok && i.to && <Button size="sm" variant="secondary" onClick={() => jumpTo(i.to!)} className="-my-0.5">{i.to === "apps" ? "Show" : "Change"}</Button>}
+              {!i.ok && i.to && <Button size="sm" variant="secondary" onClick={() => jumpTo(i.to!, true)} className="-my-0.5">{i.fix ?? (i.to === "apps" ? "Show" : "Change")}</Button>}
             </li>
           ))}
         </ul>
@@ -170,9 +199,10 @@ export function PersonaSettings({ a, name }: { a: A; name: string }) {
 // ---------------- brain ----------------
 
 /** Change the model or key an agent thinks with (an expired key shouldn't strand an agent). */
-export function BrainSettings({ a, name, id, harness }: { a: A; name: string; id: string; harness?: string }) {
+export function BrainSettings({ a, name, id, harness, problem, autoOpen }: { a: A; name: string; id: string; harness?: string; problem?: AgentProblem; autoOpen?: boolean }) {
   const m = a.settings?.model;
   const [open, setOpen] = useState(false);
+  const sectionRef = useRef<HTMLDivElement>(null);
   const [kind, setKind] = useState("openrouter");
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
@@ -204,8 +234,23 @@ export function BrainSettings({ a, name, id, harness }: { a: A; name: string; id
     setCheck({});
   }
   const fixed = harness === "mock" || (sub && !m?.baseUrl);
+  // Opened from "Add a brain" / "Fix the key": go straight to the form.
+  useEffect(() => { if (autoOpen && !fixed) start(); }, [autoOpen]);
+  useEffect(() => {
+    const el = sectionRef.current?.closest("section");
+    if (!el || fixed) return;
+    const on = () => { if (!open) start(); };
+    el.addEventListener("beamhop:open-brain", on);
+    return () => el.removeEventListener("beamhop:open-brain", on);
+  });
   return (
     <Section id="brain" title="Brain">
+      <div ref={sectionRef} hidden />
+      {problem && (
+        <Notice className="mb-3">
+          <span className="font-medium">{problemLabel(problem)}.</span> {problemMeta(problem, name)}
+        </Notice>
+      )}
       {!open ? (
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -217,7 +262,7 @@ export function BrainSettings({ a, name, id, harness }: { a: A; name: string; id
                 : `${name} can't think until it has one.`}
             </div>
           </div>
-          {!fixed && <Button size="sm" onClick={start}>Change</Button>}
+          {!fixed && <Button size="sm" variant={problem ? "signal" : "secondary"} onClick={start}>{problem ? FIX_LABEL[problem.fix === "key" ? "key" : "brain"] : "Change"}</Button>}
         </div>
       ) : (
         <div className="space-y-3">
@@ -303,10 +348,10 @@ function SpendingSettings({ a, agent }: { a: A; agent: Agent }) {
         <p className="mb-3 text-small text-ink-2">{price ? `${money(spentEur, { approx: spentEur > 0, period: "today" })}, no limit set.` : "No limit set."}</p>
       )}
       <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); if (dirty) save(); }}>
-        <Field className="min-w-0 flex-1" label={price ? "Limit per day, in euros" : "Limit per day, in million tokens"} error={invalid ? "Type a number, like 1.50" : undefined}
+        <Field className="min-w-0 flex-1" label={price ? "Limit per day, in euros" : "Limit per day, in millions of tokens"} error={invalid ? "Type a number, like 1.50" : undefined}
           hint={price
             ? `0 = no limit. ${agent.name} stops for the day when it reaches this.`
-            : `0 = no limit. Beamhop doesn't know what ${modelName(agent.model?.model) === "No model" ? "this brain" : modelName(agent.model?.model)} costs, so this counts tokens, the units providers bill in.`}>
+            : `0 = no limit. Beamhop doesn't know what ${modelName(agent.model?.model) === "No model" ? "this brain" : modelName(agent.model?.model)} costs, so this counts tokens instead (a token is about ¾ of a word).`}>
           <div className="relative">
             {price && <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-2">€</span>}
             <Input inputMode="decimal" value={val} onChange={(e) => setVal(e.target.value)} className={cx("tabular-nums", price && "pl-6")}

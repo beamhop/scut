@@ -37,7 +37,7 @@ function useReplyAnnouncements(chat: ChatLine[], name: string) {
   }, [chat.length]);
 }
 
-export function ChatLog({ agent, a, inline = false, className }: { agent: Agent; a: AgentData; inline?: boolean; className?: string }) {
+export function ChatLog({ agent, a, inline = false, blocked = false, className }: { agent: Agent; a: AgentData; inline?: boolean; /** The agent can't think yet: no starters that would go nowhere. */ blocked?: boolean; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useReplyAnnouncements(a.chat, agent.name);
@@ -77,7 +77,9 @@ export function ChatLog({ agent, a, inline = false, className }: { agent: Agent;
       className={cx(!inline && "min-h-0 flex-1 overflow-y-auto focus-visible:outline-offset-[-2px]", className)}
     >
       <div className="space-y-4 px-4 py-4">
-        {a.chat.length === 0 && <Starters name={agent.name} onPick={(text) => a.send({ t: "chat", text })} />}
+        {a.chat.length === 0 && (blocked
+          ? <p className="pt-6 text-body text-ink-2">Nothing here yet. Once {agent.name} has a brain, tell it what to do here.</p>
+          : <Starters name={agent.name} onPick={(text) => a.send({ t: "chat", text })} />)}
         {a.chat.map((m, i) => {
           const s = sender(m, agent.name);
           const own = m.from === "owner";
@@ -126,7 +128,12 @@ function Starters({ name, onPick }: { name: string; onPick: (s: string) => void 
 }
 
 /** Textarea composer: Enter sends, Shift+Enter is a new line. Keeps working while the agent works (messages queue). */
-export function Composer({ agent, a, size = "md", above, className }: { agent: Agent; a: AgentData; size?: "md" | "lg"; above?: ReactNode; className?: string }) {
+export function Composer({ agent, a, size = "md", above, blocked, className }: {
+  agent: Agent; a: AgentData; size?: "md" | "lg"; above?: ReactNode;
+  /** The agent can't think (no brain, rejected key): keep the text, send nothing, say why and offer the fix. */
+  blocked?: { text: string; action?: ReactNode };
+  className?: string;
+}) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
   const hintId = useId();
@@ -141,6 +148,7 @@ export function Composer({ agent, a, size = "md", above, className }: { agent: A
   const submit = () => {
     const t = text.trim();
     if (!t) return;
+    if (blocked) { announce(blocked.text, { assertive: true }); return; }
     a.send({ t: "chat", text: t });
     setText("");
   };
@@ -148,6 +156,12 @@ export function Composer({ agent, a, size = "md", above, className }: { agent: A
   return (
     <div className={className}>
       {above}
+      {blocked && (
+        <div className="mb-2 flex items-center gap-2 px-1 text-small text-ink">
+          <span className="min-w-0 flex-1">{blocked.text}</span>
+          {blocked.action}
+        </div>
+      )}
       <form
         className={cx("flex items-end gap-2 rounded-unit border border-line-strong bg-surface p-1.5 pl-3 focus-within:border-ink focus-within:shadow-[0_0_0_1px_var(--color-ink)]", big && "p-1 pl-3")}
         onSubmit={(e) => { e.preventDefault(); submit(); }}
@@ -156,6 +170,7 @@ export function Composer({ agent, a, size = "md", above, className }: { agent: A
           ref={ref}
           rows={1}
           value={text}
+          data-composer=""
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
           aria-label={`Message ${agent.name}`}
@@ -164,11 +179,18 @@ export function Composer({ agent, a, size = "md", above, className }: { agent: A
           placeholder={working ? `Add to what ${agent.name} is doing…` : `Message ${agent.name}…`}
           className={cx("max-h-40 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-body text-ink outline-none", big && "py-2.5 text-[16px] leading-[22px]")}
         />
-        <IconButton type="submit" label="Send" icon={ArrowUpIcon} variant="primary" size={big ? "md" : "sm"} disabled={!text.trim()} className={cx(big && "size-11")} />
+        <IconButton type="submit" label="Send" icon={ArrowUpIcon} variant="primary" size={big ? "md" : "sm"} disabled={!text.trim()} aria-disabled={blocked ? true : undefined} className={cx(big && "size-11")} />
       </form>
       <p id={hintId} className={cx("mt-1.5 px-1 text-micro text-ink-3", big && "sr-only")}>
-        {working ? `${agent.name} is working. New messages are read after the current step.` : "Enter to send · Shift+Enter for a new line"}
+        {blocked ? `${agent.name} can't take messages yet.` : working ? `${agent.name} is working. New messages are read after the current step.` : "Enter to send · Shift+Enter for a new line"}
       </p>
     </div>
   );
+}
+
+/** Focus the message box (after deciding the last approval, so focus never falls to the page). */
+export function focusComposer() {
+  const el = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]");
+  el?.focus({ preventScroll: true });
+  return !!el;
 }

@@ -152,7 +152,7 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
     }).catch((e) => ({ error: String(e) }));
     if (r.error) { setBusy(false); setError(r.error); return; }
     announce(`${agentName} is ready`);
-    const task = firstTask.trim();
+    const task = noBrain ? "" : firstTask.trim(); // a task for an agent that can't think would only come back empty
     onDone();
     if (task && r.id) sendFirstTask(r.id, task);
   }
@@ -246,10 +246,12 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
 
   const dest = dests.find((d) => d.id === where);
   const brainWords = skipped
-    ? (usesSavedKey ? `${modelName(model.model)} (${PRESETS[kind ?? "openrouter"]?.label ?? "saved"})` : "None yet. Add one later in Settings.")
+    ? (usesSavedKey ? `${modelName(model.model)} (${PRESETS[kind ?? "openrouter"]?.label ?? "saved"})` : "None yet")
     : kind === "subscription" ? `${SUBSCRIPTIONS.find((s) => s.harness === sub)!.label} subscription, sign in on its screen`
     : kind ? `${modelName(model.model)} (${PRESETS[kind].label})` : "None yet";
   const pulling = pf?.state === "pulling";
+  // Skipped the brain and there's no saved one: say plainly what that means before creating (not after a silent no-op).
+  const noBrain = skipped && !usesSavedKey && harness !== "mock" && harness !== "codex" && harness !== "copilot";
   const stepCreate = (
     <div className="space-y-5">
       <div className="flex items-start gap-3 rounded-unit border border-line bg-surface-2 p-3">
@@ -266,20 +268,25 @@ export function CreateAgent({ firstRun, onDone, inline = false }: { firstRun: bo
           <dd className="min-w-0">{harness === "mock" ? "Demo (no brain, practice replies)" : brainWords}</dd>
         </dl>
       </div>
+      {noBrain && (
+        <Notice tone="needs" action={<Button size="sm" onClick={() => { setSkipped(false); setStep(1); }} className="-my-0.5 shrink-0">Choose a brain</Button>}>
+          Without a brain, {agentName} can't think or do tasks yet. You can add one later in its Settings.
+        </Notice>
+      )}
 
       {dests.length > 1 && (
         <Field label="Runs on" hint={dest && (dest.monthlyUsd
           ? `${money(usdToEur(dest.monthlyUsd), { approx: true, period: "month" })}, billed by ${dest.label}. Keeps working when this computer is off.`
-          : dest.id === "local" ? "Free. Works while this computer is on." : "Free.")}>
+          : dest.id === "local" ? "No running cost. Works while this computer is on." : "No running cost.")}>
           <Select value={where} onChange={(e) => setWhere(e.target.value)} aria-label="Runs on">
             {dests.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
           </Select>
         </Field>
       )}
 
-      <Field label="First task" aside="Optional" hint={pulling ? `Type it now. ${agentName} starts on it as soon as it's ready.` : `${agentName} starts on it right away, and you can watch.`}>
+      {!noBrain && <Field label="First task" aside="Optional" hint={pulling ? `Type it now. ${agentName} starts on it as soon as it's ready.` : `${agentName} starts on it right away, and you can watch.`}>
         <Textarea rows={2} value={firstTask} onChange={(e) => setFirstTask(e.target.value)} placeholder={tpl.example} aria-label="First task" />
-      </Field>
+      </Field>}
 
       {pulling && (
         <Progress label="Getting the agent computer ready (first time only)" value={pf!.total ? pf!.done / pf!.total : 0}

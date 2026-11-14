@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { EyeIcon, HandGrabbingIcon, PauseIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { EyeIcon, GlobeSimpleIcon, HandGrabbingIcon, LockSimpleIcon, PauseIcon, WarningIcon } from "@phosphor-icons/react";
 import { KEYMAP, SCREEN, STAGE_LABEL, type Agent } from "./lib.tsx";
 import type { AgentData } from "./agent-status.ts";
 import { Bezel, Button, Kbd, ScreenNote, announce, callsign, cx } from "./ui/index.ts";
@@ -60,10 +60,46 @@ export function useDrive(a: AgentData, name: string) {
 
 const ESC_WINDOW = 400;
 
-export function AgentScreen({ agent, a, drive, headline, actual = false, compact = false, barActions = true, className }: {
+/**
+ * Where the agent's browser is, read from its address. The agent's browser runs without its own address bar, so the
+ * bezel bar carries this instead: the site in medium weight (the part that matters for trust), then the path.
+ */
+export function readLocation(url?: string): { site: string; path: string; secure: boolean | "local"; full: string } | undefined {
+  if (!url) return undefined;
+  let u: URL;
+  try { u = new URL(url); } catch { return undefined; }
+  if (u.protocol === "about:") return { site: "Blank page", path: "", secure: "local", full: url };
+  if (u.protocol === "chrome:" || u.protocol === "chrome-search:") return { site: "New tab", path: "", secure: "local", full: url };
+  if (u.protocol === "file:") return { site: "A file", path: decodeURIComponent(u.pathname), secure: "local", full: url };
+  const local = /^(127\.|localhost$|\[::1\]$|0\.0\.0\.0$)/.test(u.hostname);
+  // agentd's own start page (127.0.0.1:8080/start?name=…) is not a website: never show its internal address.
+  if (local && /^\/start\b/.test(u.pathname)) return { site: "Start page", path: "", secure: "local", full: "Start page" };
+  const path = u.pathname === "/" ? "" : decodeURIComponent(u.pathname);
+  return { site: local ? u.host : u.hostname.replace(/^www\./, ""), path, secure: local ? "local" : u.protocol === "https:", full: url };
+}
+
+function Location({ url, dim = true, className }: { url?: string; dim?: boolean; className?: string }) {
+  const loc = readLocation(url);
+  if (!loc) return null;
+  const Icon = loc.secure === "local" ? GlobeSimpleIcon : loc.secure ? LockSimpleIcon : WarningIcon;
+  return (
+    <span className={cx("flex min-w-0 items-center gap-1.5", className)} title={loc.full}>
+      <Icon size={14} weight={loc.secure === false ? "fill" : "bold"} aria-hidden className="shrink-0" />
+      {loc.secure === false && <span className="shrink-0 font-medium">Not secure ·</span>}
+      <span className="sr-only">On </span>
+      <span className="shrink-0 font-medium">{loc.site}</span>
+      {loc.path && <span aria-hidden className={cx("min-w-0 truncate", dim && "text-screen-ink-2")}>{loc.path}</span>}
+    </span>
+  );
+}
+
+export function AgentScreen({ agent, a, drive, headline, actual = false, compact = false, barActions = true, overlay, className }: {
   agent: Agent; a: AgentData; drive: Drive; headline: string; actual?: boolean; compact?: boolean;
   /** Put Take over / Give back in the screen's own bar (desktop). The phone shows 44 px buttons under the screen instead. */
-  barActions?: boolean; className?: string;
+  barActions?: boolean;
+  /** Rises from the bezel's bottom edge over the screen (the approval sheet). Rendered outside the dark bezel scope. */
+  overlay?: ReactNode;
+  className?: string;
 }) {
   const id = useId();
   const { driving, capturing } = drive;
@@ -129,24 +165,35 @@ export function AgentScreen({ agent, a, drive, headline, actual = false, compact
     ? capturing ? "Keys and mouse go to the agent's computer. Press Esc twice to stop typing there." : "You have control. Press Enter on the screen to type there, or Give back when you're done."
     : "Watch only. Take over, or press Enter on the screen, to use it yourself.";
 
+  const url = (a.status as { url?: string } | undefined)?.url;
+  const where = readLocation(url) && !beaming;
   const bar = driving ? (
     <>
-      <HandGrabbingIcon size={16} weight="bold" aria-hidden />
-      <span className="min-w-0 flex-1 truncate font-medium">You're driving<span className={cx(compact && "sr-only")}> · {agent.name} is waiting</span></span>
-      {!compact && <span className="hidden items-center gap-1 text-micro xl:inline-flex" aria-hidden>{capturing ? <><Kbd>Esc</Kbd><Kbd>Esc</Kbd> stop typing</> : <><Kbd>Enter</Kbd> type here</>}</span>}
-      {barActions && <Button ref={drive.giveBackRef} size="sm" variant="on-signal" onClick={drive.giveBack}>Give back to {agent.name}</Button>}
+      <HandGrabbingIcon size={16} weight="bold" aria-hidden className="shrink-0" />
+      <span className="shrink-0 font-medium">You're driving</span>
+      {where ? <Location url={url} dim={false} className="flex-1 border-l border-on-signal/35 pl-2" /> : <span className="flex-1" />}
+      {!compact && <span className="hidden shrink-0 items-center gap-1 text-micro xl:inline-flex" aria-hidden>{capturing ? <><Kbd>Esc</Kbd><Kbd>Esc</Kbd> stop typing</> : <><Kbd>Enter</Kbd> type here</>}</span>}
+      {barActions && <Button ref={drive.giveBackRef} size="sm" variant="on-signal" onClick={drive.giveBack} className="shrink-0">Give back to {agent.name}</Button>}
     </>
   ) : (
     <>
-      {a.paused ? <PauseIcon size={16} weight="bold" aria-hidden className="text-screen-ink-2" /> : <EyeIcon size={16} aria-hidden className="text-screen-ink-2" />}
-      <span className="min-w-0 flex-1 truncate text-screen-ink-2">{a.paused ? `Paused · ${agent.name} is waiting` : "Watch only"}</span>
-      {barActions && <Button ref={drive.takeOverRef} size="sm" variant="signal" onClick={() => drive.takeOver()} disabled={beaming || !a.connected} aria-describedby={hintId}>Take over</Button>}
+      {where ? <>
+        <Location url={url} className="flex-1 text-screen-ink" />
+        <span className="flex shrink-0 items-center gap-1.5 text-micro text-screen-ink-2">
+          {a.paused ? <PauseIcon size={13} weight="bold" aria-hidden /> : <EyeIcon size={13} aria-hidden />}
+          <span className={cx(compact && "sr-only")}>{a.paused ? "Paused" : "Watch only"}</span>
+        </span>
+      </> : <>
+        {a.paused ? <PauseIcon size={16} weight="bold" aria-hidden className="shrink-0 text-screen-ink-2" /> : <EyeIcon size={16} aria-hidden className="shrink-0 text-screen-ink-2" />}
+        <span className="min-w-0 flex-1 truncate text-screen-ink-2">{a.paused ? `Paused · ${agent.name} is waiting` : "Watch only"}</span>
+      </>}
+      {barActions && <Button ref={drive.takeOverRef} size="sm" variant="signal" onClick={() => drive.takeOver()} disabled={beaming || !a.connected} aria-describedby={hintId} className="shrink-0">Take over</Button>}
     </>
   );
 
   const alt = `${screenName}: ${headline}`;
   return (
-    <div className={className}>
+    <div className={cx("relative", className)}>
       <Bezel state={driving ? "driving" : "watching"} bar={bar} size={compact ? "sm" : "md"}>
         <div
           ref={drive.screenRef}
@@ -208,6 +255,7 @@ export function AgentScreen({ agent, a, drive, headline, actual = false, compact
           </div>
         )}
       </Bezel>
+      {overlay}
       <p id={hintId} className="sr-only">{hint}</p>
     </div>
   );

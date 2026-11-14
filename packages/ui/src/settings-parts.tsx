@@ -16,7 +16,7 @@ export const PROVIDER_NOTE: Record<string, string> = {
   openrouter: "One key for most models. Pay as you go.",
   openai: "GPT models with an OpenAI key.",
   anthropic: "Claude models with an Anthropic key.",
-  ollama: "Free. Runs on this computer.",
+  ollama: "No cost. Runs on this computer.",
 };
 
 /** Subscription brains: the agent signs in on its own screen, no key. */
