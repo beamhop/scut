@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.32.0 — Codex and opencode on your brain, tested for real
+
+- Codex and opencode now use the brain you picked in Beamhop (endpoint, model, key) instead of requiring a sign-in. Without a brain they still use the subscription you sign in to on the agent's screen.
+  - Codex: a `scut` model provider on the Responses API (OpenAI, OpenRouter, recent Ollama). Anthropic's API isn't supported by Codex, so that combination falls back to sign-in.
+  - opencode: an OpenAI-compatible (or Anthropic) provider, with image input declared so screenshots reach the model.
+  - The key reaches the CLIs through an environment variable, not a config file.
+- Fixed: Codex refused to run at all — its CLI dropped `--full-auto`. Agents now run it with its inner sandbox off, since the agent's whole computer is the sandbox and Beamhop's approvals still guard risky actions.
+- Live tests (real OpenRouter model): both Codex and opencode open a page on the agent's screen and report its heading.
+
 ## v0.31.1 — Beam by file from the command line
 
 - `scut export <agent> [--out FILE]` and `scut import FILE [--to DEST]` (passphrase prompted, or `SCUT_PASSPHRASE`). Smoke-tested between two separate Beamhop homes.

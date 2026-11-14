@@ -56,6 +56,8 @@ export function harnessEnv(ctx: HarnessContext): Record<string, string> {
     HOME: `${ctx.dataDir}/home`,
     PI_CODING_AGENT_DIR: `${ctx.dataDir}/home/.pi/agent`,
     PI_OFFLINE: "1",
+    // Key for the brain picked in Beamhop, for CLI harnesses configured to use it (see CliHarness.start).
+    ...(ctx.spec.model?.apiKey ? { SCUT_MODEL_KEY: ctx.spec.model.apiKey } : {}),
   };
 }
 
@@ -196,8 +198,26 @@ export class CliHarness implements Harness {
   async start() {
     const home = `${this.ctx.dataDir}/home`;
     const [cmd, ...args] = this.ctx.mcpCommand;
+    // With a brain (endpoint + model) picked in Beamhop, point the CLI at it; without one, the CLI uses the
+    // subscription you sign in to on the agent's screen.
+    const m = this.ctx.spec.model;
     if (this.kind === "codex") {
+      // Codex speaks the Responses API; OpenAI, OpenRouter and recent Ollama serve it. Anthropic's API isn't one of them.
+      const brain = m?.baseUrl && m.api !== "anthropic-messages"
+        ? [
+            `model = ${JSON.stringify(m.model)}`,
+            `model_provider = "scut"`,
+            "",
+            "[model_providers.scut]",
+            `name = "Beamhop"`,
+            `base_url = ${JSON.stringify(m.baseUrl)}`,
+            ...(m.apiKey ? [`env_key = "SCUT_MODEL_KEY"`] : []),
+            `wire_api = "responses"`,
+            "",
+          ]
+        : [];
       const toml = [
+        ...brain,
         "[mcp_servers.computer]",
         `command = ${JSON.stringify(cmd)}`,
         `args = ${JSON.stringify(args)}`,
@@ -210,9 +230,24 @@ export class CliHarness implements Harness {
         mcpServers: { computer: { type: "local", command: cmd, args, env: this.ctx.mcpEnv, tools: ["*"] } },
       });
     } else {
+      const anthropic = m?.api === "anthropic-messages";
       await writeJson(`${home}/.config/opencode/opencode.json`, {
         $schema: "https://opencode.ai/config.json",
         mcp: { computer: { type: "local", command: this.ctx.mcpCommand, environment: this.ctx.mcpEnv, enabled: true } },
+        ...(m?.baseUrl
+          ? {
+              model: `scut/${m.model}`,
+              provider: {
+                scut: {
+                  npm: anthropic ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible",
+                  name: "Beamhop",
+                  options: { baseURL: anthropic ? `${m.baseUrl.replace(/\/+$/, "")}/v1` : m.baseUrl, ...(m.apiKey ? { apiKey: "{env:SCUT_MODEL_KEY}" } : {}) },
+                  // Declare image input so screenshots reach the model (opencode assumes text-only for custom models).
+                  models: { [m.model]: { name: m.model, attachment: true, modalities: { input: ["text", "image"], output: ["text"] } } },
+                },
+              },
+            }
+          : {}),
       });
     }
     await mkdir(`${this.ctx.dataDir}/workspace`, { recursive: true });
@@ -222,7 +257,8 @@ export class CliHarness implements Harness {
   async prompt(text: string, onEvent: (e: HarnessEvent) => void): Promise<string> {
     const argv =
       this.kind === "codex"
-        ? ["codex", "exec", "--skip-git-repo-check", "--full-auto", text]
+        ? // The agent's whole computer is the sandbox; Beamhop's own approvals (request_approval) guard risky actions.
+          ["codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", text]
         : this.kind === "copilot"
           ? ["copilot", "-p", text, "--allow-all-tools"]
           : ["opencode", "run", text];
