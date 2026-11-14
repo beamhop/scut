@@ -307,8 +307,8 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
       </Field>}
 
       {pulling && (
-        <Progress label="Getting the agent computer ready (first time only)" value={pf!.total ? pf!.done / pf!.total : 0}
-          aside={pf!.total ? `${pf!.done} of ${pf!.total} parts` : "Starting"} valueText={pf!.total ? `${pf!.done} of ${pf!.total} parts downloaded` : "Starting the download"} />
+        <Progress label="Getting the agent computer ready (first time only)" value={pf!.total ? pf!.done / pf!.total : undefined}
+          aside={pf!.total ? `${pf!.done} of ${pf!.total} parts` : "Downloading"} valueText={pf!.total ? `${pf!.done} of ${pf!.total} parts downloaded` : "Downloading the agent computer"} />
       )}
       {pf?.state === "error" && !noHere && <Notice tone="info">{pf.error}</Notice>}
 

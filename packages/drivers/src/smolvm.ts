@@ -43,23 +43,32 @@ export class SmolvmDriver implements HostDriver {
   }
 
   /**
+   * First run, while you pick a brain: check a microVM can start here, then get the agent computer ready.
    * "Available" only says the hypervisor API is there; on some computers (VMs without nested virtualization, CI
-   * runners) no microVM can actually start. Boot a tiny one first, so the ladder can move on before an agent fails.
+   * runners) no microVM can actually start, so a tiny one boots first and the ladder can move on before an agent
+   * fails. Then a throwaway VM is made from the agent image itself: that is what downloads and caches it (smolvm
+   * pulls inside a helper VM, and `pullImage` only fills one machine's own storage), so Create starts in seconds.
+   * The download reports no progress from outside, so it shows as one step with no total.
    */
-  async prepare(_image: string, onProgress?: (p: { done: number; total: number }) => void) {
+  async prepare(image: string, onProgress?: (p: { done: number; total: number }) => void) {
     const M = await SmolvmDriver.load();
-    if (!M) throw new EngineUnavailable("smolvm", "smolvm engine not installed for this platform");
-    onProgress?.({ done: 0, total: 1 });
-    const name = `scut-vmcheck-${Date.now().toString(36)}`;
-    try {
-      await M.create({ name, image: process.env.SCUT_VMCHECK_IMAGE ?? "mirror.gcr.io/library/alpine:3.20", resources: { cpus: 1, memoryMb: 256, network: false }, detach: true, persistent: false });
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      if (NO_VM.test(msg)) throw new EngineUnavailable("smolvm", `A microVM can't start on this computer: ${msg.slice(0, 200)}`);
-      throw e;
-    } finally {
-      await M.delete(name).catch(() => {});
-    }
+    if (!M) throw new EngineUnavailable("smolvm", SmolvmDriver.loadError ?? "smolvm engine not available on this platform");
+    onProgress?.({ done: 0, total: 0 });
+    const boot = async (name: string, img: string, resources: Record<string, unknown>) => {
+      try {
+        await M.create({ name, image: img, resources, detach: true, persistent: false });
+      } catch (e: any) {
+        const msg = String(e?.message ?? e);
+        if (NO_VM.test(msg)) throw new EngineUnavailable("smolvm", `A microVM can't start on this computer: ${msg.slice(0, 200)}`);
+        throw e;
+      } finally {
+        await M.delete(name).catch(() => {});
+      }
+    };
+    const stamp = Date.now().toString(36);
+    await boot(`scut-vmcheck-${stamp}`, process.env.SCUT_VMCHECK_IMAGE ?? "mirror.gcr.io/library/alpine:3.20", { cpus: 1, memoryMb: 256, network: false });
+    // network: true like a real agent: smolvm keeps separate image caches for VMs with and without network.
+    await boot(`scut-warm-${stamp}`, image, { cpus: 1, memoryMb: 512, network: true });
     onProgress?.({ done: 1, total: 1 });
   }
 
