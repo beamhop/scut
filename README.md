@@ -5,16 +5,19 @@ AI agents that each have their own computer, live in your chat apps, and move be
 - **Their own computer.** Every agent runs in a sandbox with a Linux desktop and Chromium. Watch it live, click and type alongside it, or take control for logins and CAPTCHAs.
 - **Lives where you chat.** Telegram, Slack, Discord and Nostr. Pair once with `/pair <code>`; only you can approve risky actions, anyone in a channel can chat.
 - **A crew, not a bot.** All your agents share a private crew room (Nostr NIP-17) and can hand work to each other, with a loop guard so they never spin.
-- **Beam it.** Drag an agent onto a destination: its workspace, browser profile, chat history and memory travel encrypted; the new host gets the keys sealed to it; a signed lease guarantees one active copy. Failed beams roll back.
-- **Your models, your clouds.** Any Anthropic- or OpenAI-compatible endpoint (OpenRouter, Ollama, LM Studio), or your Claude/ChatGPT subscription through the Codex or Copilot CLI harness. Bring your own Fly.io, Render or Railway account.
-- **Safe defaults.** Autonomy ladder (ask / risky only / autonomous), daily token cap, Stop, owner-bound sign-in tokens, no Beamhop servers in the path.
+- **Beam it.** Drag an agent onto a destination: its workspace, browser profile, chat history, memory, skills and schedules travel encrypted; the new host gets the keys sealed to it; a signed lease guarantees one active copy. Failed beams roll back, and a beam interrupted by the app closing is rolled back or completed on the next start. A receipt on the tile says what came along.
+- **Beam by file.** Move an agent into a passphrase-locked `.beamhop` file and open it in Beamhop on any other computer — with no network path between the two. Whoever opens it becomes its owner.
+- **Your models, your clouds.** Any Anthropic- or OpenAI-compatible endpoint (OpenRouter, Ollama, LM Studio), or a ChatGPT/Copilot subscription through the Codex or Copilot CLI harness. Keys are checked before use and remembered on your computer only. Bring your own Fly.io, Render or Railway account.
+- **Learns and remembers.** Per-agent memory you can edit, Agent Skills (`SKILL.md`, paste or link), scheduled tasks in your local time with a run history and the screen at the end of each run.
+- **Safe defaults.** Autonomy ladder (ask / risky only / autonomous), daily token cap, Stop, Pause & let me drive, a plain-language safety check per agent, owner-bound sign-in tokens, a local API that refuses other websites, no Beamhop servers in the path.
 
 ## Quick start
 
 1. Download `scut` for your OS from the latest CI run (Actions → build → `scut-apps`), or build it: `./scripts/build-app.sh`.
 2. Run it. The app opens in its own window.
-3. Pick a model (paste an OpenRouter key, or choose a local model), describe your agent, press **Beam it in**.
+3. Pick a brain (paste an OpenRouter key, or choose a local Ollama model — it's checked before you continue), describe your agent, press **Create agent**.
 4. Optional: **+ Add a cloud** to connect Fly.io, Render or Railway, then drag your agent onto it.
+5. Moving to a new computer? **Beam to… → A file**, then **Open an agent file** on the other side.
 
 Agents use the public image `ghcr.io/beamhop/scut-agent:latest`. On Linux with KVM and on Apple Silicon they run as smolvm microVMs; elsewhere in Docker.
 
@@ -42,7 +45,9 @@ bun test tests/e2e.test.ts tests/ui.test.ts --timeout 600000
 OPENROUTER_API_KEY=… TELEGRAM_BOT_TOKEN=… bun test tests/live.test.ts --timeout 600000
 ```
 
-CLI: `scut create <name> [--harness pi|codex|copilot|opencode|mock] [--to <destination>]`, `scut ls`, `scut beam <agent> --to <destination>`, `scut rm <agent>`.
+CLI: `scut create <name> [--harness pi|codex|copilot|opencode|mock] [--to <destination>]`, `scut ls`, `scut beam <agent> --to <destination>`, `scut export <agent> [--out FILE]`, `scut import FILE [--to <destination>]`, `scut rm <agent>`.
+
+Checks: `bun run typecheck` (CI-enforced), `bun scripts/axe.ts <app-url>` for an accessibility audit (also a UI test).
 
 ## Status
 
