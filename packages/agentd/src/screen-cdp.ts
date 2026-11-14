@@ -172,7 +172,7 @@ export class CdpScreen implements Screen {
         ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
         : process.platform === "win32"
           ? [`${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`, `${process.env["ProgramFiles(x86)"]}\\Google\\Chrome\\Application\\chrome.exe`, `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`, `${process.env["ProgramFiles(x86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`, `${process.env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`]
-          : ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/microsoft-edge", "/snap/bin/chromium"];
+          : ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/microsoft-edge", "/usr/bin/chromium"]; // not snaps: see drivers/browser.ts
     return c.find((p) => existsSync(p)) ?? (process.env.SCUT_BROWSER === "chromium" ? "chromium" : undefined);
   }
 
@@ -324,8 +324,9 @@ export class CdpScreen implements Screen {
       this.thumbTimer = setInterval(async () => {
         const s = this.active && this.sessions.get(this.active);
         if (!s || !this.alive()) return;
+        const timer = this.thumbTimer;
         const r = await this.conn!.send<{ data: string }>("Page.captureScreenshot", { format: "jpeg", quality: 60, clip: { x: 0, y: 0, width: SCREEN.w, height: SCREEN.h, scale } }, s).catch(() => null);
-        if (!r) return;
+        if (!r || this.thumbTimer !== timer) return; // switched off while this one was being taken
         const f = Buffer.from(r.data, "base64");
         this.latestThumb = f;
         for (const l of this.thumbListeners) l(f);

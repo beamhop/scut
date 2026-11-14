@@ -29,8 +29,9 @@ export class DockerDriver implements HostDriver {
   static available(bin = "docker"): { ok: boolean; reason?: string } {
     const name = bin === "podman" ? "Podman" : "Docker";
     try {
-      const p = Bun.spawnSync([bin, "info", "--format", bin === "podman" ? "{{.Version.Version}}" : "{{.ServerVersion}}"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-      if (p.exitCode === 0) return { ok: true };
+      const p = Bun.spawnSync([bin, "info", "--format", bin === "podman" ? "{{.Host.OS}}" : "{{.OSType}}"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+      // Docker on Windows can be in Windows-containers mode: it answers, but can't run the (Linux) agent image.
+      if (p.exitCode === 0) return p.stdout.toString().trim() === "windows" ? { ok: false, reason: `${name} is set to Windows containers; switch it to Linux containers` } : { ok: true };
       return { ok: false, reason: `${name} is installed but not running` };
     } catch {
       return { ok: false, reason: `${name} isn't installed` };

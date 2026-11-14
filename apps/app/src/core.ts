@@ -405,6 +405,8 @@ export class Scut {
     nostr?: boolean | { relays?: string[]; ownerPubkey?: string };
     driver?: string;
     dailyTokenBudget?: number;
+    /** Internal: already moved down the ladder once for this create. */
+    _retried?: boolean;
   }): Promise<AgentRecord> {
     // Don't start a second download of the same image; and if setup found the engine can't run here, the ladder
     // has moved on by the time it settles (so look the driver up after).
@@ -437,7 +439,18 @@ export class Scut {
       dailyTokenBudget: o.dailyTokenBudget ?? 1_000_000, // default hard cap; 0 = none
     };
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
-    const inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
+    let inst: Instance;
+    try {
+      inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
+    } catch (e) {
+      // The engine can't run anything on this computer after all (found only now): move down the ladder, try once more.
+      if (!(e instanceof EngineUnavailable) || (o.driver ?? "local") !== "local" || o._retried) throw e;
+      console.error(`${e.engine} can't run here (${e.message}); trying the next way`);
+      await markBroken(this.home, e.engine as Engine, e.message);
+      await this.loadDrivers();
+      this.startPrefetch();
+      return this.create({ ...o, _retried: true });
+    }
     try {
       const hello = await (async () => {
         await waitHealthy(inst.endpoint);

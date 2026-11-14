@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { pruneBlobs, pullImage, type PulledImage } from "./oci.ts";
 import { freePort, portInUse } from "./util.ts";
+import { EngineUnavailable } from "./gvisor.ts";
 
 const exe = () => process.env.SCUT_WSL_EXE ?? "wsl.exe";
 
@@ -122,7 +123,9 @@ export class WslDriver implements HostDriver {
       await gunzipTo(img.layers[0].path, base);
       const imp = wsl(["--import", build, bdir, base, "--version", "2"], { timeout: 15 * 60_000 });
       await rm(base, { force: true });
-      if (imp.code !== 0) throw new Error(`Couldn't set up the agent computer in WSL: ${(imp.err || imp.out).trim().slice(0, 300)}`);
+      // The first import is also the first time WSL starts its VM: if that can't happen here (no virtualization,
+      // e.g. a VM without nesting), WSL isn't an option on this computer.
+      if (imp.code !== 0) throw new EngineUnavailable("wsl", `WSL can't run Linux here: ${(imp.err || imp.out).trim().replace(/\s+/g, " ").slice(0, 300)}`);
       try {
         for (const l of img.layers.slice(1)) {
           const r = wsl(["-d", build, "-u", "root", "--exec", "/bin/sh", "-c", APPLY_LAYER], { stdin: l.path, timeout: 30 * 60_000 });

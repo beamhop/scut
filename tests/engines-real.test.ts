@@ -31,13 +31,26 @@ afterAll(async () => {
   for (const a of [...(scut?.agents ?? [])]) await scut.remove(a.id).catch(() => {});
 });
 
-test.skipIf(!target)(`a whole agent on the real ${target ?? "engine"}: desktop, chat with screenshots`, async () => {
-  process.env.SCUT_LOCAL_DRIVER = target!;
+test.skipIf(!target)(`the real ${target ?? "engine"}: a whole agent if it can run here, else the app notices and moves on`, async () => {
+  process.env.SCUT_LOCAL_DRIVER = "";
+  delete process.env.SCUT_LOCAL_DRIVER;
   const { Scut } = await import("../apps/app/src/core.ts");
   scut = await Scut.open();
+  expect(scut.local.engine).toBe(target);
   scut.startPrefetch();
   const t0 = Date.now();
+  while (Date.now() - t0 < 1_800_000 && (scut.prefetch.state === "pulling" || (scut.prefetch.state === "idle"))) await Bun.sleep(1000);
+  await Bun.sleep(2000); // a fallback restarts the setup for the next engine
   while (scut.prefetch.state === "pulling" && Date.now() - t0 < 1_800_000) await Bun.sleep(1000);
+  const saved = JSON.parse(require("node:fs").readFileSync(join(process.env.SCUT_HOME!, "engine.json"), "utf8"));
+  if (scut.local.engine !== target) {
+    // It said "available" but can't run anything here (e.g. a CI VM without nested virtualization).
+    console.log(`${target} can't run here: ${saved.broken?.[target!]?.reason}`);
+    console.log(`now: ${scut.local.engine ?? "no engine"}; setup: ${scut.prefetch.state}${scut.prefetch.error ? ` (${scut.prefetch.error})` : ""}`);
+    expect(saved.broken?.[target!]?.reason).toBeTruthy();
+    if (!scut.local.engine) expect(scut.prefetch.error).toContain("sandbox");
+    return;
+  }
   expect(scut.prefetch.state).toBe("ready");
   const rec = await scut.create({ name: "Real", harness: "mock" });
   const ws = new WebSocket(`${rec.current.endpoint.replace(/^http/, "ws")}/ws?auth=${scut.auth(rec.current.endpoint)}`);
@@ -52,6 +65,7 @@ test.skipIf(!target)(`a whole agent on the real ${target ?? "engine"}: desktop, 
   ws.send(JSON.stringify({ t: "chat", text: "hello real engine" }));
   const t = await reply;
   ws.close();
+  console.log(`booted a whole agent on ${target}: ${t}`);
   expect(t).toContain("message #1");
   expect(t).toMatch(/screenshot \d{4,} bytes/);
 }, 2_400_000);

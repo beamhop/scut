@@ -46,8 +46,7 @@ jobs:
       - if: ${{ !cancelled() }}
         run: bun test tests/ladder-fallback.test.ts --timeout 300000
       - if: ${{ !cancelled() }}
-        name: gVisor as a normal user (blocked by AppArmor on Ubuntu 24.04; the ladder must say so and move on)
-        continue-on-error: true
+        name: gVisor as a normal user (AppArmor blocks it on Ubuntu 24.04; the self-test must say so)
         run: bun test tests/gvisor.test.ts --timeout 1500000
       - if: ${{ !cancelled() }}
         run: sudo -E env "PATH=$PATH" bun test tests/gvisor.test.ts --timeout 1500000

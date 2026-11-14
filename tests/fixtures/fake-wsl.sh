@@ -28,8 +28,9 @@ case "$1" in
     while [ "$1" != "--exec" ]; do shift; done; shift
     mkdir -p "$r/proc" "$r/dev" "$r/sys" "$r/tmp"
     mountpoint -q "$r/proc" || mount -t proc proc "$r/proc"
-    mountpoint -q "$r/dev" || mount --rbind /dev "$r/dev"
-    mountpoint -q "$r/sys" || mount --rbind /sys "$r/sys"
+    # Private: unmounting these later must never propagate back to the host's /dev and /sys.
+    mountpoint -q "$r/dev" || { mount --rbind /dev "$r/dev" && mount --make-rprivate "$r/dev"; }
+    mountpoint -q "$r/sys" || { mount --rbind /sys "$r/sys" && mount --make-rprivate "$r/sys"; }
     echo $$ >> "$S/pids-$name"
     exec chroot "$r" "$@" ;;
   *) echo "fake wsl: unknown $*" >&2; exit 2 ;;

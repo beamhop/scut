@@ -1,6 +1,6 @@
 // The browser for agents that run directly on a computer: Chrome, Edge or Chromium if one is installed (used with
 // a profile of the agent's own, never the person's), otherwise a headless Chrome for Testing downloaded once.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { run } from "./util.ts";
 
@@ -11,8 +11,20 @@ export function installedBrowsers(): string[] {
       ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", `${env.HOME}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`]
       : process.platform === "win32"
         ? [`${env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`, `${env["ProgramFiles(x86)"]}\\Google\\Chrome\\Application\\chrome.exe`, `${env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`, `${env["ProgramFiles(x86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`, `${env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`]
-        : ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/microsoft-edge", "/snap/bin/chromium"];
-  return c.filter((p) => existsSync(p));
+        : ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/microsoft-edge", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
+  // A snap browser (Ubuntu's chromium) is confined: it can't use a profile in Beamhop's folder. Download one instead.
+  return c.filter((p) => existsSync(p) && !isSnap(p));
+}
+
+function isSnap(p: string): boolean {
+  try {
+    const real = realpathSync(p);
+    if (real.includes("/snap/")) return true;
+    // Ubuntu's /usr/bin/chromium-browser is a small script that runs the snap.
+    return statSync(real).size < 64 * 1024 && /\bsnap\b/.test(readFileSync(real, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 const CFT = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";

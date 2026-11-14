@@ -43,13 +43,21 @@ test.skipIf(!linux)("layers apply in order with whiteouts", async () => {
 
 const reachable = linux && (await fetch(`http://${parseRef(IMAGE).registry}/v2/`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => IMAGE.startsWith("ghcr.io")));
 
-test.skipIf(!linux)("downloads the pinned runsc and passes its self-test", async () => {
+// Ubuntu 23.10+ (AppArmor) keeps normal users from what runsc needs: there, the right answer is "no", with a reason.
+const restricted = linux && process.getuid?.() !== 0 && (() => { try { return readFileSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8").trim() === "1"; } catch { return false; } })();
+let usable = false;
+
+test.skipIf(!linux)("downloads the pinned runsc and its self-test tells the truth", async () => {
   const a = await GvisorDriver.availability(HOME, { download: true });
-  console.log("gvisor availability:", JSON.stringify(a));
-  expect(a.available).toBe(true);
+  console.log("gvisor availability:", JSON.stringify(a), restricted ? "(AppArmor restricts user namespaces here)" : "");
+  usable = a.available;
+  if (restricted) {
+    expect(a.available).toBe(false);
+    expect(a.reason).toContain("user namespaces");
+  } else expect(a.available).toBe(true);
 }, 300_000);
 
-test.skipIf(!reachable)("boots the agent image without Docker, revives it, and removes it", async () => {
+test.skipIf(!reachable || restricted)("boots the agent image without Docker, revives it, and removes it", async () => {
   const d = new GvisorDriver({ home: HOME });
   const seen: { done: number; total: number }[] = [];
   await d.prepare(IMAGE, (p) => seen.push(p));

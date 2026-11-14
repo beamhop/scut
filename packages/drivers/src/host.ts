@@ -206,6 +206,10 @@ export class HostProcessDriver implements HostDriver {
       if (h.service === "systemd") run(["systemctl", "--user", "daemon-reload"]);
     }
     if (h.pid) killTree(h.pid);
+    // The service manager may leave agentd's own children (browser, harness) behind, notably on Windows: stop the
+    // process tree agentd says it is.
+    const own = Number((await readFile(join(d, "data", ".host", "pid"), "utf8").catch(() => "")).trim());
+    if (own && own !== process.pid) killTree(own);
     // Whatever is still holding the port (agentd started some other way, e.g. by the service) goes too.
     await waitPortFree(h.port, 10_000);
   }
@@ -261,7 +265,10 @@ export class HostProcessDriver implements HostDriver {
   async destroy(inst: Instance) {
     const name = inst.meta?.name ?? inst.instanceId;
     await this.stop(name);
-    await rm(this.dir(name), { recursive: true, force: true });
+    // Windows keeps a file locked for a moment after its process exits.
+    for (let i = 0; ; i++) {
+      try { await rm(this.dir(name), { recursive: true, force: true }); break; } catch (e) { if (i >= 20) throw e; await Bun.sleep(500); }
+    }
   }
 }
 

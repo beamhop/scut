@@ -28,6 +28,8 @@ const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[agentd]
 
 // ---------- persistent identity of this host (excluded from bundles) ----------
 await mkdir(`${DATA}/.host`, { recursive: true });
+// Without a sandbox, the app stops an agent by this pid (and everything it started: browser, harness).
+await Bun.write(`${DATA}/.host/pid`, String(process.pid));
 const hostKeyFile = Bun.file(`${DATA}/.host/key`);
 const hostSk = (await hostKeyFile.exists()) ? hexToBytes((await hostKeyFile.text()).trim()) : generateSecretKey();
 if (!(await hostKeyFile.exists())) await Bun.write(hostKeyFile, bytesToHex(hostSk));

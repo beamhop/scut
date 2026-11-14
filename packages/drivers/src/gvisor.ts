@@ -71,7 +71,7 @@ export class GvisorDriver implements HostDriver {
     rm(state, { recursive: true, force: true }).catch(() => {});
     if (r.code === 0) return { available: true };
     const why = (r.err.trim().split("\n").pop() ?? "").slice(0, 200);
-    return { available: false, reason: /user namespace|EPERM|operation not permitted/i.test(r.err)
+    return { available: false, reason: /user namespace|EPERM|operation not permitted|permission denied/i.test(r.err)
       ? `This computer doesn't allow sandboxes for normal users (user namespaces are restricted). ${why}`
       : `The sandbox engine couldn't start here: ${why}` };
   }
