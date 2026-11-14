@@ -726,7 +726,11 @@ Bun.serve<WsData>({
       } else if (m.t === "settings" && spec) {
         if (m.autonomy && ["ask", "risky", "auto"].includes(m.autonomy)) spec.autonomy = m.autonomy;
         if (typeof m.dailyTokenBudget === "number" && m.dailyTokenBudget >= 0) spec.dailyTokenBudget = Math.floor(m.dailyTokenBudget);
-        if (typeof m.persona === "string") spec.persona = m.persona.slice(0, 2000);
+        if (typeof m.persona === "string" && m.persona.slice(0, 2000) !== (spec.persona ?? "")) {
+          spec.persona = m.persona.slice(0, 2000);
+          // the job description lives in the system prompt: reload the harness once it's free
+          restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
+        }
         if (m.channels) {
           const ch = { ...spec.channels };
           if (m.channels.telegram === null) delete ch.telegram;

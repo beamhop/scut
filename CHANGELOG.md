@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.38.0 — Change what an agent does
+
+- Settings has **What {name} does**: edit the job description you gave when creating the agent. Saving reloads the agent's brain once it's free, so the new description reaches the model's instructions (before, it was stored but never used until a restart).
+- Test: an edited description shows up in the next request's system prompt.
+
 ## v0.37.0 — Remove an agent
 
 - There was no way to delete an agent from the app. Settings now ends with **Remove {name}…**: a second step spells out what goes (its computer, files, logins, memory and chats, everywhere it has lived), offers **Move it to a file** instead, and only then removes it for good.

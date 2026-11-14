@@ -820,6 +820,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         ))}
       </div>
       <SafetyCheck a={a} agent={agent} />
+      <PersonaSettings a={a} name={agent.name} />
       <MemorySettings a={a} />
       <SkillSettings a={a} />
       <ChannelSettings a={a} />
@@ -837,6 +838,19 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
       </div>
       <RemoveAgent agent={agent} />
+    </div>
+  );
+}
+
+function PersonaSettings({ a, name }: { a: ReturnType<typeof useAgent>; name: string }) {
+  const saved = a.settings?.persona ?? "";
+  const [text, setText] = useState(saved);
+  useEffect(() => setText(saved), [saved]);
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">What {name} does</div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} aria-label={`What ${name} does`} placeholder="e.g. Keep an eye on my inbox and draft replies for me to approve" className="h-20 w-full rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+      {text !== saved && <button onClick={() => a.send({ t: "settings", persona: text })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>}
     </div>
   );
 }

@@ -776,3 +776,24 @@ describe("v0.36: no leftover hosts", () => {
     scut.get(rec.id).history = again.get(rec.id).history;
   });
 });
+
+describe("v0.38: edit what an agent does", () => {
+  test("a new job description reaches the model's system prompt", async () => {
+    const rec = await scut.create({
+      name: "Reroled",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "settings");
+    c.send({ t: "settings", persona: "Track ferry timetables PERSONA-MARKER-42" });
+    await c.waitFor<any>((m) => m.t === "settings" && m.persona?.includes("PERSONA-MARKER-42"));
+    await Bun.sleep(4000); // harness reloads when idle
+    const before = llm.requests.length;
+    c.send({ t: "chat", text: "hi" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
+    const sys = JSON.stringify(llm.requests.slice(before)[0].messages.filter((m: any) => m.role === "system"));
+    expect(sys).toContain("PERSONA-MARKER-42");
+    c.close();
+  });
+});
