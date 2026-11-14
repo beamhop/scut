@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.1 — 2026-11-14 02:46
+
+- Beams of big workspaces: agentd accepted at most 128 MB per request (Bun's default), so an agent with a large workspace or browser profile could not beam. Raised to 8 GB (configurable). Tested: a 300 MB workspace beams in ~18 s with an identical sha256 on arrival.
+- README rewritten for the current product.
+
 ## v0.12.0 — 2026-11-14 02:44
 
 - smolvm driver rewritten on the official `smolmachines` SDK (v1.32.4, Apache-2.0): embedded microVM engine for Linux (KVM) and Apple Silicon, detached machines that outlive the app, published port 8080, outbound network. The driver is loaded lazily as an optional native dependency.

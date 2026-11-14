@@ -452,7 +452,9 @@ function authed(req: Request, url: URL) {
 Bun.serve<WsData>({
   port: PORT,
   hostname: "0.0.0.0",
-  idleTimeout: 120,
+  idleTimeout: 255,
+  // Beam bundles carry the whole workspace + browser profile; Bun's default request limit is 128 MB.
+  maxRequestBodySize: Number(process.env.SCUT_MAX_BUNDLE_MB ?? 8192) * 1024 * 1024,
   async fetch(req, server) {
     const url = new URL(req.url);
     const p = url.pathname;

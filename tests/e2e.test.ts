@@ -421,3 +421,18 @@ describe("v0.10: Slack (Socket Mode) and Discord (Gateway), mocked", () => {
     c.close();
   });
 });
+
+describe("big workspaces", () => {
+  test("beams a 300 MB workspace (above Bun's 128 MB default body limit)", async () => {
+    const rec = await scut.create({ name: "Hefty", harness: "mock" });
+    const name = (rec.current as any).meta.name;
+    const w = Bun.spawnSync(["docker", "exec", name, "sh", "-c", "head -c 300000000 /dev/urandom > /data/workspace/big.bin && sha256sum /data/workspace/big.bin"], { stdout: "pipe" });
+    const before = w.stdout.toString().split(" ")[0];
+    const t0 = Date.now();
+    await scut.beam(rec.id, "sim-cloud", { destroySource: true });
+    console.log(`300 MB beam took ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    const name2 = (scut.get(rec.id).current as any).meta.name;
+    const after = Bun.spawnSync(["docker", "exec", name2, "sha256sum", "/data/workspace/big.bin"], { stdout: "pipe" }).stdout.toString().split(" ")[0];
+    expect(after).toBe(before);
+  });
+});
