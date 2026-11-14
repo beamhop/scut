@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.23.0 — 75 MB lighter
+
+- The UI build now starts clean and ships without inline source maps. Stale chunks had piled up to 55 MB and were embedded in every app binary and in the agent image; the UI is now 432 KB.
+- App binaries: Linux x64 185 MB → 110 MB, macOS arm64 → 90 MB, Windows → 116 MB. Agent image 3.76 GB → 3.6 GB.
+- Smoke-tested the compiled Linux binary: serves the current UI and API with nothing installed.
+- UI test for creating an agent no longer depends on whether a brain was saved by an earlier test.
+
 ## v0.22.0 — Local models and model suggestions
 
 - Picking "Local (Ollama)" looks for Ollama on this computer right away: it uses an installed model, says how many it found, or explains what's missing ("Ollama isn't running…", "no models yet: ollama pull …").

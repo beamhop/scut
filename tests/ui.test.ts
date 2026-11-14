@@ -151,9 +151,9 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.waitForFunction(() => document.body.innerText.includes("New agent"), { timeout: 10_000 });
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "+ New agent")!.click());
   await page.waitForSelector('[role="dialog"]');
-  // no brain saved yet, so it starts at "Pick a brain"; the demo needs none
-  await page.waitForFunction(() => document.body.textContent!.includes("Pick a brain"), { timeout: 10_000 });
-  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Skip this")!.click());
+  // With no brain saved it starts at "Pick a brain" (the demo needs none: skip); with one, it goes straight to the details.
+  await Bun.sleep(1000); // let the saved-brain lookup settle
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Skip this")?.click());
   await page.waitForSelector('[aria-label="Name"]');
   await page.type('[aria-label="Name"]', "Uiborn");
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
