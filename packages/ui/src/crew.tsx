@@ -1,115 +1,53 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun } from "@scut/protocol";
-import { nip19 } from "nostr-tools";
-import qrcode from "qrcode-generator";
-import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, STAGE_LABEL, ChatLine, Approval, Settings, Pairing, Mascot, humanize, needsText, cost, STATE_META, StateChip, plural, bytesLabel, TEMPLATES, HARNESSES, PRESETS, npubToHex, KEYMAP, TELEGRAM_SETUP, CLOUD_SETUP, ago, Cursor, Toast, useToasts, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
-import { useAgent } from "./useAgent.ts";
-import { BeamMenu, ExportDialog, ImportDialog, BeamReceipt, BeamProgress } from "./beam.tsx";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ArrowSquareOutIcon, PaperPlaneRightIcon, XIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
+import { Agent, Destination, api, CLOUD_SETUP, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
+import { ExportDialog, ImportDialog, placeLabel, beamInFlight } from "./beam.tsx";
 import { CreateAgent } from "./create.tsx";
 import { DesignPage } from "./design.tsx";
-import { AgentView, TelegramPairQr, PhoneLink } from "./agentView.tsx";
-import { SettingsPanel, BrainSettings, PersonaSettings, RemoveAgent, safetyItems, SafetyCheck, SkillSettings, MemoryText, MemorySettings, ChannelStatus, ChannelSettings, SecretRow, RecentRuns, Schedules } from "./settings.tsx";
+import { AgentView } from "./agentView.tsx";
+import { Bench, Unit, AutostartToggle, type UnitReport, type PendingBeam } from "./bench.tsx";
+import { Button, IconButton, Dialog, Field, Input, Plate, announce, clock, durationWords, money, usdToEur, cx, useCommands } from "./ui/index.ts";
 
+// Names other screens still import from here (old barrel style). Kept so their files keep compiling.
+export { AutostartToggle };
+export const Tile = Unit;
+export const Dock = Bench;
 
-// ---------------- tile ----------------
-export function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests: Destination[]; onOpen: () => void; onBeam: (to: string) => void; onStatus: (id: string, s: string) => void }) {
-  const a = useAgent(agent, true, 2, true); // tiles: small 480 px frames
-  const [menu, setMenu] = useState(false);
-  const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
-  // A chat app that can't sign in is quiet trouble (messages never arrive): surface it on the tile when idle.
-  const broken = Object.entries(a.pairing?.channels ?? {}).find(([, c]) => c.error)?.[0];
-  const brokenText = broken && a.state === "running" ? `${broken[0].toUpperCase()}${broken.slice(1)} can't sign in — fix it in Settings` : undefined;
-  const now = needsText(a) ?? brokenText ?? a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
-  const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
-  const needs = a.state === "stuck" || a.approvals.length > 0;
-  useEffect(() => { onStatus(agent.id, needs ? "stuck" : a.state); }, [needs, a.state]);
-  return (
-    <div
-      tabIndex={0}
-      draggable={!beaming}
-      onDragStart={(e) => e.dataTransfer.setData("text/agent", agent.id)}
-      onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === "Enter") onOpen(); if (e.key.toLowerCase() === "b") { e.preventDefault(); setMenu(true); } }}
-      aria-label={`${agent.name}, ${STATE_META[a.state]?.label}, on ${where}. Enter to open, B to beam.`}
-      className={`group relative cursor-pointer overflow-hidden rounded-2xl bg-panel outline-none transition focus-visible:ring-2 focus-visible:ring-beam ${needs ? "glow-stuck" : "ring-1 ring-white/10"}`}
-    >
-      <div className="relative aspect-[16/10] bg-black">
-        {a.frame ? <img src={a.frame} alt="" className="h-full w-full object-cover" draggable={false} /> : <div className="grid h-full place-items-center font-mono text-sm text-slate-600">{`Starting ${agent.name}'s screen…`}</div>}
-        <div className="absolute left-2 top-2"><StateChip state={needs ? "stuck" : a.state} /></div>
-        <button onClick={(e) => { e.stopPropagation(); setMenu(!menu); }} className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-beam opacity-80 transition hover:opacity-100 focus:opacity-100" aria-haspopup="menu">Beam to…</button>
-        {menu && <BeamMenu agent={agent} dests={dests} onBeam={onBeam} onClose={() => setMenu(false)} />}
-        {beaming && <BeamProgress agent={agent} />}
-        {a.approvals.length > 0 && (
-          <div onClick={(e) => e.stopPropagation()} className="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-lg bg-amber-400 px-3 py-2 text-sm text-black shadow-lg">
-            <span className="min-w-0 flex-1 truncate font-medium">{agent.name} wants to {humanize(a.approvals[0].title)}</span>
-            <button className="rounded-full bg-black px-3 py-1 text-amber-300" onClick={() => a.send({ t: "approval", id: a.approvals[0].id, ok: true })}>Allow</button>
-            <button className="rounded-full border border-black px-3 py-1" onClick={() => a.send({ t: "approval", id: a.approvals[0].id, ok: false })}>Don't</button>
-          </div>
-        )}
-      </div>
-      <div className="flex items-center gap-3 p-3">
-        <Mascot variant={agent.mascot} state={needs ? "stuck" : a.state} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 truncate font-semibold">{agent.name}</span>
-            <span className="shrink-0 whitespace-nowrap rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
-          </div>
-          <div className="truncate font-mono text-[12px] text-slate-400">{now}</div>
+// ---------------- notices (information only; anything that needs a decision goes in the tray or on the unit) ----------------
+type Notice = { id: number; text: string; tone: "ok" | "err" };
+function useNotices() {
+  const [items, setItems] = useState<Notice[]>([]);
+  const push = useCallback((text: string, tone: Notice["tone"] = "ok") => {
+    const id = Date.now() + Math.random();
+    setItems((t) => [...t.slice(-2), { id, text, tone }]);
+    announce(text, { assertive: tone === "err" });
+    setTimeout(() => setItems((t) => t.filter((x) => x.id !== id)), tone === "err" ? 14_000 : 9000);
+  }, []);
+  const view = (
+    <div className="pointer-events-none fixed bottom-4 left-4 z-40 flex w-[min(400px,calc(100vw-32px))] flex-col gap-2">
+      {items.map((t) => (
+        <div key={t.id} className="pointer-events-auto flex animate-pop items-start gap-2.5 rounded-unit border border-line bg-surface px-3.5 py-2.5 text-body text-ink shadow-float">
+          {t.tone === "err" ? <WarningIcon size={16} weight="bold" aria-hidden className="mt-0.5 shrink-0 text-err" /> : <CheckIcon size={16} weight="bold" aria-hidden className="mt-0.5 shrink-0" />}
+          <p className="min-w-0 flex-1">{t.text}</p>
+          <IconButton size="sm" label="Dismiss" icon={XIcon} className="-my-1 -mr-1.5" onClick={() => setItems((x) => x.filter((y) => y.id !== t.id))} />
         </div>
-        {a.stats && <div className="text-right font-mono text-[11px] leading-4 text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">{a.stats.cpu}% CPU · {(a.stats.memMb / 1024).toFixed(1)} GB<br />{cost(agent, a.stats.tokens)}</div>}
-      </div>
-      <BeamReceipt agent={agent} where={where} from={dests.find((d) => d.id === agent.beam?.from)?.label ?? agent.beam?.from ?? "here"} />
-      {agent.beam?.stage === "failed" && <div className="bg-red-500/15 px-3 py-1.5 text-xs text-red-300">Beam failed, {agent.name} stayed put: {agent.beam.error?.slice(0, 120)}</div>}
+      ))}
     </div>
   );
+  return { push, view };
 }
 
-// ---------------- destination dock ----------------
-/** Agents on this computer come back when Beamhop starts; starting it at login keeps them going after a reboot. */
-export function AutostartToggle() {
-  const [on, setOn] = useState<boolean>();
-  useEffect(() => { fetch("/api/autostart").then((r) => r.json()).then((j) => setOn(j.on)).catch(() => {}); }, []);
-  if (on === undefined) return null;
-  return (
-    <label className="ml-auto flex cursor-pointer items-center gap-2 normal-case tracking-normal">
-      <input type="checkbox" checked={on} onChange={async (e) => { const j = await (await fetch("/api/autostart", { method: "POST", body: JSON.stringify({ on: e.target.checked }) })).json(); setOn(j.on); }} className="accent-cyan-400" />
-      Open Beamhop when I log in
-    </label>
-  );
-}
-
-export function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; onDrop: (dest: string, agentId: string) => void; dragging: boolean; onAddCloud: () => void }) {
-  const [hot, setHot] = useState<string>();
-  return (
-    <nav aria-label="Where your agents live" className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
-      <div className="mb-2 flex items-center font-mono text-[11px] uppercase tracking-widest text-slate-400">
-        <span>Where your agents live · drag one here to move it</span>
-        <AutostartToggle />
-      </div>
-      <div className="flex gap-3 overflow-x-auto">
-        {dests.map((d) => (
-          <div key={d.id}
-            onDragOver={(e) => { e.preventDefault(); setHot(d.id); }}
-            onDragLeave={() => setHot(undefined)}
-            onDrop={(e) => { e.preventDefault(); setHot(undefined); onDrop(d.id, e.dataTransfer.getData("text/agent")); }}
-            className={`min-w-48 rounded-xl border bg-panel2 px-4 py-3 transition ${hot === d.id ? "drop-hot border-beam" : dragging ? "border-beam/40" : "border-white/10"}`}>
-            <div className="font-semibold">{d.label}</div>
-            <div className="font-mono text-[11px] text-slate-400">{d.monthlyUsd ? `~$${d.monthlyUsd}/month per agent` : d.id === "local" ? "Free · runs on this computer" : "Free"}</div>
-          </div>
-        ))}
-        <button onClick={onAddCloud} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">+ Add a cloud</button>
-        <button onClick={() => dispatchEvent(new Event("beamhop:import"))} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">Open an agent file</button>
-      </div>
-    </nav>
-  );
-}
+// ---------------- add a cloud ----------------
 export function AddCloud({ onClose, onAdded, helpers }: { onClose: () => void; onAdded: (label: string) => void; helpers: Agent[] }) {
   const [pick, setPick] = useState("fly");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const name = useId();
   const p = PROVIDERS.find((x) => x.id === pick)!;
+  const usd = (x: (typeof PROVIDERS)[number]) => Number(x.price.match(/\d+(\.\d+)?/)?.[0] ?? 0);
   async function connect() {
+    if (!token.trim() || busy) return;
     setBusy(true);
     setError(undefined);
     const r = await fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: pick, token }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
@@ -118,85 +56,104 @@ export function AddCloud({ onClose, onAdded, helpers }: { onClose: () => void; o
     else onAdded(p.label);
   }
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label="Add a cloud" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-3xl bg-panel p-7 ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
-        <div className="text-xl font-semibold">Add a cloud</div>
-        <p className="mb-4 text-sm text-slate-400">Run agents on your own cloud account, even when this computer is off. You pay the provider directly.</p>
-        <div className="grid grid-cols-3 gap-2">
-          {PROVIDERS.map((x) => (
-            <button key={x.id} onClick={() => setPick(x.id)} className={`rounded-xl border bg-panel2 p-3 text-left ${pick === x.id ? "border-beam" : "border-white/10 hover:border-beam/50"}`}>
-              <div className="font-medium">{x.label}</div>
-              <div className="mt-1 text-sm text-slate-200">{x.price}</div>
-            </button>
-          ))}
-        </div>
-        <ol className="mt-4 space-y-2 text-sm">
-          <li>1. <a className="text-beam underline" href={p.tokenUrl} target="_blank">Get your {p.label} key</a> — {p.hint}</li>
-          <li>2. Paste your key here:</li>
+    <Dialog open onClose={onClose} title="Add a cloud" size="md"
+      description="Run agents on your own cloud account, so they keep working while this computer is off. You pay the provider directly."
+      footer={<>
+        <Button variant="quiet" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={!token.trim()} loading={busy} onClick={connect}>{busy ? "Checking…" : "Connect"}</Button>
+      </>}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); connect(); }}>
+        <fieldset>
+          <legend className="mb-1.5 text-small font-medium text-ink">Provider</legend>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {PROVIDERS.map((x) => (
+              <label key={x.id} className={cx("relative flex cursor-pointer flex-col rounded-control border px-3 py-2.5 transition-colors", pick === x.id ? "border-ink bg-surface-2" : "border-line-strong hover:bg-surface-2")}>
+                <input type="radio" name={name} value={x.id} checked={pick === x.id} onChange={() => { setPick(x.id); setError(undefined); }} className="absolute inset-0 m-0 cursor-pointer appearance-none rounded-control" />
+                <span className="text-body font-medium text-ink">{x.label}</span>
+                <span className="text-small tabular-nums text-ink-2">{money(usdToEur(usd(x)), { approx: true, period: "month" })} per agent</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <ol className="list-decimal space-y-1 pl-5 text-body text-ink-2 marker:text-ink-3">
+          <li><a className="inline-flex items-center gap-1 font-medium text-ink underline underline-offset-2" href={p.tokenUrl} target="_blank" rel="noreferrer">Get your {p.label} key<ArrowSquareOutIcon size={13} aria-hidden /><span className="sr-only"> (opens in a new tab)</span></a>. {p.hint}</li>
+          <li>Paste it below. It stays on this computer.</li>
         </ol>
-        <input value={token} onChange={(e) => setToken(e.target.value)} type="password" aria-label={`${p.label} token`} placeholder={`${p.label} token`} className="mt-2 w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam" />
-        {error && <div className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
+        <Field label={`${p.label} token`} error={error}>
+          <Input mono type="password" autoComplete="off" aria-label={`${p.label} token`} placeholder="Paste the token" value={token} onChange={(e) => setToken(e.target.value)} />
+        </Field>
         {helpers.length > 0 && (
-          <div className="mt-4 rounded-xl bg-panel2 p-3 text-sm">
-            <div className="mb-2 text-slate-300">Or let an agent do the signup on its screen while you watch:</div>
-            <div className="flex flex-wrap gap-2">
+          <div className="rounded-control bg-surface-2 px-3 py-2.5">
+            <p className="text-small text-ink-2">Or let an agent do the signup on its screen while you watch. You enter any payment details yourself.</p>
+            <div className="mt-2 flex flex-wrap gap-2">
               {helpers.slice(0, 4).map((h) => (
-                <button key={h.id} onClick={() => { helpOn(h, CLOUD_SETUP(p.label, p.tokenUrl)); onClose(); }} className="rounded-full bg-white/10 px-3 py-1 hover:bg-white/20">Ask {h.name}</button>
+                <Button key={h.id} size="sm" onClick={() => { helpOn(h, CLOUD_SETUP(p.label, p.tokenUrl)); onClose(); }}>
+                  <Plate pubkey={h.agentPubkey} name={h.name} size="sm" />Ask {h.name}
+                </Button>
               ))}
             </div>
           </div>
         )}
-        <div className="mt-5 flex justify-between">
-          <button onClick={onClose} className="text-slate-400 hover:text-white">Cancel</button>
-          <button disabled={busy || !token.trim()} onClick={connect} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Checking…" : "Connect"}</button>
-        </div>
-      </div>
-    </div>
+        <button type="submit" hidden />
+      </form>
+    </Dialog>
   );
 }
 
 // ---------------- crew room ----------------
-export function CrewRoomPanel({ onClose, agentNames }: { onClose: () => void; agentNames: string[] }) {
+export function CrewRoomPanel({ onClose, agentNames, agents = [] }: { onClose: () => void; agentNames: string[]; agents?: Agent[] }) {
   const [data, setData] = useState<{ enabled: boolean; lines: { name: string; text: string; ts: number }[]; members: { name: string; kind: string }[] }>();
   const [text, setText] = useState("");
-  const end = useRef<HTMLDivElement>(null);
+  const log = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const load = () => fetch("/api/crew").then((r) => r.json()).then(setData).catch(() => {});
     load();
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => { const box = end.current?.parentElement; if (box) box.scrollTop = box.scrollHeight; }, [data?.lines.length]);
+  useEffect(() => { const box = log.current; if (box) box.scrollTop = box.scrollHeight; }, [data?.lines.length]);
+  const isMe = (n: string) => n === "You" || n === "Owner";
+  const pub = (n: string) => agents.find((a) => a.name === n)?.agentPubkey;
   return (
-    <aside className="fixed inset-y-0 right-0 z-30 flex w-[420px] flex-col border-l border-white/10 bg-panel shadow-2xl" aria-label="Crew room">
-      <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
-        <div className="font-semibold">Crew room</div>
-        <div className="font-mono text-[11px] text-slate-400">{agentNames.length} agents · end-to-end encrypted</div>
-        <button onClick={onClose} className="ml-auto text-slate-400 hover:text-white" aria-label="Close crew room">✕</button>
-      </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-4">
+    <aside aria-label="Crew room" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+      className="fixed inset-y-0 right-0 z-30 flex w-full animate-drawer flex-col border-l border-line bg-surface shadow-float sm:w-[400px]">
+      <header className="flex items-start gap-2 border-b border-line px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-ui-lg text-ink">Crew room</h2>
+          <p className="text-small text-ink-2">{agentNames.length === 1 ? "1 agent" : `${agentNames.length} agents`} · end-to-end encrypted</p>
+        </div>
+        <IconButton label="Close crew room" icon={XIcon} size="sm" onClick={onClose} />
+      </header>
+      <div ref={log} role="log" aria-label="Crew messages" className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {data && !data.lines.length && (
-          <div className="mt-10 space-y-3 text-center text-sm text-slate-400">
-            <div>Talk to all your agents at once. Mention one to give it a task:</div>
-            <div className="flex flex-wrap justify-center gap-2">{agentNames.map((n) => <button key={n} onClick={() => setText(`@${n} `)} className="rounded-full bg-panel2 px-3 py-1 text-slate-200 hover:bg-white/10">@{n}</button>)}</div>
+          <div className="mt-6 space-y-3 text-body text-ink-2">
+            <p>Talk to all your agents at once. Mention one to give it a task.</p>
+            <div className="flex flex-wrap gap-2">
+              {agentNames.map((n) => <Button key={n} size="sm" onClick={() => { setText(`@${n} `); input.current?.focus(); }}>@{n}</Button>)}
+            </div>
           </div>
         )}
         {data?.lines.map((l, i) => (
-          <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${l.name === "You" || l.name === "Owner" ? "ml-auto bg-beam/15" : "bg-panel2"}`}>
-            <div className="mb-0.5 font-mono text-[11px] uppercase tracking-wider text-slate-400">{l.name}</div>
-            <div className="whitespace-pre-wrap">{l.text}</div>
+          <div key={i} className={cx("min-w-0", !isMe(l.name) && "border-l-2 border-line pl-3")}>
+            <div className="mb-0.5 flex items-center gap-1.5 text-small">
+              {!isMe(l.name) && <Plate pubkey={pub(l.name)} name={l.name} size="sm" />}
+              <span className="font-medium text-ink">{isMe(l.name) ? "You" : l.name}</span>
+              <span className="tabular-nums text-ink-3">{clock(l.ts)}</span>
+            </div>
+            <p className="whitespace-pre-wrap text-body text-ink [overflow-wrap:anywhere]">{l.text}</p>
           </div>
         ))}
-        <div ref={end} />
       </div>
-      <form className="flex gap-2 border-t border-white/5 p-3" onSubmit={async (e) => { e.preventDefault(); if (!text.trim()) return; const t = text; setText(""); await fetch("/api/crew", { method: "POST", body: JSON.stringify({ text: t }) }); }}>
-        <input value={text} onChange={(e) => setText(e.target.value)} aria-label="Message the crew" className="flex-1 rounded-full border border-white/10 bg-panel2 px-4 py-2 text-sm outline-none focus:border-beam" placeholder="Message everyone…" />
-        <button className="rounded-full bg-white px-4 text-sm font-semibold text-black">Send</button>
+      <form className="flex gap-2 border-t border-line p-3" onSubmit={async (e) => { e.preventDefault(); if (!text.trim()) return; const t = text; setText(""); await fetch("/api/crew", { method: "POST", body: JSON.stringify({ text: t }) }); }}>
+        <Input ref={input} value={text} onChange={(e) => setText(e.target.value)} aria-label="Message the crew" placeholder="Message everyone…" className="min-w-0 flex-1" />
+        <Button type="submit" variant="primary" icon={PaperPlaneRightIcon} disabled={!text.trim()}>Send</Button>
       </form>
     </aside>
   );
 }
 
+// ---------------- app shell ----------------
 export function App() {
   const solo = useMemo(standaloneAgent, []);
   const [hash, setHash] = useState(location.hash);
@@ -220,14 +177,17 @@ export function CrewApp() {
   const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [route, setRoute] = useState(location.hash);
-  const [status, setStatus] = useState<Record<string, string>>({});
-  const [dragging, setDragging] = useState(false);
+  const [reports, setReports] = useState<Record<string, UnitReport | undefined>>({});
   const [crewOpen, setCrewOpen] = useState(false);
   const [addCloud, setAddCloud] = useState(false);
   const [exportId, setExportId] = useState<string>();
   const [importing, setImporting] = useState(false);
-  const toasts = useToasts();
-  const prevStages = useRef<Record<string, string>>({});
+  const [pending, setPending] = useState<PendingBeam>();
+  const notices = useNotices();
+  const prevStages = useRef<Record<string, string | undefined>>({});
+  const focusOnLand = useRef<string | undefined>(undefined);
+  const destsRef = useRef(dests);
+  destsRef.current = dests;
 
   const refresh = useCallback(async () => {
     const list = await api.agents().catch(() => null);
@@ -236,87 +196,113 @@ export function CrewApp() {
       const prev = prevStages.current[ag.id];
       const now = ag.beam?.stage;
       if (prev && prev !== now && now === "online") {
-        const to = dests.find((d) => d.id === ag.current.driver)?.label ?? ag.current.driver;
-        toasts.push(`${ag.name} beamed to ${to}. Came along: workspace, browser profile, chat and memory. A cold copy stays behind as a backup.`);
+        const to = placeLabel(destsRef.current, ag.current.driver);
+        announce(`${ag.name} arrived on ${to}${ag.beam?.doneAt ? ` in ${durationWords(ag.beam.doneAt - ag.beam.startedAt)}` : ""}.`);
+        if (focusOnLand.current === ag.id) {
+          focusOnLand.current = undefined;
+          setTimeout(() => document.querySelector<HTMLElement>(`[data-unit="${CSS.escape(ag.id)}"]`)?.focus(), 50);
+        }
       }
-      if (prev && prev !== now && now === "failed") toasts.push(`Beam of ${ag.name} failed; it's still running where it was.`, "err");
-      if (now) prevStages.current[ag.id] = now;
+      if (prev && prev !== now && now === "failed") announce(`Beam failed. ${ag.name} stayed on ${placeLabel(destsRef.current, ag.current.driver)}.`, { assertive: true });
+      prevStages.current[ag.id] = now;
     }
     setAgents(list);
     setLoaded(true);
-  }, [dests]);
-  useEffect(() => {
-    api.destinations().then(setDests);
   }, []);
+  useEffect(() => { api.destinations().then(setDests).catch(() => {}); }, []);
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 1500);
     const h = () => setRoute(location.hash);
     addEventListener("hashchange", h);
-    const dragOn = () => setDragging(true), dragOff = () => setDragging(false);
-    addEventListener("dragstart", dragOn); addEventListener("dragend", dragOff);
-    return () => { clearInterval(t); removeEventListener("hashchange", h); removeEventListener("dragstart", dragOn); removeEventListener("dragend", dragOff); };
+    return () => { clearInterval(t); removeEventListener("hashchange", h); };
   }, [refresh]);
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
     const onCloud = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      if (d.ok) { api.destinations().then(setDests); toasts.push(`Your agent connected ${d.provider}. Drag an agent onto it to beam it there.`); }
-      else toasts.push(`The ${d.provider} key from your agent didn't work: ${d.error}`, "err");
+      if (d.ok) { api.destinations().then(setDests); notices.push(`Your agent connected ${d.provider}. Use Beam to… to move an agent there.`); }
+      else notices.push(`The ${d.provider} key from your agent didn't work: ${d.error}`, "err");
     };
-    addEventListener("scut:cloud", onCloud);
     const onExport = (e: Event) => setExportId((e as CustomEvent).detail);
     const onImport = () => setImporting(true);
+    addEventListener("scut:cloud", onCloud);
     addEventListener("beamhop:export", onExport);
     addEventListener("beamhop:import", onImport);
     return () => { removeEventListener("scut:cloud", onCloud); removeEventListener("beamhop:export", onExport); removeEventListener("beamhop:import", onImport); };
   }, []);
+  // Forget reports of agents that left (moved to a file, removed).
+  useEffect(() => { setReports((r) => Object.fromEntries(Object.entries(r).filter(([id]) => agents.some((a) => a.id === id)))); }, [agents.length]);
+  const onReport = useCallback((id: string, r: UnitReport) => setReports((x) => ({ ...x, [id]: r })), []);
+
+  // ---- beaming ----
+  const doBeam = useCallback(async (id: string, to: string) => {
+    setPending(undefined);
+    const ag = agents.find((a) => a.id === id);
+    if (!ag) return;
+    const r = await api.beam(id, to).catch((e) => ({ error: String(e) }));
+    if (r.error) notices.push(`Couldn't start the beam: ${r.error}`, "err");
+    else {
+      const from = placeLabel(dests, ag.current.driver), dest = placeLabel(dests, to);
+      announce(`${ag.name} is moving from ${from} to ${dest}. It stays on ${from} until it lands safely.`);
+      if (document.activeElement === document.body || document.activeElement?.closest(`[data-unit="${CSS.escape(id)}"]`)) focusOnLand.current = id;
+    }
+    refresh();
+  }, [agents, dests, refresh]);
+  const requestBeam = useCallback((id: string, to: string) => {
+    if (to === "file") return setExportId(id);
+    const ag = agents.find((a) => a.id === id);
+    const d = dests.find((x) => x.id === to);
+    if (!ag || !d || ag.current.driver === to || beamInFlight(ag)) return;
+    if (d.monthlyUsd > 0) { setPending({ agentId: id, to, mode: "confirm", at: Date.now() }); announce(`Beam ${ag.name} to ${d.label}? It costs about ${money(usdToEur(d.monthlyUsd), { period: "month" })}. Press Beam to confirm.`); }
+    else { setPending({ agentId: id, to, mode: "undo", at: Date.now() + 5000 }); announce(`${ag.name} beams to ${d.label} in 5 seconds. Undo is in the ${d.label} dock.`); }
+  }, [agents, dests]);
+  useEffect(() => {
+    if (pending?.mode !== "undo") return;
+    const t = setTimeout(() => doBeam(pending.agentId, pending.to), Math.max(0, pending.at - Date.now()));
+    return () => clearTimeout(t);
+  }, [pending, doBeam]);
+  const cancelBeam = () => {
+    if (pending) {
+      const ag = agents.find((a) => a.id === pending.agentId);
+      announce(`Cancelled. ${ag?.name ?? "The agent"} stays where it is.`);
+      setTimeout(() => document.querySelector<HTMLElement>(`[data-unit="${CSS.escape(pending.agentId)}"]`)?.focus(), 0);
+    }
+    setPending(undefined);
+  };
+
+  // ---- palette: agents and beams (everywhere in the crew app) ----
+  useCommands(agents.flatMap((ag) => [
+    { id: `open.${ag.id}`, title: `Open ${ag.name}`, group: "Agents", synonyms: ["show", "go to", "watch"], hint: placeLabel(dests, ag.current.driver), run: () => (location.hash = `#/agent/${ag.id}`) },
+    ...dests.filter((d) => d.id !== ag.current.driver).map((d) => ({
+      id: `beam.${ag.id}.${d.id}`, title: `Beam ${ag.name} to ${d.label}`, group: "Beam", synonyms: ["move", "send", "transfer", "migrate"],
+      hint: d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : "free", disabled: beamInFlight(ag),
+      run: () => { location.hash = ""; requestBeam(ag.id, d.id); },
+    })),
+    { id: `file.${ag.id}`, title: `Move ${ag.name} to a file`, group: "Beam", synonyms: ["export", "send to another computer", "save"], disabled: beamInFlight(ag), run: () => setExportId(ag.id) },
+  ]), [agents, dests, requestBeam]);
+
+  const open = useMemo(() => agents.find((x) => route === `#/agent/${x.id}`), [agents, route]);
   const exportAgent = agents.find((x) => x.id === exportId);
-  const fileDialogs = <>
-    {exportAgent && <ExportDialog agent={exportAgent} onClose={() => setExportId(undefined)} onDone={(name) => { setExportId(undefined); location.hash = ""; refresh(); toasts.push(`${exportAgent.name} is now in ${name}. Open it in Beamhop on the other computer.`); }} />}
-    {importing && <ImportDialog dests={dests} onClose={() => setImporting(false)} onDone={(name) => { setImporting(false); refresh(); toasts.push(`${name} is here.`); }} />}
+  const dialogs = <>
+    {exportAgent && <ExportDialog agent={exportAgent} onClose={() => setExportId(undefined)} onDone={(name) => { setExportId(undefined); location.hash = ""; refresh(); notices.push(`${exportAgent.name} is now in ${name}. Open it in Beamhop on the other computer.`); }} />}
+    {importing && <ImportDialog dests={dests} onClose={() => setImporting(false)} onDone={(name) => { setImporting(false); refresh(); notices.push(`${name} is here.`); }} />}
   </>;
 
-  const beam = useCallback(async (id: string, to: string) => {
-    const r = await api.beam(id, to);
-    if (r.error) toasts.push(r.error, "err");
-    refresh();
-  }, [refresh]);
-  const onStatus = useCallback((id: string, s: string) => setStatus((x) => (x[id] === s ? x : { ...x, [id]: s })), []);
-  const sorted = useMemo(() => {
-    const rank = (s?: string) => (s === "stuck" ? 0 : s === "busy" ? 1 : 2);
-    return [...agents].sort((a, b) => rank(status[a.id]) - rank(status[b.id]));
-  }, [agents, status]);
-  const open = useMemo(() => agents.find((x) => route === `#/agent/${x.id}`), [agents, route]);
-  const needCount = Object.values(status).filter((s) => s === "stuck").length;
-  // The window title carries the count, so a waiting approval shows in the taskbar/dock while you're elsewhere.
-  useEffect(() => { document.title = needCount ? `(${needCount}) Beamhop — ${needCount === 1 ? "an agent needs" : "agents need"} you` : "Beamhop"; }, [needCount]);
-
-  if (open) return <>{toasts.view}{fileDialogs}<AgentView agent={open} dests={dests} onBack={() => (location.hash = "")} onBeam={(to) => beam(open.id, to)} /></>;
+  if (open) return <>{dialogs}{notices.view}<AgentView agent={open} dests={dests} onBack={() => (location.hash = "")} onBeam={(to) => (to === "file" ? setExportId(open.id) : doBeam(open.id, to))} /></>;
 
   return (
-    <div className="stars min-h-screen pb-40">
-      <header className="flex items-center gap-3 px-8 py-6">
-        <Mascot variant="cyan" size={36} />
-        <h1 className="text-2xl font-bold tracking-tight">Beam<span className="text-beam">hop</span></h1>
-        <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">
-          {agents.length} agent{agents.length === 1 ? "" : "s"}{needCount ? <span className="text-amber-300"> · {needCount} need{needCount === 1 ? "s" : ""} you</span> : ""}
-        </div>
-        <button onClick={() => setCrewOpen(!crewOpen)} className="ml-auto rounded-full bg-panel2 px-4 py-2 text-sm hover:bg-white/10">Talk to all agents</button>
-        <button onClick={() => setCreating(true)} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-5 py-2 font-semibold text-black">+ New agent</button>
-      </header>
-      <main className={`grid grid-cols-1 items-start gap-6 px-8 md:grid-cols-2 xl:grid-cols-3 ${crewOpen ? "xl:pr-[440px]" : ""}`}>
-        {sorted.map((ag) => (
-          <Tile key={ag.id} agent={ag} dests={dests} onOpen={() => (location.hash = `#/agent/${ag.id}`)} onBeam={(to) => beam(ag.id, to)} onStatus={onStatus} />
-        ))}
-      </main>
-      {loaded && agents.length === 0 && !creating && !importing && <CreateAgent firstRun onDone={refresh} />}
+    <>
+      <Bench agents={agents} dests={dests} loaded={loaded} reports={reports} onReport={onReport}
+        pending={pending} onConfirmBeam={() => pending && doBeam(pending.agentId, pending.to)} onCancelBeam={cancelBeam} requestBeam={requestBeam}
+        landed={{}} onCreate={() => setCreating(true)} onAddCloud={() => setAddCloud(true)} onImport={() => setImporting(true)} onExport={setExportId}
+        crewOpen={crewOpen} onToggleCrew={() => setCrewOpen((v) => !v)}
+        empty={!creating && <CreateAgent firstRun inline onDone={refresh} />} />
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
-      <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} onAddCloud={() => setAddCloud(true)} />
-      {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
-      {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} />}
-      {fileDialogs}
-      {toasts.view}
-    </div>
+      {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); notices.push(`${label} added. Use Beam to… on an agent to move it there.`); }} />}
+      {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} agents={agents} />}
+      {dialogs}
+      {notices.view}
+    </>
   );
 }

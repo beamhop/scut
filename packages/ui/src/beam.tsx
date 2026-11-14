@@ -1,115 +1,193 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun } from "@scut/protocol";
-import { nip19 } from "nostr-tools";
-import qrcode from "qrcode-generator";
-import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, STAGE_LABEL, ChatLine, Approval, Settings, Pairing, Mascot, humanize, needsText, cost, STATE_META, StateChip, plural, bytesLabel, TEMPLATES, HARNESSES, PRESETS, npubToHex, KEYMAP, TELEGRAM_SETUP, CLOUD_SETUP, ago, Cursor, Toast, useToasts, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
-import { useAgent } from "./useAgent.ts";
-import { Tile, AutostartToggle, Dock, AddCloud, CrewRoomPanel, App, SoloAgent, CrewApp } from "./crew.tsx";
-import { CreateAgent } from "./create.tsx";
-import { AgentView, TelegramPairQr, PhoneLink } from "./agentView.tsx";
-import { SettingsPanel, BrainSettings, PersonaSettings, RemoveAgent, safetyItems, SafetyCheck, SkillSettings, MemoryText, MemorySettings, ChannelStatus, ChannelSettings, SecretRow, RecentRuns, Schedules } from "./settings.tsx";
+import { useEffect, useId, useRef, useState, type ReactElement } from "react";
+import { ArrowCounterClockwiseIcon, ArrowsLeftRightIcon, CaretDownIcon, CheckIcon, CloudIcon, DesktopIcon, FileArrowDownIcon, WarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { Agent, Destination, BEAM_STAGES } from "./lib.tsx";
+import { Button, IconButton, Menu, Dialog, Field, Input, Select, Progress, Plate, announce, money, usdToEur, duration, durationWords, bytes, plural, list, cx, type MenuSection } from "./ui/index.ts";
 
+// ---------------- places ----------------
 
-// ---------------- beam menu (non-drag alternative) ----------------
-export function BeamMenu({ agent, dests, onBeam, onClose }: { agent: Agent; dests: Destination[]; onBeam: (to: string) => void; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.querySelector("button")?.focus(); }, []);
+/** Where an agent can live, in plain words. "local" and any other free host on this machine count as This computer. */
+export function placeIcon(d?: Pick<Destination, "id" | "monthlyUsd">): Icon {
+  if (!d) return DesktopIcon;
+  if (d.id === "file") return FileArrowDownIcon;
+  return isHere(d) ? DesktopIcon : CloudIcon;
+}
+const isHere = (d: Pick<Destination, "id" | "monthlyUsd">) => d.id === "local" || d.id === "docker" || d.id === "smolvm";
+
+/** "free" · "~€18/month" (per agent). */
+export function placeCost(d: Pick<Destination, "monthlyUsd">) {
+  return d.monthlyUsd ? money(usdToEur(d.monthlyUsd), { approx: true, period: "month" }) : "free";
+}
+
+/** The pre-flight line: what changes if the agent moves there. */
+export function placeChange(d: Destination, agentName: string) {
+  if (isHere(d)) return `Runs on this computer. ${agentName} pauses while it sleeps.`;
+  if (d.monthlyUsd) return `Key works. Keeps working while this computer is off. You pay ${d.label} directly.`;
+  return `Keeps working while this computer is off.`;
+}
+
+export function placeLabel(dests: Destination[], id?: string) {
+  return dests.find((d) => d.id === id)?.label ?? (id === "local" ? "This computer" : id ?? "here");
+}
+
+// ---------------- beam menu (the non-drag path; keeps the "Beam to…" label and role=menu/menuitem contract) ----------------
+
+export function BeamMenu({ agent, dests, onBeam, onFile, open, onOpenChange, size = "sm", trigger, align = "end", side = "bottom" }: {
+  agent: Agent; dests: Destination[];
+  /** Called with the destination id. The caller decides about confirm/undo (see the bench). */
+  onBeam: (to: string) => void;
+  /** "A file, for another computer…". Default: dispatches beamhop:export, which the app shell turns into the export dialog. */
+  onFile?: () => void;
+  open?: boolean; onOpenChange?: (open: boolean) => void;
+  size?: "sm" | "md"; trigger?: ReactElement<any>; align?: "start" | "end"; side?: "top" | "bottom";
+  /** Old API (agent view before its rebuild): ignored. */
+  onClose?: () => void;
+}) {
+  const here = agent.current.driver;
+  const busy = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
+  const sections: MenuSection[] = [
+    {
+      items: dests.map((d) => ({
+        id: d.id,
+        label: d.label,
+        disabled: d.id === here || busy,
+        hint: d.id === here ? "here now" : placeCost(d),
+        description: d.id === here ? `${agent.name} is here now.` : placeChange(d, agent.name),
+        onSelect: () => onBeam(d.id),
+      })),
+    },
+    {
+      items: [{
+        id: "file", label: "A file, for another computer…", textValue: "A file", hint: "offline", disabled: busy,
+        description: `This moves ${agent.name}. It does not make a copy.`,
+        onSelect: () => (onFile ? onFile() : dispatchEvent(new CustomEvent("beamhop:export", { detail: agent.id }))),
+      }],
+    },
+  ];
   return (
-    <div ref={ref} role="menu" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}
-      className="absolute right-3 top-3 z-10 w-64 rounded-xl border border-white/10 bg-panel p-2 shadow-2xl">
-      <div className="px-2 pb-1 text-[11px] uppercase tracking-widest text-slate-400">Beam {agent.name} to…</div>
-      {dests.map((d) => {
-        const here = d.id === agent.current.driver;
-        return (
-          <button key={d.id} role="menuitem" disabled={here} onClick={() => { onBeam(d.id); onClose(); }}
-            className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-sm hover:bg-panel2 focus:bg-panel2 focus:outline-none disabled:opacity-40">
-            <span>{d.label}{here && " (here)"}</span>
-            <span className="font-mono text-[11px] text-slate-400">{d.monthlyUsd ? `~$${d.monthlyUsd}/mo` : "free"}</span>
-          </button>
-        );
-      })}
-      <button role="menuitem" onClick={() => { dispatchEvent(new CustomEvent("beamhop:export", { detail: agent.id })); onClose(); }}
-        className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-sm hover:bg-panel2 focus:bg-panel2 focus:outline-none">
-        <span>A file, for another computer…</span><span className="font-mono text-[11px] text-slate-400">offline</span>
-      </button>
+    <Menu
+      trigger={trigger ?? <Button size={size} icon={ArrowsLeftRightIcon} iconEnd={CaretDownIcon} disabled={busy}>Beam to…</Button>}
+      heading={`Beam ${agent.name} to…`}
+      items={sections}
+      width={300}
+      align={align}
+      side={side}
+      open={open}
+      onOpenChange={onOpenChange}
+    />
+  );
+}
+
+// ---------------- in flight ----------------
+
+export const STAGE_SENTENCE = (name: string): Record<string, string> => ({
+  packing: "Packing", provisioning: "Starting the new computer", transferring: "Sending the encrypted bundle",
+  restoring: `Starting ${name}`, online: "Online",
+});
+const STAGES = BEAM_STAGES as readonly string[];
+export const beamInFlight = (a: Agent) => !!a.beam && !["online", "failed"].includes(a.beam.stage);
+
+function useTick(on: boolean, every = 1000) {
+  const [, set] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const t = setInterval(() => set((x) => x + 1), every);
+    return () => clearInterval(t);
+  }, [on, every]);
+}
+
+/** The thin track between two places. The only gradient in the product (ink → signal). */
+export function BeamTrack({ from, to, value }: { from: string; to: string; value: number }) {
+  return (
+    <div className="flex items-center gap-2 text-micro text-ink-2" aria-hidden>
+      <span className="max-w-[40%] truncate">{from}</span>
+      <span className="relative h-[3px] min-w-8 flex-1 overflow-hidden rounded-full bg-line">
+        <span className="absolute inset-y-0 left-0 rounded-full bg-linear-to-r from-ink to-signal transition-[width] duration-(--dur-view) ease-(--ease-out)" style={{ width: `${Math.round(value * 100)}%` }} />
+      </span>
+      <span className="max-w-[40%] truncate text-ink">{to}</span>
     </div>
   );
 }
 
-/** Move an agent into a passphrase-locked file. It stops here; the file is the agent until it's opened elsewhere. */
-export function ExportDialog({ agent, onClose, onDone }: { agent: Agent; onClose: () => void; onDone: (filename: string) => void }) {
-  const [p1, setP1] = useState("");
-  const [p2, setP2] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const ok = p1.length >= 8 && p1 === p2;
-  async function go() {
-    setBusy(true); setError(undefined);
-    const r = await fetch(`/api/agents/${agent.id}/export`, { method: "POST", body: JSON.stringify({ passphrase: p1 }) });
-    if (!r.ok) { setBusy(false); setError((await r.json().catch(() => ({}))).error ?? `Export failed (${r.status})`); return; }
-    const name = r.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `${agent.name}.beamhop`;
-    const url = URL.createObjectURL(await r.blob());
-    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    onDone(name);
-  }
-  const input = "w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam";
+/** Staged progress for a beam, with elapsed time. role=progressbar + aria-valuetext. */
+export function BeamProgress({ agent, dests = [], className }: { agent: Agent; dests?: Destination[]; className?: string }) {
+  const b = agent.beam;
+  useTick(!!b && beamInFlight(agent));
+  if (!b) return null;
+  const idx = Math.max(0, STAGES.indexOf(b.stage));
+  const sentences = STAGE_SENTENCE(agent.name);
+  const labels = STAGES.map((s) => sentences[s]);
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label={`Move ${agent.name} to a file`}>
-      <div className="w-full max-w-md space-y-4 rounded-3xl bg-panel p-7 ring-1 ring-white/10">
-        <div className="text-lg font-semibold">Move {agent.name} to a file</div>
-        <p className="text-sm text-slate-300">{agent.name} stops here and goes into one encrypted file, with its files, logins, memory and chats. Open the file in Beamhop on any computer to bring {agent.name} back to life there — whoever opens it becomes its owner.</p>
-        <input className={input} type="password" aria-label="Passphrase" placeholder="Passphrase (8+ characters)" value={p1} onChange={(e) => setP1(e.target.value)} />
-        <input className={input} type="password" aria-label="Repeat passphrase" placeholder="Repeat it" value={p2} onChange={(e) => setP2(e.target.value)} />
-        <p className="text-xs text-amber-200">Keep the file and the passphrase safe: until it's opened again, the file is {agent.name}. A lost passphrase can't be recovered.</p>
-        {error && <div role="alert" className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
-        <div className="flex justify-between">
-          <button className="text-slate-400 hover:text-white" onClick={onClose}>Cancel</button>
-          <button disabled={!ok || busy} onClick={go} className="rounded-full bg-beam px-5 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Packing…" : "Move to file"}</button>
-        </div>
+    <div className={cx("space-y-2", className)}>
+      <BeamTrack from={placeLabel(dests, b.from ?? agent.current.driver)} to={placeLabel(dests, b.to)} value={(idx + 0.5) / STAGES.length} />
+      <Progress label={`Beaming ${agent.name} to ${placeLabel(dests, b.to)}`} hideLabel stages={labels} current={idx}
+        valueText={`Step ${idx + 1} of ${STAGES.length}: ${labels[idx]}`} />
+      <div className="flex items-baseline gap-2 text-small">
+        <span className="min-w-0 flex-1 truncate font-medium text-ink">{labels[idx]}…</span>
+        <span className="shrink-0 tabular-nums text-ink-2"><span className="sr-only">Elapsed </span>{duration(Date.now() - b.startedAt)}</span>
       </div>
     </div>
   );
 }
 
-/** Bring an agent in from a .beamhop file. */
-export function ImportDialog({ dests, onClose, onDone }: { dests: Destination[]; onClose: () => void; onDone: (name: string) => void }) {
-  const [file, setFile] = useState<File>();
-  const [pass, setPass] = useState("");
-  const [to, setTo] = useState("local");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  async function go() {
-    if (!file) return;
-    setBusy(true); setError(undefined);
-    const r = await fetch(`/api/import?to=${encodeURIComponent(to)}`, { method: "POST", headers: { "x-passphrase": encodeURIComponent(pass) }, body: file });
-    const j = await r.json().catch(() => ({ error: `Import failed (${r.status})` }));
-    setBusy(false);
-    if (j.error) setError(j.error); else onDone(j.name);
-  }
-  const input = "w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam";
+/** The ghost unit in the target dock while an agent travels there. */
+export function BeamGhost({ agent, dests }: { agent: Agent; dests: Destination[] }) {
+  const from = placeLabel(dests, agent.beam?.from ?? agent.current.driver);
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label="Open an agent file">
-      <div className="w-full max-w-md space-y-4 rounded-3xl bg-panel p-7 ring-1 ring-white/10">
-        <div className="text-lg font-semibold">Open an agent file</div>
-        <p className="text-sm text-slate-300">Bring an agent here from a <span className="font-mono">.beamhop</span> file made on another computer. You'll be its owner.</p>
-        <input className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-panel2 file:px-3 file:py-1.5 file:text-slate-100" type="file" accept=".beamhop" aria-label="Agent file" onChange={(e) => setFile(e.target.files?.[0])} />
-        <input className={input} type="password" aria-label="Passphrase" placeholder="Passphrase" value={pass} onChange={(e) => setPass(e.target.value)} />
-        <label className="flex items-center gap-2 text-sm text-slate-300">Run it on
-          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Run it on" className="rounded-lg bg-panel2 px-2 py-1">{dests.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}</select>
-        </label>
-        {error && <div role="alert" className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
-        <div className="flex justify-between">
-          <button className="text-slate-400 hover:text-white" onClick={onClose}>Cancel</button>
-          <button disabled={!file || !pass || busy} onClick={go} className="rounded-full bg-beam px-5 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Bringing it in… (~15 s)" : "Open"}</button>
-        </div>
+    <article aria-label={`${agent.name}, arriving from ${from}`} className="w-[min(320px,100%)] rounded-unit border border-dashed border-line-strong bg-surface/60 p-3.5">
+      <header className="mb-3 flex items-center gap-2">
+        <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
+        <h3 className="min-w-0 truncate text-body font-semibold text-ink">{agent.name}</h3>
+        <span className="ml-auto text-small text-ink-2">Arriving</span>
+      </header>
+      <BeamProgress agent={agent} dests={dests} />
+    </article>
+  );
+}
+
+/** Free destinations: the beam starts after 5 s unless undone. */
+export function BeamCountdown({ agent, to, at, onUndo, onNow }: { agent: Agent; to: Destination; at: number; onUndo: () => void; onNow: () => void }) {
+  useTick(true, 250);
+  const left = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+  return (
+    <article aria-label={`${agent.name}, about to beam to ${to.label}`} className="w-[min(320px,100%)] animate-pop rounded-unit border border-dashed border-line-strong bg-surface/60 p-3.5">
+      <header className="mb-2 flex items-center gap-2">
+        <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
+        <h3 className="min-w-0 truncate text-body font-semibold text-ink">{agent.name}</h3>
+        <span className="ml-auto text-small tabular-nums text-ink-2">Starting in {left} s</span>
+      </header>
+      <p className="text-small text-ink-2">{placeChange(to, agent.name)}</p>
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" icon={ArrowCounterClockwiseIcon} onClick={onUndo}>Undo</Button>
+        <Button size="sm" variant="quiet" onClick={onNow}>Beam now</Button>
+      </div>
+    </article>
+  );
+}
+
+/** Paid destinations: one confirm line in the target dock. Enter confirms (focus starts on Beam), Esc cancels. */
+export function BeamConfirm({ agent, to, onConfirm, onCancel }: { agent: Agent; to: Destination; onConfirm: () => void; onCancel: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => { ref.current?.focus({ preventScroll: false }); }, []);
+  return (
+    <div role="group" aria-label={`Beam ${agent.name} to ${to.label}?`} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
+      className="flex w-full animate-pop flex-wrap items-center gap-x-3 gap-y-2 rounded-unit border border-ink bg-surface px-3.5 py-2.5">
+      <Plate pubkey={agent.agentPubkey} name={agent.name} size="sm" />
+      <p className="min-w-0 flex-1 text-body text-ink">
+        <span className="font-medium">Beam {agent.name} to {to.label}</span>
+        <span className="text-ink-2"> · {placeCost(to)} · {placeChange(to, agent.name)}</span>
+      </p>
+      <div className="flex gap-2">
+        <Button size="sm" variant="quiet" onClick={onCancel}>Cancel</Button>
+        <Button ref={ref} size="sm" variant="primary" onClick={onConfirm}>Beam</Button>
       </div>
     </div>
   );
 }
 
-/** "What came along": shown on a tile once after a beam lands. */
-export function BeamReceipt({ agent, where, from }: { agent: Agent; where: string; from: string }) {
+// ---------------- after ----------------
+
+/** "What came along": shown on a unit once after a beam lands, with Beam back. */
+export function BeamReceipt({ agent, where, from, onBeamBack }: { agent: Agent; where: string; from: string; onBeamBack?: () => void }) {
   const b = agent.beam;
   const key = `receipt:${agent.id}:${b?.doneAt}`;
   const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(key) === "1"; } catch { return false; } });
@@ -117,36 +195,149 @@ export function BeamReceipt({ agent, where, from }: { agent: Agent; where: strin
   const c = b.summary.carried;
   const items = [
     c.chat ? plural(c.chat, "message") : null, c.memory ? plural(c.memory, "memory", "memories") : null,
-    c.skills ? plural(c.skills, "skill") : null, c.schedules ? plural(c.schedules, "scheduled task") : null,
-    "browser logins", "files",
-  ].filter(Boolean);
-  const secs = Math.max(1, Math.round((b.doneAt - b.startedAt) / 1000));
+    c.skills ? plural(c.skills, "skill") : null, c.schedules ? plural(c.schedules, "routine") : null,
+    "logins", "files",
+  ].filter(Boolean) as string[];
+  const secs = Math.max(1000, b.doneAt - b.startedAt);
   return (
-    <div role="status" onClick={(e) => e.stopPropagation()} className="flex items-start gap-2 bg-beam/10 px-3 py-2 text-xs text-slate-200">
-      <span className="text-beam">✓</span>
+    <div className="flex items-start gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-2 text-small">
+      <CheckIcon size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0 text-ink" />
       <div className="min-w-0 flex-1">
-        <div><span className="font-semibold">Arrived on {where}</span> from {from} in {secs}s · {bytesLabel(b.summary.bytes)}</div>
-        <div className="text-slate-400">Came along: {items.join(", ")}.{c.channels ? ` ${plural(c.channels, "chat app")} reconnected.` : ""}</div>
+        <p className="text-ink"><span className="font-medium">Arrived on {where}</span> from {from} in {durationWords(secs)} · <span className="whitespace-nowrap">{bytes(b.summary.bytes)}</span></p>
+        <p className="text-ink-2">Came along: {list(items)}.{c.channels ? ` ${plural(c.channels, "chat app")} reconnected.` : ""}</p>
+        {onBeamBack && <Button size="sm" variant="quiet" className="-ml-2 mt-1" icon={ArrowCounterClockwiseIcon} onClick={onBeamBack}>Beam back to {from}</Button>}
       </div>
-      <button aria-label="Dismiss" className="text-slate-400 hover:text-white" onClick={() => { try { localStorage.setItem(key, "1"); } catch {} setHidden(true); }}>✕</button>
+      <IconButton size="sm" label="Dismiss" icon={XIcon} className="-mr-1 -mt-1" onClick={() => { try { localStorage.setItem(key, "1"); } catch {} setHidden(true); }} />
     </div>
   );
 }
 
-export function BeamProgress({ agent }: { agent: Agent }) {
-  const b = agent.beam!;
-  const idx = BEAM_STAGES.indexOf(b.stage as any);
+/** One human sentence for a failed beam; the raw error lives under Details. */
+export function beamErrorSentence(err: string | undefined, to: string) {
+  const e = (err ?? "").toLowerCase();
+  if (/401|403|unauthori|forbidden|token|credential/.test(e)) return `${to} didn't accept the key. Reconnect ${to} and try again.`;
+  if (/quota|limit|capacity|insufficient|billing|payment/.test(e)) return `${to} has no room for another agent on this plan.`;
+  if (/timeout|timed out|etimedout/.test(e)) return `${to} took too long to start the new computer.`;
+  if (/econnrefused|enotfound|network|fetch failed|socket/.test(e)) return `Couldn't reach ${to}. Check the internet connection.`;
+  if (/app closed/.test(e)) return "Beamhop was closed during the move.";
+  if (/space|enospc|disk/.test(e)) return "There wasn't enough disk space to pack it.";
+  return "Something went wrong on the way. Nothing was lost.";
+}
+
+export function BeamFailed({ agent, dests, onRetry, onDismiss }: { agent: Agent; dests: Destination[]; onRetry: () => void; onDismiss?: () => void }) {
+  const b = agent.beam;
+  if (!b || b.stage !== "failed") return null;
+  const to = placeLabel(dests, b.to);
   return (
-    <div className="beam-overlay absolute inset-0 grid place-items-center">
-      <div className="w-72 rounded-xl bg-black/80 p-4 font-mono text-[12px]">
-        <div className="mb-2 text-beam">Beaming {b.from ? `from ${b.from} ` : ""}to {b.to}</div>
-        <div className="mb-2 text-slate-400">Stays here until it lands safely</div>
-        {BEAM_STAGES.map((s, i) => (
-          <div key={s} className={i < idx ? "text-slate-400" : i === idx ? "text-white" : "text-slate-600"}>
-            {i < idx ? "✓" : i === idx ? "›" : "·"} {STAGE_LABEL[s]}
+    <div className="rounded-control border border-err/50 bg-surface px-2.5 py-2 text-small">
+      <div className="flex items-start gap-2">
+        <WarningIcon size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0 text-err" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-ink">Beam failed: {agent.name} stayed on {placeLabel(dests, agent.current.driver)}</p>
+          <p className="text-ink-2">{beamErrorSentence(b.error, to)}</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={onRetry}>Try again</Button>
+            {b.error && (
+              <details className="min-w-0 text-ink-2">
+                <summary className="cursor-pointer rounded-[4px] px-1 font-medium hover:text-ink">Details</summary>
+                <p className="mt-1 max-h-24 select-text overflow-auto font-mono text-[11.5px] [overflow-wrap:anywhere]">{b.error}</p>
+              </details>
+            )}
           </div>
-        ))}
+        </div>
+        {onDismiss && <IconButton size="sm" label="Dismiss" icon={XIcon} className="-mr-1 -mt-1" onClick={onDismiss} />}
       </div>
     </div>
+  );
+}
+
+// ---------------- by file ----------------
+
+/** Move an agent into a passphrase-locked file. It stops here; the file is the agent until it's opened elsewhere. */
+export function ExportDialog({ agent, onClose, onDone }: { agent: Agent; onClose: () => void; onDone: (filename: string) => void }) {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const short = p1.length > 0 && p1.length < 8;
+  const mismatch = p2.length > 0 && p1 !== p2;
+  const ok = p1.length >= 8 && p1 === p2;
+  async function go() {
+    if (!ok || busy) return;
+    setBusy(true); setError(undefined);
+    const r = await fetch(`/api/agents/${agent.id}/export`, { method: "POST", body: JSON.stringify({ passphrase: p1 }) }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }) as any);
+    if (!r.ok) { setBusy(false); setError((await r.json().catch(() => ({}))).error ?? `Packing failed (${r.status})`); return; }
+    const name = r.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `${agent.name}.beamhop`;
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    onDone(name);
+  }
+  return (
+    <Dialog open onClose={busy ? () => {} : onClose} title={`Move ${agent.name} to a file`}
+      description={<><span className="font-medium text-ink">This moves {agent.name}. It does not make a copy.</span> {agent.name} stops here and goes into one encrypted file with its files, logins, memory and chats. Open the file in Beamhop on another computer to bring it back there.</>}
+      footer={<>
+        <Button variant="quiet" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button variant="primary" disabled={!ok} loading={busy} onClick={go}>{busy ? "Packing…" : "Move to file"}</Button>
+      </>}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); go(); }}>
+        <Field label="Passphrase" hint="At least 8 characters." error={short ? "Use at least 8 characters." : undefined}>
+          <Input type="password" aria-label="Passphrase" autoComplete="new-password" value={p1} onChange={(e) => setP1(e.target.value)} />
+        </Field>
+        <Field label="Repeat passphrase" error={mismatch ? "The two don't match yet." : undefined}>
+          <Input type="password" aria-label="Repeat passphrase" autoComplete="new-password" value={p2} onChange={(e) => setP2(e.target.value)} />
+        </Field>
+        <p className="flex items-start gap-2 rounded-control bg-surface-2 px-3 py-2 text-small text-ink-2">
+          <WarningIcon size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0 text-ink" />
+          Keep the file and the passphrase safe. Until it's opened again, the file is {agent.name}. A lost passphrase can't be recovered.
+        </p>
+        {error && <p role="alert" className="text-small text-err">{error}</p>}
+        <button type="submit" hidden />
+      </form>
+    </Dialog>
+  );
+}
+
+/** Bring an agent in from a .beamhop file. */
+export function ImportDialog({ dests, onClose, onDone }: { dests: Destination[]; onClose: () => void; onDone: (name: string) => void }) {
+  const [file, setFile] = useState<File>();
+  const [pass, setPass] = useState("");
+  const [to, setTo] = useState(dests[0]?.id ?? "local");
+  const fileId = useId();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  async function go() {
+    if (!file || !pass || busy) return;
+    setBusy(true); setError(undefined);
+    const r = await fetch(`/api/import?to=${encodeURIComponent(to)}`, { method: "POST", headers: { "x-passphrase": encodeURIComponent(pass) }, body: file }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({ error: `Opening failed (${r.status})` })) : { error: "Couldn't reach Beamhop." };
+    setBusy(false);
+    if (j.error) setError(/wrong passphrase/i.test(j.error) ? "Wrong passphrase. Check it and try again." : j.error);
+    else onDone(j.name);
+  }
+  return (
+    <Dialog open onClose={busy ? () => {} : onClose} title="Open an agent file"
+      description="Bring an agent here from a .beamhop file made on another computer. You become its owner."
+      footer={<>
+        <Button variant="quiet" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button variant="primary" disabled={!file || !pass} loading={busy} onClick={go}>{busy ? "Bringing it in…" : "Open"}</Button>
+      </>}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); go(); }}>
+        <Field label="Agent file" id={fileId}>
+          <input id={fileId} type="file" accept=".beamhop" aria-label="Agent file" onChange={(e) => setFile(e.target.files?.[0])}
+            className="block w-full rounded-control border border-line-strong bg-surface text-body text-ink-2 file:mr-3 file:h-8 file:cursor-pointer file:border-0 file:border-r file:border-line-strong file:bg-surface-2 file:px-3 file:text-body file:font-medium file:text-ink" />
+        </Field>
+        <Field label="Passphrase">
+          <Input type="password" aria-label="Passphrase" autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+        </Field>
+        <Field label="Run it on" hint={busy ? "This takes about 15 s." : undefined}>
+          <Select aria-label="Run it on" value={to} onChange={(e) => setTo(e.target.value)}>
+            {dests.map((d) => <option key={d.id} value={d.id}>{d.label} ({placeCost(d)})</option>)}
+          </Select>
+        </Field>
+        {error && <p role="alert" className="text-small text-err">{error}</p>}
+        <button type="submit" hidden />
+      </form>
+    </Dialog>
   );
 }

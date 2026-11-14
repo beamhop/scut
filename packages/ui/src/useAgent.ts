@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun } from "@scut/protocol";
+import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun, StatusMsg } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
 import qrcode from "qrcode-generator";
-import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, STAGE_LABEL, ChatLine, Approval, Settings, Pairing, Mascot, humanize, needsText, cost, STATE_META, StateChip, plural, bytesLabel, TEMPLATES, HARNESSES, PRESETS, npubToHex, KEYMAP, TELEGRAM_SETUP, CLOUD_SETUP, ago, Cursor, Toast, useToasts, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
+import { Instance, Agent, Destination, api, SCREEN, MASCOT_COLORS, BEAM_STAGES, STAGE_LABEL, ChatLine, Approval, type ResolvedApproval, Settings, Pairing, Mascot, humanize, needsText, cost, STATE_META, StateChip, plural, bytesLabel, TEMPLATES, HARNESSES, PRESETS, npubToHex, KEYMAP, TELEGRAM_SETUP, CLOUD_SETUP, ago, Cursor, Toast, useToasts, helpOn, PROVIDERS, standaloneAgent } from "./lib.tsx";
 import { BeamMenu, ExportDialog, ImportDialog, BeamReceipt, BeamProgress } from "./beam.tsx";
 import { Tile, AutostartToggle, Dock, AddCloud, CrewRoomPanel, App, SoloAgent, CrewApp } from "./crew.tsx";
 import { CreateAgent } from "./create.tsx";
@@ -16,6 +16,15 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
   const [narration, setNarration] = useState<{ text: string; ts: number }[]>([]);
   const [stats, setStats] = useState<Extract<ServerMsg, { t: "stats" }>>();
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  /** Bench data (t:"status"): headline, since, task, lastResult, nextRun, pending, dayTokens. */
+  const [status, setStatus] = useState<StatusMsg>();
+  /** When the current state began (from state.since or status.since). */
+  const [since, setSince] = useState<number>();
+  /** Recently decided approvals, newest last (max 20), for resolution echoes. */
+  const [resolved, setResolved] = useState<ResolvedApproval[]>([]);
+  const approvalsRef = useRef(approvals);
+  approvalsRef.current = approvals;
+  const notified = useRef(new Set<string>());
   const [agentCursor, setAgentCursor] = useState<{ x: number; y: number }>();
   const [settings, setSettings] = useState<Settings>();
   const [pairing, setPairing] = useState<Pairing>();
@@ -57,7 +66,13 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
           return;
         }
         const m = JSON.parse(ev.data) as ServerMsg;
-        if (m.t === "hello" || m.t === "state") setState(m.state);
+        if (m.t === "hello" || m.t === "state") {
+          setState(m.state);
+          if (m.t === "state" && m.since) setSince(m.since);
+          // On (re)connect the agent resends every approval still pending; start from a clean list so none doubles up.
+          if (m.t === "hello") { approvalsRef.current = []; setApprovals([]); }
+        }
+        else if (m.t === "status") { setStatus(m); setSince(m.since); setState(m.state); }
         else if (m.t === "history") { setChat(m.chat); setNarration(m.narration); }
         else if (m.t === "chat") setChat((c) => [...c.slice(-300), m]);
         else if (m.t === "narration") setNarration((n) => [...n.slice(-150), m]);
@@ -84,9 +99,14 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
         }
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
         else if (m.t === "approval.request") {
-          setApprovals((a) => [...a, m]);
-          if ("Notification" in window && Notification.permission === "granted") new Notification(`${agent?.name} needs you`, { body: m.title });
-        } else if (m.t === "approval.resolved") setApprovals((a) => a.filter((x) => x.id !== m.id));
+          if (!approvalsRef.current.some((x) => x.id === m.id)) approvalsRef.current = [...approvalsRef.current, m];
+          setApprovals((a) => (a.some((x) => x.id === m.id) ? a : [...a, m]));
+          if (!notified.current.has(m.id) && (notified.current.add(m.id), true) && "Notification" in window && Notification.permission === "granted") new Notification(`${agent?.name} needs you`, { body: m.title });
+        } else if (m.t === "approval.resolved") {
+          const was = approvalsRef.current.find((x) => x.id === m.id);
+          if (was) setResolved((r) => [...r.slice(-19), { ...was, ok: m.ok, by: m.by, via: m.via, at: m.at ?? Date.now() }]);
+          setApprovals((a) => a.filter((x) => x.id !== m.id));
+        }
       };
       sock.onclose = () => { setConnected(false); if (!closed) setTimeout(connect, 1500); };
     };
@@ -103,5 +123,5 @@ export function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, sma
     if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
     else outbox.current.push(JSON.stringify(m));
   }, []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, runs, send };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, runs, send, status, since, resolved };
 }

@@ -42,7 +42,13 @@ export const STAGE_LABEL: Record<string, string> = {
 
 // ---------------- agent socket ----------------
 export type ChatLine = { from: string; channel: string; text: string; ts: number };
-export type Approval = { id: string; title: string; detail?: string; ts: number; shot?: string };
+export type Approval = {
+  id: string; title: string; detail?: string; ts: number; shot?: string;
+  /** Structured approval fields (protocol ApprovalRequest): what kind of action, risk word, expiry, where the task came from. */
+  kind?: import("@scut/protocol").ApprovalKind; risk?: import("@scut/protocol").Risk; expiresAt?: number; origin?: string;
+};
+/** An approval that was decided (approval.resolved), kept briefly so cards can echo "Allowed by you on Telegram, 14:02". */
+export type ResolvedApproval = Approval & { ok: boolean; by: string; via?: string; at: number };
 export type Settings = Extract<ServerMsg, { t: "settings" }>;
 export type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
 

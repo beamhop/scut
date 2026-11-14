@@ -46,22 +46,26 @@ afterAll(async () => {
 
 test("first run shows the guided setup", async () => {
   const page = await open("/");
-  await page.waitForSelector('[role="dialog"]', { timeout: 10_000 });
-  const text = await page.$eval('[role="dialog"]', (el) => el.textContent ?? "");
-  expect(text).toContain("Welcome to Beamhop");
-  expect(text).toContain("Pick a brain");
+  // Job first: the create flow opens by itself on an empty bench (as a dialog, or inline).
+  await page.waitForFunction(() => document.body.textContent!.includes("What should your agent do?"), { timeout: 10_000 });
+  expect(await page.evaluate(() => document.body.textContent ?? "")).toContain("Welcome to Beamhop");
   await page.close();
 });
 
 test("the brain step checks the key before moving on", async () => {
   const page = await open("/");
-  await page.waitForSelector('input[aria-label="API key"]', { timeout: 10_000 });
-  const clickBtn = (t: string) => page.evaluate((t) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === t)!.dispatchEvent(new MouseEvent("click", { bubbles: true })), t);
+  await page.waitForFunction(() => document.body.textContent!.includes("What should your agent do?"), { timeout: 10_000 });
+  const clickBtn = (t: string) => page.evaluate((t) => [...document.querySelectorAll("button")].find((b) => b.textContent === t)!.dispatchEvent(new MouseEvent("click", { bubbles: true })), t);
+  // brain choices are radio tiles: click the one whose label starts with the provider's name
+  const pick = (t: string) => page.evaluate((t) => [...document.querySelectorAll("label")].find((l) => l.textContent?.startsWith(t))!.click(), t);
+  await clickBtn("Next"); // step 1 (the job) has nothing required
+  await page.waitForFunction(() => document.body.textContent!.includes("Give it a brain"), { timeout: 5000 });
   // Picking local models looks for Ollama right away and explains what's missing
-  await clickBtn("Local (Ollama)");
+  await pick("Local (Ollama)");
   await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent?.includes("Ollama isn't running"), { timeout: 15_000 });
-  await clickBtn("OpenRouter");
-  await page.evaluate(() => document.querySelector("details")!.setAttribute("open", ""));
+  await pick("OpenRouter");
+  await page.waitForSelector('input[aria-label="API key"]', { timeout: 5000 });
+  await page.evaluate(() => { document.querySelector('input[aria-label="Base URL"]')!.closest("details")!.open = true; });
   const setVal = async (label: string, v: string) => {
     await page.focus(`input[aria-label="${label}"]`);
     await page.keyboard.down("Control"); await page.keyboard.press("a"); await page.keyboard.up("Control");
@@ -82,7 +86,7 @@ test("the brain step checks the key before moving on", async () => {
   expect(await page.$$eval("#model-options option", (o) => o.map((x) => (x as HTMLOptionElement).value))).toEqual(["m1"]);
   await setVal("Model", "m1");
   await clickBtn("Next");
-  await page.waitForFunction(() => document.body.textContent!.includes("What should your agent do?"), { timeout: 15_000 });
+  await page.waitForFunction(() => document.body.textContent!.includes("Ready to create"), { timeout: 15_000 });
   await page.close();
 });
 
@@ -93,30 +97,30 @@ test("crew grid shows a live tile with state and location", async () => {
   await page.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 15_000 });
   await page.waitForSelector("main img", { timeout: 15_000 }); // a live frame arrived
   const text = await page.evaluate(() => document.body.innerText);
-  expect(text).toContain("THIS COMPUTER");
-  expect(text).toContain("Ready");
+  expect(text).toContain("This computer");
+  expect(text).toContain("Free");
   await page.close();
 });
 
 test("Beam to… menu works without dragging (WCAG 2.5.7)", async () => {
   const page = await open("/");
   await page.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 15_000 });
-  await page.focus('main [tabindex="0"]');
+  await page.focus("main article[data-unit]");
   await page.keyboard.press("b");
   await page.waitForSelector('[role="menu"]', { timeout: 5000 });
   const items = await page.$$eval('[role="menuitem"]', (els) => els.map((e) => e.textContent));
   expect(items.join(" ")).toContain("Cloud (simulated)");
-  const target = await page.$$('[role="menuitem"]:not([disabled])');
-  await target[0].click();
-  await page.waitForFunction(() => document.body.innerText.includes("CLOUD (SIMULATED)"), { timeout: 60_000 });
+  const target = await page.$$('[role="menuitem"]:not([aria-disabled="true"])');
+  await target[0].click(); // a free place: starts after a 5 s undo window
+  await page.waitForFunction(() => document.body.innerText.includes("Arrived on Cloud (simulated)"), { timeout: 60_000 });
   await page.close();
   expect(scut.get(agentId).current.driver).toBe("sim-cloud");
 });
 
 test("agent view: chat round trip, settings panel, history", async () => {
   const page = await open(`/#/agent/${agentId}`);
-  await page.waitForSelector('input[aria-label^="Message"]', { timeout: 15_000 });
-  await page.type('input[aria-label^="Message"]', "hello from the UI test");
+  await page.waitForSelector('textarea[aria-label^="Message"]', { timeout: 15_000 });
+  await page.type('textarea[aria-label^="Message"]', "hello from the UI test");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.body.innerText.includes("mock: message #1"), { timeout: 30_000 });
   await page.evaluate(() => [...document.querySelectorAll("header button")].find((b) => b.textContent === "Settings")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
@@ -141,8 +145,8 @@ test("phone link opens the agent alone on a phone-sized screen, signed in", asyn
   await Bun.sleep(2500); // let live frames arrive: they must not scroll the page and hide the header
   expect(await page.evaluate(() => scrollY)).toBe(0);
   expect(await page.$eval("h1", (h) => h.getBoundingClientRect().top >= 0)).toBe(true);
-  await page.waitForSelector('input[aria-label^="Message"]');
-  await page.type('input[aria-label^="Message"]', "from my phone");
+  await page.waitForSelector('textarea[aria-label^="Message"]');
+  await page.type('textarea[aria-label^="Message"]', "from my phone");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.body.innerText.includes("mock: message #2"), { timeout: 30_000 });
   await page.screenshot({ path: `${process.env.SCUT_SHOTS ?? tmpdir()}/ui-test-phone.png` });
@@ -152,17 +156,21 @@ test("phone link opens the agent alone on a phone-sized screen, signed in", asyn
 test("create an agent through the UI (Demo harness)", async () => {
   const page = await open("/");
   await page.waitForFunction(() => document.body.innerText.includes("New agent"), { timeout: 10_000 });
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "+ New agent")!.click());
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "New agent")!.click());
   await page.waitForSelector('[role="dialog"]');
-  // With no brain saved it starts at "Pick a brain" (the demo needs none: skip); with one, it goes straight to the details.
-  await Bun.sleep(1000); // let the saved-brain lookup settle
-  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Skip this")?.click());
+  // Job first: name it, then skip the brain (the demo needs none), then create.
   await page.waitForSelector('[aria-label="Name"]');
   await page.type('[aria-label="Name"]', "Uiborn");
-  // with a second destination connected, More options offers where it runs
+  const clickIn = (t: string) => page.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === t)!.click(), t);
+  await clickIn("Next");
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent === "Skip this"), { timeout: 5000 });
+  await clickIn("Skip this");
+  // with a second destination connected, step 3 offers where it runs
   await page.waitForSelector('select[aria-label="Runs on"]', { timeout: 10_000 });
   expect(await page.$$eval('select[aria-label="Runs on"] option', (o) => o.map((x) => x.textContent))).toContain("Cloud (simulated)");
-  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
+  // "Demo" is an option of the agent software (a radio under More options)
+  await page.evaluate(() => [...document.querySelectorAll<HTMLLabelElement>('[role="dialog"] label')].find((l) => l.textContent === "Demo")!.click());
+  expect(await page.evaluate(() => [...document.querySelectorAll<HTMLInputElement>('[role="dialog"] input[type="radio"]')].find((i) => i.closest("label")?.textContent === "Demo")!.checked)).toBe(true);
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Create agent"))!.click());
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
   await page.close();
@@ -179,7 +187,7 @@ test("add a cloud: wrong token shows an error, right token adds a destination", 
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Add a cloud"))!.click());
   await page.waitForSelector('[aria-label="Fly.io token"]');
   await page.type('[aria-label="Fly.io token"]', "bad");
-  await page.evaluate(() => [...document.querySelectorAll('[aria-label="Add a cloud"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   await page.waitForFunction(() => document.body.innerText.includes("rejected that token"), { timeout: 10_000 }).catch(async (e) => {
     console.log("DEBUG dialog text:", await page.$eval('[role="dialog"]', (d) => d.textContent));
     throw e;
@@ -187,8 +195,8 @@ test("add a cloud: wrong token shows an error, right token adds a destination", 
   await page.focus('[aria-label="Fly.io token"]');
   for (let i = 0; i < 5; i++) await page.keyboard.press("Backspace");
   await page.type('[aria-label="Fly.io token"]', "good");
-  await page.evaluate(() => [...document.querySelectorAll('[aria-label="Add a cloud"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  await page.waitForFunction(() => !document.querySelector('[aria-label="Add a cloud"]') && [...document.querySelectorAll(".fixed div.font-semibold")].some((d) => d.textContent === "Fly.io"), { timeout: 10_000 }).catch(async (e) => {
+  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && [...document.querySelectorAll("main h2")].some((d) => d.textContent === "Fly.io"), { timeout: 10_000 }).catch(async (e) => {
     console.log("DEBUG2:", (await page.evaluate(() => document.body.innerText)).slice(-900), "\nDESTS:", await (await fetch(`${base}/api/destinations`)).text());
     throw e;
   });
@@ -218,7 +226,7 @@ test("no accessibility violations on the main screens (axe-core, all rules)", as
   expect(await audit(home)).toEqual([]);
   await home.close();
   const view = await open(`/#/agent/${agentId}`);
-  await view.waitForSelector('input[aria-label^="Message"]', { timeout: 15_000 });
+  await view.waitForSelector('textarea[aria-label^="Message"]', { timeout: 15_000 });
   expect(await audit(view)).toEqual([]);
   await view.evaluate(() => [...document.querySelectorAll("header button")].find((b) => b.textContent === "Settings")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   await view.waitForFunction(() => document.body.textContent!.includes("Autonomy"), { timeout: 5000 });
@@ -251,13 +259,13 @@ test("move an agent to a file and open it again, all from the UI", async () => {
   await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dir });
   await page.waitForFunction(() => document.body.innerText.includes("Packy"), { timeout: 20_000 });
   await page.evaluate(() => {
-    const tile = [...document.querySelectorAll<HTMLElement>('main [tabindex="0"]')].find((t) => t.innerText.includes("Packy"))!;
+    const tile = [...document.querySelectorAll<HTMLElement>("main article[data-unit]")].find((t) => t.innerText.includes("Packy"))!;
     [...tile.querySelectorAll("button")].find((b) => b.textContent === "Beam to…")!.click();
   });
   await page.waitForSelector('[role="menuitem"]');
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.startsWith("A file"))!.click());
-  await page.waitForSelector('[aria-label="Move Packy to a file"]');
-  await page.type('[aria-label="Move Packy to a file"] input[aria-label="Passphrase"]', "packy-pass-123");
+  await page.waitForFunction(() => document.querySelector('[role="dialog"] h2')?.textContent === "Move Packy to a file");
+  await page.type('[role="dialog"] input[aria-label="Passphrase"]', "packy-pass-123");
   await page.type('[aria-label="Repeat passphrase"]', "packy-pass-123");
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Move to file")!.click());
   await page.waitForFunction(() => document.body.innerText.includes("is now in Packy.beamhop"), { timeout: 60_000 });
@@ -270,13 +278,13 @@ test("move an agent to a file and open it again, all from the UI", async () => {
   await page.waitForSelector('input[aria-label="Agent file"]');
   const input = (await page.$('input[aria-label="Agent file"]'))!;
   await (input as any).uploadFile(saved);
-  await page.type('[aria-label="Open an agent file"] input[aria-label="Passphrase"]', "nope-wrong");
+  await page.type('[role="dialog"] input[aria-label="Passphrase"]', "nope-wrong");
   const clickOpen = () => page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Open")!.click());
   await clickOpen();
   await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent?.includes("Wrong passphrase"), { timeout: 30_000 });
-  await page.evaluate(() => { const i = document.querySelector<HTMLInputElement>('[aria-label="Open an agent file"] input[aria-label="Passphrase"]')!; i.focus(); i.select(); });
+  await page.evaluate(() => { const i = document.querySelector<HTMLInputElement>('[role="dialog"] input[aria-label="Passphrase"]')!; i.focus(); i.select(); });
   await page.keyboard.press("Backspace");
-  await page.type('[aria-label="Open an agent file"] input[aria-label="Passphrase"]', "packy-pass-123");
+  await page.type('[role="dialog"] input[aria-label="Passphrase"]', "packy-pass-123");
   await clickOpen();
   await page.waitForFunction(() => document.body.innerText.includes("Packy is here."), { timeout: 120_000 });
   expect(scut.agents.find((a) => a.id === rec.id)).toBeTruthy();
@@ -286,7 +294,7 @@ test("move an agent to a file and open it again, all from the UI", async () => {
 test("remove an agent from Settings (two steps)", async () => {
   const rec = await scut.create({ name: "Byebye", harness: "mock" });
   const page = await open(`/#/agent/${rec.id}`);
-  await page.waitForSelector('input[aria-label^="Message"]', { timeout: 20_000 });
+  await page.waitForSelector('textarea[aria-label^="Message"]', { timeout: 20_000 });
   const click = (t: string) => page.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t)!.click(), t);
   await click("Settings");
   await page.waitForFunction(() => document.body.textContent!.includes("Remove Byebye…"), { timeout: 5000 });
@@ -303,7 +311,7 @@ test("remove an agent from Settings (two steps)", async () => {
 
 test("memories can be added and corrected in Settings", async () => {
   const page = await open(`/#/agent/${agentId}`);
-  await page.waitForSelector('input[aria-label^="Message"]', { timeout: 20_000 });
+  await page.waitForSelector('textarea[aria-label^="Message"]', { timeout: 20_000 });
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("header button")].find((b) => b.textContent === "Settings")!.click());
   await page.waitForSelector('input[aria-label="Add a memory"]');
   await page.type('input[aria-label="Add a memory"]', "Likes tea");
