@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.31.1 — Beam by file from the command line
+
+- `scut export <agent> [--out FILE]` and `scut import FILE [--to DEST]` (passphrase prompted, or `SCUT_PASSPHRASE`). Smoke-tested between two separate Beamhop homes.
+
 ## v0.31.0 — Beam by file
 
 - New destination in every "Beam to…" menu: **A file, for another computer**. The agent stops here and goes into one encrypted `.beamhop` file with its files, browser logins, memory and chats, locked with your passphrase (PBKDF2-SHA256, 310k rounds + AES-256-GCM over the agent key and bundle key; the bundle itself is the same AES-GCM bundle a live beam sends).

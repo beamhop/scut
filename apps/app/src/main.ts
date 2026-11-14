@@ -6,6 +6,8 @@
 //   scut ls
 //   scut beam <agent> --to <destination>
 //   scut rm <agent>
+//   scut export <agent> [--out FILE]   move an agent into a passphrase-locked file (asks for the passphrase,
+//   scut import <FILE> [--to local]    or reads SCUT_PASSPHRASE)
 import { HOME, Scut } from "./core.ts";
 import { serve } from "./server.ts";
 import { CrewRoom } from "./crew.ts";
@@ -27,6 +29,7 @@ const { values, positionals } = parseArgs({
     port: { type: "string" },
     ui: { type: "string" },
     "destroy-source": { type: "boolean" },
+    out: { type: "string" },
   },
 });
 
@@ -81,6 +84,20 @@ switch (cmd) {
       onStage: (s) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${s}`),
     });
     console.log(`${rec.name} is now on ${rec.current.driver} at ${rec.current.endpoint}`);
+    break;
+  }
+  case "export": {
+    const pass = process.env.SCUT_PASSPHRASE ?? prompt("Passphrase (8+ characters):") ?? "";
+    const { file, filename } = await scut.exportAgent(rest[0], pass);
+    const out = values.out ?? filename;
+    await Bun.write(out, file);
+    console.log(`${rest[0]} is now in ${out} (${file.length > 1e6 ? `${(file.length / 1e6).toFixed(1)} MB` : `${Math.ceil(file.length / 1e3)} KB`}). Open it with: scut import ${out}`);
+    break;
+  }
+  case "import": {
+    const pass = process.env.SCUT_PASSPHRASE ?? prompt("Passphrase:") ?? "";
+    const rec = await scut.importAgent(new Uint8Array(await Bun.file(rest[0]).arrayBuffer()), pass, values.to ?? "local");
+    console.log(`${rec.name} (${rec.id}) is here, on ${rec.current.driver} at ${rec.current.endpoint}`);
     break;
   }
   case "rm":
