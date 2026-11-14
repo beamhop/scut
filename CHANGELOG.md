@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.41.0 — A quieter browser
+
+- The agent's Chromium ships with managed policies: no "Sign in to Chromium?" bubble, no sync, promo tabs, default-browser or translate prompts — fewer things for the model to trip over and for you to see on its screen. Its password manager stays on, so logins you make on its screen stay in its profile and beam with it.
+- Re-ran the live Pi test on a real model (browse, then beam, then remember): passes.
+
 ## v0.40.0 — Settings in a sensible order
 
 - Settings now reads top to bottom as: is it safe → what it does → its brain → how freely it acts → its daily limit → where to reach it → scheduled tasks → what it knows (memory, skills) → remove. The safety check is first instead of under the autonomy choices.

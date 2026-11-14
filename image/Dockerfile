@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
+# Chromium policies: no "Sign in to Chromium?" bubble, sync, promos or translate prompts on the agent's screen;
+# keep its password manager (your logins stay in the agent's profile and beam with it).
+COPY image/chromium/beamhop.json /etc/chromium/policies/managed/beamhop.json
 
 # Agent harnesses. Pi is the default; Codex CLI, Copilot CLI and opencode are optional per agent.
 ARG HARNESSES="@earendil-works/pi-coding-agent @openai/codex @github/copilot opencode-ai"
