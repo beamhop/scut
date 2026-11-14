@@ -1,0 +1,38 @@
+@import "../../../packages/ui/src/styles.css";
+@source "../../../packages/ui/src/ui";
+@source "./";
+
+/* Marketing-only type: larger than the app's 40 px display, same face and rules. */
+@utility hero {
+  font-family: var(--font-sans);
+  font-size: clamp(44px, 9vw, 112px);
+  line-height: 0.92;
+  font-weight: 750;
+  font-stretch: 112%;
+  letter-spacing: -0.035em;
+}
+@utility section-title {
+  font-family: var(--font-sans);
+  font-size: clamp(30px, 5vw, 56px);
+  line-height: 1;
+  font-weight: 750;
+  font-stretch: 108%;
+  letter-spacing: -0.025em;
+}
+@utility kicker {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-ink-3);
+}
+
+body { font-size: 15px; line-height: 23px; }
+
+@keyframes caret { 50% { opacity: 0; } }
+.caret { display: inline-block; width: 0.6ch; height: 1.1em; vertical-align: -0.15em; background: currentColor; animation: caret 1s steps(1) infinite; }
+
+@keyframes click-ring { from { transform: translate(-50%, -50%) scale(0.3); opacity: 0.9; } to { transform: translate(-50%, -50%) scale(1.6); opacity: 0; } }
+.click-ring { position: absolute; width: 28px; height: 28px; border-radius: 9999px; border: 2px solid var(--color-screen-ink); animation: click-ring 450ms var(--ease-out) forwards; pointer-events: none; }
+
+/* Dotted chassis grid behind the hero, drawn with tokens only (no gradient colours: one ink at low alpha). */
+.chassis { background-image: radial-gradient(color-mix(in oklch, var(--color-ink) 14%, transparent) 1px, transparent 1px); background-size: 20px 20px; }
