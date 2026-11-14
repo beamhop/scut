@@ -639,7 +639,7 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
         {!standalone && <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>}
         <Mascot variant={agent.mascot} size={32} state={a.state} />
         <h1 className="text-base font-semibold">{agent.name}</h1>
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
+        {!standalone && <span className="shrink-0 whitespace-nowrap rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>}
         <StateChip state={a.state} />
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden font-mono text-[11px] text-slate-400 lg:inline">
