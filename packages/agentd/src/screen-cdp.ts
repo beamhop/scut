@@ -148,6 +148,7 @@ export class CdpScreen implements Screen {
   private sessions = new Map<string, string>(); // targetId → sessionId
   private active?: string;
   private mouse = { x: 0, y: 0 };
+  private held?: { button: string; buttons: number; count: number };
   private thumbTimer?: ReturnType<typeof setInterval>;
   private fps = Number(process.env.SCUT_FPS ?? 8);
   private lastFrameAt = 0;
@@ -390,7 +391,8 @@ export class CdpScreen implements Screen {
     const button = a.button === 3 ? "right" : a.button === 2 ? "middle" : "left";
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
     switch (a.kind) {
-      case "move": return this.mouse_("mouseMoved", x, y);
+      // While a button is held, moves carry it, so a drag selects text or moves things.
+      case "move": return this.mouse_("mouseMoved", x, y, this.held ? { button: this.held.button, buttons: this.held.buttons } : {});
       case "click":
       case "dblclick": {
         const n = a.kind === "dblclick" ? 2 : 1;
@@ -401,8 +403,15 @@ export class CdpScreen implements Screen {
         }
         return;
       }
-      case "down": return this.mouse_("mousePressed", x, y, { button, buttons, clickCount: 1 });
-      case "up": return this.mouse_("mouseReleased", x, y, { button, buttons: 0, clickCount: 1 });
+      case "down": {
+        this.held = { button, buttons, count: Math.max(1, Math.min(3, a.count ?? 1)) };
+        return this.mouse_("mousePressed", x, y, { button, buttons, clickCount: this.held.count });
+      }
+      case "up": {
+        const count = this.held?.count ?? 1;
+        this.held = undefined;
+        return this.mouse_("mouseReleased", x, y, { button, buttons: 0, clickCount: count });
+      }
       case "scroll": return this.mouse_("mouseWheel", x, y, { deltaX: 0, deltaY: a.dy ?? 100 });
       case "key": {
         for (const combo of (a.keys ?? "").split(" ").filter(Boolean)) await this.key(combo);

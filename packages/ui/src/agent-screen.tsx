@@ -59,6 +59,8 @@ export function useDrive(a: AgentData, name: string) {
 }
 
 const ESC_WINDOW = 400;
+/** Browser button (0 left, 1 middle, 2 right) to X11 numbering (1 left, 2 middle, 3 right). */
+const BUTTONS: Record<number, number> = { 0: 1, 1: 2, 2: 3 };
 
 /**
  * Where the agent's browser is, read from its address. The agent's browser runs without its own address bar, so the
@@ -105,6 +107,7 @@ export function AgentScreen({ agent, a, drive, headline, actual = false, compact
   const { driving, capturing } = drive;
   const img = useRef<HTMLImageElement>(null);
   const lastMove = useRef(0);
+  const held = useRef(new Set<number>());
   const escAt = useRef(0);
   const escTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [nudge, setNudge] = useState(0);
@@ -210,16 +213,36 @@ export function AgentScreen({ agent, a, drive, headline, actual = false, compact
             if (document.activeElement !== drive.screenRef.current) { drive.screenRef.current?.focus({ preventScroll: true }); }
             e.preventDefault();
           }}
-          onClick={(e) => {
-            if (!driving) { setNudge(Date.now()); return; }
-            send({ t: "input", kind: "click", ...pos(e), button: 1 });
+          // The real press, moves and release of every button, so drags select text and move windows, double and
+          // triple clicks count as such, and the middle button pastes. The pointer is captured while a button is down:
+          // a release outside the screen still arrives.
+          onPointerDown={(e) => {
+            if (!driving || !e.isPrimary) return;
+            const button = BUTTONS[e.button];
+            if (!button) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            held.current.add(button);
+            send({ t: "input", kind: "down", ...pos(e), button, count: e.detail || 1 });
           }}
-          onDoubleClick={(e) => driving && send({ t: "input", kind: "dblclick", ...pos(e) })}
-          onContextMenu={(e) => { if (!driving) return; e.preventDefault(); send({ t: "input", kind: "click", ...pos(e), button: 3 }); }}
+          onPointerUp={(e) => {
+            const button = BUTTONS[e.button];
+            if (!button || !held.current.delete(button)) return;
+            send({ t: "input", kind: "up", ...pos(e), button });
+          }}
+          onPointerCancel={() => {
+            for (const button of held.current) send({ t: "input", kind: "up", button });
+            held.current.clear();
+          }}
+          onClick={() => { if (!driving) setNudge(Date.now()); }}
+          onAuxClick={(e) => driving && e.preventDefault()}
+          onContextMenu={(e) => driving && e.preventDefault()}
           onWheel={(e) => driving && send({ t: "input", kind: "scroll", ...pos(e), dy: e.deltaY })}
-          onMouseMove={(e) => {
-            if (!driving || Date.now() - lastMove.current < 60) return;
+          onPointerMove={(e) => {
+            if (!driving) return;
+            const dragging = held.current.size > 0;
+            if (Date.now() - lastMove.current < (dragging ? 30 : 60)) return;
             lastMove.current = Date.now();
+            if (dragging) send({ t: "input", kind: "move", ...pos(e) });
             send({ t: "cursor", ...pos(e) });
           }}
           className={cx(

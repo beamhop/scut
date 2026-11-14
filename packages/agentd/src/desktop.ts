@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-// The agent's own computer inside a sandbox: a small Linux desktop (Xvfb, Openbox windows, a tint2 dock with Browser
-// and Terminal, a Chromium window with tabs and an address bar), MJPEG frames via ffmpeg, input via xdotool.
+// The agent's own computer inside a sandbox: a small Linux desktop (Xvfb, Openbox windows, a tint2 dock with Browser,
+// Files and Terminal, a Chromium window with tabs and an address bar), MJPEG frames via ffmpeg, input via xdotool.
 // The other implementation of Screen (screen.ts) is CdpScreen, for agents running directly on the host.
 import { SCREEN } from "@scut/protocol";
 import type { Subprocess } from "bun";
@@ -37,7 +37,7 @@ const OPENBOX_RC = `<?xml version="1.0" encoding="UTF-8"?>
 </openbox_config>
 `;
 
-/** The dock: Browser and Terminal launchers, the open windows, a clock. */
+/** The dock: Browser, Files and Terminal launchers, the open windows, a clock. */
 function tint2rc(dataDir: string) {
   return `panel_items = LTSC
 panel_size = 100% ${DOCK_H}
@@ -76,6 +76,7 @@ launcher_padding = 4 4 6
 launcher_background_id = 0
 launcher_icon_size = 24
 launcher_item_app = ${dataDir}/desktop/browser.desktop
+launcher_item_app = ${dataDir}/desktop/files.desktop
 launcher_item_app = ${dataDir}/desktop/terminal.desktop
 systray_padding = 0 0 0
 time1_format = %H:%M
@@ -86,6 +87,7 @@ clock_padding = 8 0
 }
 
 const ICON_BROWSER = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" fill="#3d7bd9"/><ellipse cx="24" cy="24" rx="9" ry="21" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M3 24h42M7 13h34M7 35h34" stroke="#fff" stroke-width="2.5"/></svg>`;
+const ICON_FILES = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path d="M4 12a4 4 0 0 1 4-4h10l4 5h18a4 4 0 0 1 4 4v19a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z" fill="#d9a33d"/><path d="M4 19h40v17a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z" fill="#f0bd52"/></svg>`;
 const ICON_TERMINAL = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="3" y="6" width="42" height="36" rx="6" fill="#2f2d28" stroke="#5a564d" stroke-width="2"/><path d="M12 18l8 6-8 6" fill="none" stroke="#e6e3dc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 31h12" stroke="#e6e3dc" stroke-width="3" stroke-linecap="round"/></svg>`;
 
 /** One DevTools protocol call on a page target (short-lived socket). */
@@ -154,17 +156,19 @@ export class X11Screen implements Screen {
     const bin = process.env.SCUT_BROWSER ?? "chromium";
     await writeFile(`${d}/browser.svg`, ICON_BROWSER);
     await writeFile(`${d}/terminal.svg`, ICON_TERMINAL);
+    await writeFile(`${d}/files.svg`, ICON_FILES);
     await writeFile(`${d}/browser.desktop`, `[Desktop Entry]\nType=Application\nName=Browser\nIcon=${d}/browser.svg\nExec=${bin} --no-sandbox --test-type --user-data-dir=${this.dataDir}/chrome --new-window\n`);
+    await writeFile(`${d}/files.desktop`, `[Desktop Entry]\nType=Application\nName=Files\nIcon=${d}/files.svg\nExec=pcmanfm ${this.dataDir}/workspace\n`);
     await writeFile(`${d}/terminal.desktop`, `[Desktop Entry]\nType=Application\nName=Terminal\nIcon=${d}/terminal.svg\nExec=xterm -fa "DejaVu Sans Mono" -fs 11 -bg "#1b1a17" -fg "#e6e3dc" -cr "#e6e3dc" -bc -geometry 110x32\nPath=${this.dataDir}/workspace\n`);
   }
 
   /**
-   * Wallpaper and dock. Agent images from before the desktop lack tint2/xterm: those are installed once here (in the
+   * Wallpaper and dock. Agent images from before the desktop lack tint2/xterm/pcmanfm: those are installed once here (in the
    * background, the agent works meanwhile) and kept on its disk.
    */
   private async startDesktop() {
-    if (!Bun.which("tint2") || !Bun.which("xterm") || !Bun.which("xsetroot")) {
-      const ok = await installPackages(["tint2", "xterm", "x11-xserver-utils"]);
+    if (!Bun.which("tint2") || !Bun.which("xterm") || !Bun.which("xsetroot") || !Bun.which("pcmanfm")) {
+      const ok = await installPackages(["tint2", "xterm", "x11-xserver-utils", "pcmanfm", "adwaita-icon-theme"]);
       if (!ok) return;
     }
     Bun.spawnSync(["xsetroot", "-solid", "#23211d"], { env: env(), stdout: "ignore", stderr: "ignore" });

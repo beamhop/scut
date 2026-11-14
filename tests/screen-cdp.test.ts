@@ -11,6 +11,7 @@ const PAGE = `<!doctype html><html><body style="margin:0;font:16px sans-serif">
 <button id="b" style="position:absolute;left:20px;top:80px;width:120px;height:40px" onclick="document.title='clicked:'+(++window.n)">Go</button>
 <div id="d" style="position:absolute;left:200px;top:80px;width:120px;height:40px;background:#ccc" ondblclick="document.title='dbl'">dbl</div>
 <div id="r" style="position:absolute;left:20px;top:140px;width:120px;height:40px;background:#eee" oncontextmenu="document.title='right';return false">right</div>
+<p id="t" style="position:absolute;left:20px;top:280px;margin:0;font:20px monospace;user-select:text" ondblclick="document.title='pdbl'">select these words</p>
 <a id="l" href="/second" target="_blank" style="position:absolute;left:20px;top:200px">new tab</a>
 <form onsubmit="document.title='submitted:'+document.getElementById('q').value;return false" style="position:absolute;left:400px;top:20px"><input id="f" style="width:200px;height:30px"></form>
 <div style="height:4000px"></div>
@@ -89,6 +90,19 @@ test("click, double-click and right-click land where asked", async () => {
   await until(async () => (await evalJs("document.title")) === "dbl");
   await screen.act({ kind: "click", x: 80, y: 160, button: 3 });
   await until(async () => (await evalJs("document.title")) === "right");
+});
+
+test("Take over's press, drag and release select text; presses counted 1, 2 double-click", async () => {
+  // From the start of "select" to the end of "these" (12px per character in 20px monospace).
+  await screen.act({ kind: "down", x: 21, y: 290, button: 1, count: 1 });
+  for (const x of [60, 120, 160]) await screen.act({ kind: "move", x, y: 290 });
+  await screen.act({ kind: "up", x: 160, y: 290, button: 1 });
+  await until(async () => (await evalJs("String(getSelection())")) === "select these");
+  await screen.act({ kind: "down", x: 200, y: 290, button: 1, count: 1 });
+  await screen.act({ kind: "up", x: 200, y: 290, button: 1 });
+  await screen.act({ kind: "down", x: 200, y: 290, button: 1, count: 2 });
+  await screen.act({ kind: "up", x: 200, y: 290, button: 1 });
+  await until(async () => (await evalJs("document.title")) === "pdbl");
 });
 
 test("typing, select-all, Return and modifier keys", async () => {

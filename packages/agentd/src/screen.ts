@@ -9,6 +9,8 @@ export type ScreenAction = {
   y?: number;
   /** 1 left, 2 middle, 3 right (X11 numbering). */
   button?: number;
+  /** For "down": which press of a quick series this is (2 starts a double-click), as the browser counts it. */
+  count?: number;
   dy?: number;
   /** xdotool key syntax: "Return", "ctrl+a", "ctrl+w Tab". */
   keys?: string;

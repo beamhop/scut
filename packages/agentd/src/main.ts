@@ -46,6 +46,8 @@ let spec: AgentSpec | null = null;
 let agentSk: Uint8Array | null = null;
 let lease: Event | null = null;
 let desktop: Screen | null = null;
+/** Owner input (Take over), applied one action at a time in arrival order. */
+let inputQueue: Promise<unknown> = Promise.resolve();
 let harness: Harness | null = null;
 const channels: Channel[] = [];
 const tokens = { input: 0, output: 0 };
@@ -1057,7 +1059,9 @@ Bun.serve<WsData>({
         const first = m.small ? (desktop?.latestThumb ?? desktop?.latest) : desktop?.latest;
         if (m.frames && first) ws.send(first);
       } else if (m.t === "input") {
-        if (desktop) await desktop.act(m as any).catch((e) => ws.send(JSON.stringify({ t: "error", message: String(e.message) })));
+        // One at a time, in the order sent: a press, its moves and its release must reach the screen in that order.
+        const d = desktop;
+        if (d) inputQueue = inputQueue.then(() => d.act(m as any)).catch((e) => ws.send(JSON.stringify({ t: "error", message: String(e.message) })));
       } else if (m.t === "cursor") {
         broadcast({ t: "cursor", x: m.x, y: m.y, who: "owner" }, ws);
       } else if (m.t === "chat") {
