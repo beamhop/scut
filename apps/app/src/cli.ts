@@ -58,8 +58,18 @@ function openWindow(url: string) {
   } catch {}
 }
 
-const scut = await Scut.open();
 const [cmd, ...rest] = positionals;
+// Opening the app while it already runs (a second click on its icon): show its window, don't start a second copy.
+if (cmd === undefined) {
+  const url = `http://127.0.0.1:${Number(values.port ?? 7777)}`;
+  const running = await fetch(`${url}/api/prefetch`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false);
+  if (running) {
+    if (!process.env.SCUT_NO_WINDOW) openWindow(url);
+    process.exit(0);
+  }
+}
+
+const scut = await Scut.open();
 
 switch (cmd) {
   case "create": {

@@ -46,4 +46,4 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: ./scripts/build-app.sh
       - uses: actions/upload-artifact@v4
-        with: { name: scut-apps, path: dist/scut-* }
+        with: { name: scut-apps, path: "dist/scut-*\ndist/Beamhop-*.exe\ndist/Beamhop-*.app.zip" }
