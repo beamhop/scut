@@ -682,3 +682,42 @@ describe("v0.29: chat app health", () => {
     c.close();
   });
 });
+
+describe("v0.31: move an agent by file", () => {
+  test("export to a passphrase-locked file, import on another Beamhop (new owner), history and memory intact", async () => {
+    const rec = await scut.create({ name: "Traveler", harness: "mock" });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "remember the plan" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    c.send({ t: "memory", op: "add", text: "Prefers trains" });
+    await c.waitFor((m) => m.t === "memory" && (m as any).items.length > 0);
+    c.close();
+    await expect(scut.exportAgent(rec.id, "short")).rejects.toThrow("at least 8");
+    const src = rec.current;
+    const { file, filename } = await scut.exportAgent(rec.id, "correct horse battery");
+    expect(filename).toBe("Traveler.beamhop");
+    expect(scut.agents.find((a) => a.id === rec.id)).toBeUndefined(); // gone from here
+    expect(await fetch(`${src.endpoint}/health`).then(() => "up", () => "down")).toBe("down");
+
+    const other = await Scut.open(mkdtempSync(`${tmpdir()}/scut-other-`)); // another person's Beamhop
+    expect(other.ownerPubkey).not.toBe(scut.ownerPubkey);
+    await expect(other.importAgent(file, "wrong passphrase!")).rejects.toThrow("Wrong passphrase");
+    const damaged = file.slice(0, file.length - 10);
+    await expect(other.importAgent(damaged, "correct horse battery")).rejects.toThrow("incomplete");
+    const back = await other.importAgent(file, "correct horse battery");
+    const c2: typeof c = new (c.constructor as any)(back.current.endpoint, other.auth(back.current.endpoint));
+    await c2.open();
+    const hist = await c2.waitFor<any>((m) => m.t === "history");
+    expect(JSON.stringify(hist.chat)).toContain("remember the plan");
+    const mem = await c2.waitFor<any>((m) => m.t === "memory");
+    expect(mem.items.map((x: any) => x.text)).toContain("Prefers trains");
+    c2.send({ t: "chat", text: "still you?" });
+    await c2.waitFor((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).text.includes("message #2"));
+    c2.close();
+    // the old owner's key no longer opens it
+    const oldTok = scut.auth(back.current.endpoint);
+    expect((await fetch(`${back.current.endpoint}/status`, { headers: { authorization: `Scut ${oldTok}` } })).status).toBe(401);
+    await expect(other.importAgent(file, "correct horse battery")).rejects.toThrow("already here");
+    await other.remove(back.id);
+  }, 300_000);
+});

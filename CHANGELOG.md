@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.31.0 — Beam by file
+
+- New destination in every "Beam to…" menu: **A file, for another computer**. The agent stops here and goes into one encrypted `.beamhop` file with its files, browser logins, memory and chats, locked with your passphrase (PBKDF2-SHA256, 310k rounds + AES-256-GCM over the agent key and bundle key; the bundle itself is the same AES-GCM bundle a live beam sends).
+- **Open an agent file** (in the dock, and on the very first screen of a fresh install) brings it back to life on this computer or any connected cloud. Whoever opens it becomes its owner: the agent host accepts the new owner only from someone holding the agent's own key and the bundle key.
+- Never two copies: exporting retires the old host with a signed lease that points at the file; the next host gets the next lease.
+- Clear errors for a wrong passphrase, a damaged or cut-off file, and an agent that's already here. Lose the passphrase and the file can't be opened — the dialog says so.
+- Tests: e2e export → import into a second Beamhop with a different owner (history, memory, replies intact; the old owner is locked out), and a UI test that downloads the file and opens it again.
+- Fixed: location chips on narrow tiles no longer wrap onto two lines.
+
 ## v0.30.0 — A face on every screen
 
 - The agent's browser now opens on its own start page instead of a blank white tab: its name and mascot in its colour, and "Ready for a task". The crew grid finally shows who is who at a glance.

@@ -42,6 +42,7 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
     port,
     hostname: "127.0.0.1",
     idleTimeout: 255,
+    maxRequestBodySize: 8 * 1024 * 1024 * 1024, // agent files carry a whole workspace
     async fetch(req) {
       const bad = localOnly(req);
       if (bad) return new Response(bad, { status: 403, headers: SECURITY_HEADERS });
@@ -82,6 +83,15 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             return json({ ok: true });
           }
           if (!action) return json({ ...rec, token: scut.auth(rec.current.endpoint) });
+          if (action === "export" && req.method === "POST") {
+            const { passphrase } = (await req.json()) as { passphrase: string };
+            try {
+              const { file, filename } = await scut.exportAgent(rec.id, String(passphrase ?? ""));
+              return new Response(file as Uint8Array<ArrayBuffer>, { headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="${filename}"` } });
+            } catch (e: any) {
+              return json({ error: String(e?.message ?? e) }, 400);
+            }
+          }
           if (action === "token") return json({ endpoint: rec.current.endpoint, token: scut.auth(rec.current.endpoint) });
           if (action === "phone") {
             const ep = rec.current.endpoint;
@@ -94,6 +104,14 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             rec.beam = { to, stage: "packing", startedAt: Date.now() };
             scut.beam(rec.id, to).catch((e) => console.error("beam failed", e));
             return json({ ok: true });
+          }
+        }
+        if (p === "/api/import" && req.method === "POST") {
+          try {
+            const rec = await scut.importAgent(new Uint8Array(await req.arrayBuffer()), decodeURIComponent(req.headers.get("x-passphrase") ?? ""), url.searchParams.get("to") ?? "local");
+            return json(rec);
+          } catch (e: any) {
+            return json({ error: String(e?.message ?? e) }); // a wrong passphrase is an answer, not a server error
           }
         }
         if (p === "/api/brain" && req.method === "GET") {

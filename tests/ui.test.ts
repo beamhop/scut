@@ -230,3 +230,43 @@ test("the local API refuses other websites (CSRF, DNS rebinding) and can't be fr
   expect(r).toBe(200);
   await page.close();
 });
+
+test("move an agent to a file and open it again, all from the UI", async () => {
+  const rec = await scut.create({ name: "Packy", harness: "mock" });
+  const dir = mkdtempSync(`${tmpdir()}/scut-dl-`);
+  const page = await open("/");
+  const cdp = await page.createCDPSession();
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dir });
+  await page.waitForFunction(() => document.body.innerText.includes("Packy"), { timeout: 20_000 });
+  await page.evaluate(() => {
+    const tile = [...document.querySelectorAll<HTMLElement>('main [tabindex="0"]')].find((t) => t.innerText.includes("Packy"))!;
+    [...tile.querySelectorAll("button")].find((b) => b.textContent === "Beam to…")!.click();
+  });
+  await page.waitForSelector('[role="menuitem"]');
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.startsWith("A file"))!.click());
+  await page.waitForSelector('[aria-label="Move Packy to a file"]');
+  await page.type('[aria-label="Move Packy to a file"] input[aria-label="Passphrase"]', "packy-pass-123");
+  await page.type('[aria-label="Repeat passphrase"]', "packy-pass-123");
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Move to file")!.click());
+  await page.waitForFunction(() => document.body.innerText.includes("is now in Packy.beamhop"), { timeout: 60_000 });
+  const saved = `${dir}/Packy.beamhop`;
+  for (let i = 0; i < 50 && !(await Bun.file(saved).exists()); i++) await Bun.sleep(200);
+  expect(await Bun.file(saved).exists()).toBe(true);
+  expect(scut.agents.find((a) => a.id === rec.id)).toBeUndefined();
+  // open it again
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Open an agent file")!.click());
+  await page.waitForSelector('input[aria-label="Agent file"]');
+  const input = (await page.$('input[aria-label="Agent file"]'))!;
+  await (input as any).uploadFile(saved);
+  await page.type('[aria-label="Open an agent file"] input[aria-label="Passphrase"]', "nope-wrong");
+  const clickOpen = () => page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Open")!.click());
+  await clickOpen();
+  await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent?.includes("Wrong passphrase"), { timeout: 30_000 });
+  await page.evaluate(() => { const i = document.querySelector<HTMLInputElement>('[aria-label="Open an agent file"] input[aria-label="Passphrase"]')!; i.focus(); i.select(); });
+  await page.keyboard.press("Backspace");
+  await page.type('[aria-label="Open an agent file"] input[aria-label="Passphrase"]', "packy-pass-123");
+  await clickOpen();
+  await page.waitForFunction(() => document.body.innerText.includes("Packy is here."), { timeout: 120_000 });
+  expect(scut.agents.find((a) => a.id === rec.id)).toBeTruthy();
+  await page.close();
+});

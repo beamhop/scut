@@ -6,6 +6,7 @@ import {
 import { DockerDriver, FlyDriver, RailwayDriver, RenderDriver, SmolvmDriver, waitHealthy, type HostDriver, type Instance } from "@scut/drivers";
 import type { Event } from "nostr-tools";
 import { chmod, mkdir } from "node:fs/promises";
+import { openAgentFile, writeAgentFile } from "./agentfile.ts";
 
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
 export const IMAGE = process.env.SCUT_IMAGE ?? "ghcr.io/beamhop/scut-agent:latest";
@@ -29,32 +30,34 @@ export interface AgentRecord {
 export type BeamSummary = { bytes: number; carried: { chat?: number; memory?: number; schedules?: number; skills?: number; channels?: number } };
 export type BeamStage = "packing" | "provisioning" | "transferring" | "restoring" | "online" | "failed";
 
-async function loadJson<T>(f: string, fallback: T): Promise<T> {
-  const file = Bun.file(`${HOME}/${f}`);
+async function loadJson<T>(home: string, f: string, fallback: T): Promise<T> {
+  const file = Bun.file(`${home}/${f}`);
   return (await file.exists()) ? ((await file.json()) as T) : fallback;
 }
-async function saveJson(f: string, v: unknown) {
-  await mkdir(HOME, { recursive: true });
-  await Bun.write(`${HOME}/${f}`, JSON.stringify(v, null, 2));
+async function saveJson(home: string, f: string, v: unknown) {
+  await mkdir(home, { recursive: true });
+  await Bun.write(`${home}/${f}`, JSON.stringify(v, null, 2));
 }
 
 export class Scut {
+  home = HOME;
   ownerSk!: Uint8Array;
   ownerPubkey!: string;
   agents: AgentRecord[] = [];
   drivers = new Map<string, HostDriver>();
 
-  static async open() {
+  static async open(home = HOME) {
     const s = new Scut();
-    await mkdir(HOME, { recursive: true });
-    const kf = Bun.file(`${HOME}/owner.key`);
+    s.home = home;
+    await mkdir(home, { recursive: true });
+    const kf = Bun.file(`${home}/owner.key`);
     if (await kf.exists()) s.ownerSk = hexToBytes((await kf.text()).trim());
     else {
       s.ownerSk = generateSecretKey();
       await Bun.write(kf, bytesToHex(s.ownerSk));
     }
     s.ownerPubkey = getPublicKey(s.ownerSk);
-    s.agents = await loadJson<AgentRecord[]>("agents.json", []);
+    s.agents = await loadJson<AgentRecord[]>(home, "agents.json", []);
     await s.loadDrivers();
     await s.recoverInterruptedBeams();
     return s;
@@ -89,7 +92,7 @@ export class Scut {
   }
 
   async loadDrivers() {
-    const p = await loadJson<any>("providers.json", {});
+    const p = await loadJson<any>(this.home, "providers.json", {});
     const local = (process.env.SCUT_LOCAL_DRIVER ?? ((await SmolvmDriver.availability()).available ? "smolvm" : "docker")) as string;
     this.drivers.set("local", local === "smolvm" ? Object.assign(new SmolvmDriver(), { id: "local" }) : new DockerDriver({ id: "local", label: "This computer" }));
     // A second local container host labelled as cloud, for demos and tests without provider accounts.
@@ -101,11 +104,11 @@ export class Scut {
 
   /** The remembered brain (model endpoint + key). Stored only on this computer, readable only by you. */
   async brain(): Promise<ModelConfig | undefined> {
-    return loadJson<ModelConfig | undefined>("brain.json", undefined);
+    return loadJson<ModelConfig | undefined>(this.home, "brain.json", undefined);
   }
   async saveBrain(m: ModelConfig) {
-    await saveJson("brain.json", m);
-    await chmod(`${HOME}/brain.json`, 0o600).catch(() => {});
+    await saveJson(this.home, "brain.json", m);
+    await chmod(`${this.home}/brain.json`, 0o600).catch(() => {});
   }
 
   /** Check a model endpoint + key before an agent depends on it. Never throws: returns a plain-language answer. */
@@ -137,14 +140,14 @@ export class Scut {
   }
 
   async saveProvider(id: string, cfg: Record<string, string>) {
-    const p = await loadJson<any>("providers.json", {});
+    const p = await loadJson<any>(this.home, "providers.json", {});
     p[id] = cfg;
-    await saveJson("providers.json", p);
+    await saveJson(this.home, "providers.json", p);
     await this.loadDrivers();
   }
 
   save() {
-    return saveJson("agents.json", this.agents);
+    return saveJson(this.home, "agents.json", this.agents);
   }
 
   get(id: string) {
@@ -332,6 +335,67 @@ export class Scut {
       await stage("failed", String(e?.message ?? e));
       throw e;
     }
+  }
+
+  /**
+   * Move an agent into a passphrase-locked file, to carry to another computer. The agent stops here for good:
+   * its host retires with a lease pointing at the file, so the copy in the file is the only live one.
+   */
+  async exportAgent(agentId: string, passphrase: string): Promise<{ file: Uint8Array; filename: string }> {
+    if (passphrase.length < 8) throw new Error("Use a passphrase of at least 8 characters");
+    const rec = this.get(agentId);
+    const src = rec.current;
+    const prep = (await (await this.req(src.endpoint, "/beam/prepare", { method: "POST" })).json()) as {
+      bundleId: string; hash: string; size: number; sealed: string; hostPubkey: string; lease: Event;
+    };
+    try {
+      const secrets = unseal<{ bundleKey: string; agentSk: string }>(this.ownerSk, prep.hostPubkey, prep.sealed);
+      const bundle = new Uint8Array(await (await this.req(src.endpoint, `/beam/bundle/${prep.bundleId}`)).arrayBuffer());
+      const seq = (readLease(prep.lease, rec.agentPubkey)?.seq ?? 0) + 1;
+      const file = await writeAgentFile(
+        { id: rec.id, name: rec.name, mascot: rec.mascot, harness: rec.harness, agentPubkey: rec.agentPubkey, model: rec.model, nostr: rec.nostr, hash: prep.hash, size: prep.size, leaseSeq: seq, exportedAt: Date.now() },
+        secrets, passphrase, bundle,
+      );
+      const lease = signLease(hexToBytes(secrets.agentSk), rec.id, { holder: "file", seq });
+      await this.req(src.endpoint, "/beam/commit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lease }) });
+      await this.drivers.get(src.driver)?.destroy(src).catch(() => {});
+      this.agents = this.agents.filter((a) => a.id !== rec.id);
+      await this.save();
+      await this.syncCrew();
+      return { file, filename: `${rec.name.replace(/[^\w-]+/g, "_")}.beamhop` };
+    } catch (e) {
+      await this.req(src.endpoint, "/beam/abort", { method: "POST" }).catch(() => {});
+      throw e;
+    }
+  }
+
+  /** Bring an agent in from a file made by exportAgent, on this computer or any other Beamhop. You become its owner. */
+  async importAgent(fileBytes: Uint8Array, passphrase: string, driverId = "local"): Promise<AgentRecord> {
+    const { header: h, bundle, secrets } = await openAgentFile(fileBytes, passphrase);
+    if (this.agents.some((a) => a.id === h.id)) throw new Error(`${h.name} is already here`);
+    const driver = this.drivers.get(driverId);
+    if (!driver) throw new Error(`unknown destination ${driverId}`);
+    if (getPublicKey(hexToBytes(secrets.agentSk)) !== h.agentPubkey) throw new Error("This agent file is damaged");
+    const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
+    const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: h.agentPubkey, bundleHash: h.hash, issuedAt: Date.now() };
+    const target = await driver.create({ name: `${h.id}-${bytesToHex(crypto.getRandomValues(new Uint8Array(2)))}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
+    try {
+      await waitHealthy(target.endpoint);
+      const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
+      const lease = signLease(hexToBytes(secrets.agentSk), h.id, { holder: hello.hostPubkey, seq: h.leaseSeq + 1 });
+      await this.req(target.endpoint, "/beam/bundle", { method: "PUT", body: bundle as Uint8Array<ArrayBuffer> });
+      const handoff: Handoff = { beamId, agentSk: secrets.agentSk, bundleKey: secrets.bundleKey, lease };
+      await this.req(target.endpoint, "/beam/handoff", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sealed: seal(this.ownerSk, hello.hostPubkey, handoff) }) });
+      await this.waitState(target.endpoint, ["running"]);
+    } catch (e) {
+      await driver.destroy(target).catch(() => {});
+      throw e;
+    }
+    const rec: AgentRecord = { id: h.id, name: h.name, mascot: h.mascot, harness: h.harness as HarnessKind, agentPubkey: h.agentPubkey, model: h.model, nostr: h.nostr, current: target, history: [] };
+    this.agents.push(rec);
+    await this.save();
+    await this.syncCrew();
+    return rec;
   }
 
   /** Everyone in the crew room: the owner (app key + optional personal npub) and every agent with Nostr. */

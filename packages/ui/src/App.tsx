@@ -214,6 +214,82 @@ function BeamMenu({ agent, dests, onBeam, onClose }: { agent: Agent; dests: Dest
           </button>
         );
       })}
+      <button role="menuitem" onClick={() => { dispatchEvent(new CustomEvent("beamhop:export", { detail: agent.id })); onClose(); }}
+        className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-sm hover:bg-panel2 focus:bg-panel2 focus:outline-none">
+        <span>A file, for another computer…</span><span className="font-mono text-[11px] text-slate-400">offline</span>
+      </button>
+    </div>
+  );
+}
+
+/** Move an agent into a passphrase-locked file. It stops here; the file is the agent until it's opened elsewhere. */
+function ExportDialog({ agent, onClose, onDone }: { agent: Agent; onClose: () => void; onDone: (filename: string) => void }) {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const ok = p1.length >= 8 && p1 === p2;
+  async function go() {
+    setBusy(true); setError(undefined);
+    const r = await fetch(`/api/agents/${agent.id}/export`, { method: "POST", body: JSON.stringify({ passphrase: p1 }) });
+    if (!r.ok) { setBusy(false); setError((await r.json().catch(() => ({}))).error ?? `Export failed (${r.status})`); return; }
+    const name = r.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `${agent.name}.beamhop`;
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    onDone(name);
+  }
+  const input = "w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam";
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label={`Move ${agent.name} to a file`}>
+      <div className="w-full max-w-md space-y-4 rounded-3xl bg-panel p-7 ring-1 ring-white/10">
+        <div className="text-lg font-semibold">Move {agent.name} to a file</div>
+        <p className="text-sm text-slate-300">{agent.name} stops here and goes into one encrypted file, with its files, logins, memory and chats. Open the file in Beamhop on any computer to bring {agent.name} back to life there — whoever opens it becomes its owner.</p>
+        <input className={input} type="password" aria-label="Passphrase" placeholder="Passphrase (8+ characters)" value={p1} onChange={(e) => setP1(e.target.value)} />
+        <input className={input} type="password" aria-label="Repeat passphrase" placeholder="Repeat it" value={p2} onChange={(e) => setP2(e.target.value)} />
+        <p className="text-xs text-amber-200">Keep the file and the passphrase safe: until it's opened again, the file is {agent.name}. A lost passphrase can't be recovered.</p>
+        {error && <div role="alert" className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
+        <div className="flex justify-between">
+          <button className="text-slate-400 hover:text-white" onClick={onClose}>Cancel</button>
+          <button disabled={!ok || busy} onClick={go} className="rounded-full bg-beam px-5 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Packing…" : "Move to file"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Bring an agent in from a .beamhop file. */
+function ImportDialog({ dests, onClose, onDone }: { dests: Destination[]; onClose: () => void; onDone: (name: string) => void }) {
+  const [file, setFile] = useState<File>();
+  const [pass, setPass] = useState("");
+  const [to, setTo] = useState("local");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  async function go() {
+    if (!file) return;
+    setBusy(true); setError(undefined);
+    const r = await fetch(`/api/import?to=${encodeURIComponent(to)}`, { method: "POST", headers: { "x-passphrase": encodeURIComponent(pass) }, body: file });
+    const j = await r.json().catch(() => ({ error: `Import failed (${r.status})` }));
+    setBusy(false);
+    if (j.error) setError(j.error); else onDone(j.name);
+  }
+  const input = "w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam";
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label="Open an agent file">
+      <div className="w-full max-w-md space-y-4 rounded-3xl bg-panel p-7 ring-1 ring-white/10">
+        <div className="text-lg font-semibold">Open an agent file</div>
+        <p className="text-sm text-slate-300">Bring an agent here from a <span className="font-mono">.beamhop</span> file made on another computer. You'll be its owner.</p>
+        <input className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-panel2 file:px-3 file:py-1.5 file:text-slate-100" type="file" accept=".beamhop" aria-label="Agent file" onChange={(e) => setFile(e.target.files?.[0])} />
+        <input className={input} type="password" aria-label="Passphrase" placeholder="Passphrase" value={pass} onChange={(e) => setPass(e.target.value)} />
+        <label className="flex items-center gap-2 text-sm text-slate-300">Run it on
+          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Run it on" className="rounded-lg bg-panel2 px-2 py-1">{dests.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}</select>
+        </label>
+        {error && <div role="alert" className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
+        <div className="flex justify-between">
+          <button className="text-slate-400 hover:text-white" onClick={onClose}>Cancel</button>
+          <button disabled={!file || !pass || busy} onClick={go} className="rounded-full bg-beam px-5 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Bringing it in… (~15 s)" : "Open"}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -301,8 +377,8 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
         <Mascot variant={agent.mascot} state={needs ? "stuck" : a.state} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-semibold">{agent.name}</span>
-            <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
+            <span className="min-w-0 truncate font-semibold">{agent.name}</span>
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
           </div>
           <div className="truncate font-mono text-[12px] text-slate-400">{now}</div>
         </div>
@@ -332,6 +408,7 @@ function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; o
           </div>
         ))}
         <button onClick={onAddCloud} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">+ Add a cloud</button>
+        <button onClick={() => dispatchEvent(new Event("beamhop:import"))} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">Open an agent file</button>
       </div>
     </nav>
   );
@@ -463,6 +540,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 <datalist id="model-options">{models.map((m) => <option key={m} value={m} />)}</datalist>
               </div>
             </details>
+            {firstRun && <p className="text-xs text-slate-400">Moving an agent from another computer? <button onClick={() => dispatchEvent(new Event("beamhop:import"))} className="text-beam hover:underline">Open its file</button>.</p>}
             <p className="text-xs text-slate-400">Have a ChatGPT or GitHub Copilot subscription instead? <button onClick={() => { setCheck({}); setStep(1); }} className="text-beam hover:underline">Skip this</button>, choose Codex or Copilot CLI under More options, then sign in on the agent's own screen.</p>
           </div>
         )}
@@ -558,7 +636,7 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
         {!standalone && <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>}
         <Mascot variant={agent.mascot} size={32} state={a.state} />
         <h1 className="text-base font-semibold">{agent.name}</h1>
-        <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
         <StateChip state={a.state} />
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden font-mono text-[11px] text-slate-400 lg:inline">
@@ -1155,6 +1233,8 @@ function CrewApp() {
   const [dragging, setDragging] = useState(false);
   const [crewOpen, setCrewOpen] = useState(false);
   const [addCloud, setAddCloud] = useState(false);
+  const [exportId, setExportId] = useState<string>();
+  const [importing, setImporting] = useState(false);
   const toasts = useToasts();
   const prevStages = useRef<Record<string, string>>({});
 
@@ -1194,8 +1274,17 @@ function CrewApp() {
       else toasts.push(`The ${d.provider} key from your agent didn't work: ${d.error}`, "err");
     };
     addEventListener("scut:cloud", onCloud);
-    return () => removeEventListener("scut:cloud", onCloud);
+    const onExport = (e: Event) => setExportId((e as CustomEvent).detail);
+    const onImport = () => setImporting(true);
+    addEventListener("beamhop:export", onExport);
+    addEventListener("beamhop:import", onImport);
+    return () => { removeEventListener("scut:cloud", onCloud); removeEventListener("beamhop:export", onExport); removeEventListener("beamhop:import", onImport); };
   }, []);
+  const exportAgent = agents.find((x) => x.id === exportId);
+  const fileDialogs = <>
+    {exportAgent && <ExportDialog agent={exportAgent} onClose={() => setExportId(undefined)} onDone={(name) => { setExportId(undefined); location.hash = ""; refresh(); toasts.push(`${exportAgent.name} is now in ${name}. Open it in Beamhop on the other computer.`); }} />}
+    {importing && <ImportDialog dests={dests} onClose={() => setImporting(false)} onDone={(name) => { setImporting(false); refresh(); toasts.push(`${name} is here.`); }} />}
+  </>;
 
   const beam = useCallback(async (id: string, to: string) => {
     const r = await api.beam(id, to);
@@ -1210,7 +1299,7 @@ function CrewApp() {
   const open = useMemo(() => agents.find((x) => route === `#/agent/${x.id}`), [agents, route]);
   const needCount = Object.values(status).filter((s) => s === "stuck").length;
 
-  if (open) return <>{toasts.view}<AgentView agent={open} dests={dests} onBack={() => (location.hash = "")} onBeam={(to) => beam(open.id, to)} /></>;
+  if (open) return <>{toasts.view}{fileDialogs}<AgentView agent={open} dests={dests} onBack={() => (location.hash = "")} onBeam={(to) => beam(open.id, to)} /></>;
 
   return (
     <div className="stars min-h-screen pb-40">
@@ -1228,11 +1317,12 @@ function CrewApp() {
           <Tile key={ag.id} agent={ag} dests={dests} onOpen={() => (location.hash = `#/agent/${ag.id}`)} onBeam={(to) => beam(ag.id, to)} onStatus={onStatus} />
         ))}
       </main>
-      {loaded && agents.length === 0 && !creating && <CreateAgent firstRun onDone={refresh} />}
+      {loaded && agents.length === 0 && !creating && !importing && <CreateAgent firstRun onDone={refresh} />}
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
       <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} onAddCloud={() => setAddCloud(true)} />
       {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
       {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} />}
+      {fileDialogs}
       {toasts.view}
     </div>
   );

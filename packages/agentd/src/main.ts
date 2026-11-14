@@ -501,6 +501,15 @@ async function tryComplete() {
   if (ticket.mode === "beam" && !pendingBundle) return;
   const h = pendingHandoff;
   if (ticket.mode === "beam") await openBundle(DATA, pendingBundle!, h.bundleKey!, ticket.bundleHash);
+  // Moved by file to someone else's Beamhop (or a reinstalled one): whoever holds the agent's own key and the
+  // bundle key may take ownership. The bundled spec names the old owner; hand it to the one who beamed it in.
+  const bundled = ticket.mode === "beam" ? await readJson<AgentSpec>(`${DATA}/spec.json`) : null;
+  if (bundled && !h.spec && bundled.ownerPubkey !== ticket.ownerPubkey) {
+    if (bundled.agentPubkey !== ticket.agentPubkey || getPublicKey(hexToBytes(h.agentSk)) !== bundled.agentPubkey) throw new Error("agent key mismatch");
+    log("new owner", ticket.ownerPubkey.slice(0, 12));
+    bundled.ownerPubkey = ticket.ownerPubkey;
+    await Bun.write(`${DATA}/spec.json`, JSON.stringify(bundled, null, 2));
+  }
   if (h.spec) await Bun.write(`${DATA}/spec.json`, JSON.stringify(h.spec, null, 2));
   await mkdir(`${DATA}/.secrets`, { recursive: true });
   await Bun.write(`${DATA}/.secrets/agent.key`, h.agentSk);
