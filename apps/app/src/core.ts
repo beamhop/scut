@@ -145,6 +145,8 @@ export class Scut {
     model?: ModelConfig;
     autonomy?: Autonomy;
     telegramToken?: string;
+    slack?: { appToken: string; botToken: string };
+    discordToken?: string;
     nostr?: boolean | { relays?: string[]; ownerPubkey?: string };
     driver?: string;
     dailyTokenBudget?: number;
@@ -166,6 +168,8 @@ export class Scut {
       agentPubkey: getPublicKey(agentSk),
       channels: {
         ...(o.telegramToken ? { telegram: { token: o.telegramToken } } : {}),
+        ...(o.slack ? { slack: o.slack } : {}),
+        ...(o.discordToken ? { discord: { token: o.discordToken } } : {}),
         ...(o.nostr ? { nostr: o.nostr === true ? {} : o.nostr } : {}),
       },
       createdAt: Date.now(),

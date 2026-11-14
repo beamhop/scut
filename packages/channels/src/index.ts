@@ -209,3 +209,191 @@ export class NostrChannel implements Channel {
 }
 
 export const CREW_SUBJECT = "Beamhop crew";
+
+// ---------------- Slack (Socket Mode: outbound WebSocket, no public URL) ----------------
+/** Needs an app-level token (xapp-…, connections:write) and a bot token (xoxb-…, chat:write, app_mentions:read, im:history). */
+export class SlackChannel implements Channel {
+  name = "slack";
+  private ws?: WebSocket;
+  private running = false;
+  private botUserId?: string;
+
+  constructor(private appToken: string, private botToken: string, private api = process.env.SCUT_SLACK_API ?? "https://slack.com/api") {}
+
+  private async call(method: string, token: string, body: unknown) {
+    const r = await fetch(`${this.api}/${method}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify(body),
+    });
+    const j = (await r.json()) as any;
+    if (!j.ok) throw new Error(`slack ${method}: ${j.error}`);
+    return j;
+  }
+
+  async botName() {
+    const j = await this.call("auth.test", this.botToken, {}).catch(() => null);
+    this.botUserId = j?.user_id;
+    return j?.user as string | undefined;
+  }
+
+  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, byId: string) => void) {
+    this.running = true;
+    const connect = async () => {
+      if (!this.running) return;
+      try {
+        if (!this.botUserId) await this.botName();
+        const { url } = await this.call("apps.connections.open", this.appToken, {});
+        const ws = new WebSocket(url);
+        this.ws = ws;
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(String(ev.data));
+          if (msg.envelope_id) ws.send(JSON.stringify({ envelope_id: msg.envelope_id })); // ack within 3 s
+          if (msg.type === "disconnect") return ws.close();
+          if (msg.type === "events_api") {
+            const e = msg.payload?.event;
+            if (!e || e.bot_id || e.subtype || (this.botUserId && e.user === this.botUserId)) return;
+            const isDm = e.channel_type === "im";
+            if (e.type === "message" && !isDm) return; // in channels, only answer @mentions (app_mention events)
+            const text = String(e.text ?? "").replace(/<@[A-Z0-9]+>\s*/g, "").trim();
+            onMessage({ channel: "slack", chatId: e.channel, from: e.user, fromId: e.user, text });
+          } else if (msg.type === "interactive") {
+            const a = msg.payload?.actions?.[0];
+            const [kind, id, verdict] = String(a?.value ?? "").split(":");
+            if (kind === "ap") onApproval(id, verdict === "y", msg.payload?.user?.id);
+          }
+        };
+        ws.onclose = () => this.running && setTimeout(connect, 2000);
+        ws.onerror = () => ws.close();
+      } catch {
+        setTimeout(connect, 5000);
+      }
+    };
+    connect();
+  }
+
+  async stop() {
+    this.running = false;
+    this.ws?.close();
+  }
+
+  async send(chatId: string, text: string) {
+    await this.call("chat.postMessage", this.botToken, { channel: chatId, text: text.slice(0, 3900) });
+  }
+
+  async askApproval(chatId: string, id: string, title: string) {
+    await this.call("chat.postMessage", this.botToken, {
+      channel: chatId,
+      text: `Approval needed: ${title}`,
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: `*Approval needed:* ${title}` } },
+        {
+          type: "actions",
+          elements: [
+            { type: "button", style: "primary", text: { type: "plain_text", text: "Approve" }, action_id: "approve", value: `ap:${id}:y` },
+            { type: "button", style: "danger", text: { type: "plain_text", text: "Deny" }, action_id: "deny", value: `ap:${id}:n` },
+          ],
+        },
+      ],
+    });
+  }
+}
+
+// ---------------- Discord (Gateway: outbound WebSocket) ----------------
+/** Needs a bot token with the Message Content intent enabled. Answers DMs and @mentions. */
+export class DiscordChannel implements Channel {
+  name = "discord";
+  private ws?: WebSocket;
+  private running = false;
+  private seq: number | null = null;
+  private hb?: ReturnType<typeof setInterval>;
+  private botUserId?: string;
+
+  constructor(private token: string, private api = process.env.SCUT_DISCORD_API ?? "https://discord.com/api/v10") {}
+
+  private async rest(method: string, path: string, body?: unknown) {
+    const r = await fetch(`${this.api}${path}`, {
+      method,
+      headers: { authorization: `Bot ${this.token}`, "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) throw new Error(`discord ${method} ${path}: ${r.status} ${await r.text()}`);
+    const t = await r.text();
+    return t ? JSON.parse(t) : {};
+  }
+
+  async botName() {
+    const me = await this.rest("GET", "/users/@me").catch(() => null);
+    this.botUserId = me?.id;
+    return me?.username as string | undefined;
+  }
+
+  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, byId: string) => void) {
+    this.running = true;
+    const connect = async () => {
+      if (!this.running) return;
+      try {
+        const { url } = await this.rest("GET", "/gateway/bot");
+        const ws = new WebSocket(`${url}?v=10&encoding=json`);
+        this.ws = ws;
+        ws.onmessage = (ev) => {
+          const p = JSON.parse(String(ev.data));
+          if (p.s != null) this.seq = p.s;
+          if (p.op === 10) {
+            clearInterval(this.hb);
+            this.hb = setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ op: 1, d: this.seq })), p.d.heartbeat_interval);
+            const intents = (1 << 9) | (1 << 12) | (1 << 15); // GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
+            ws.send(JSON.stringify({ op: 2, d: { token: this.token, intents, properties: { os: "linux", browser: "scut", device: "scut" } } }));
+          } else if (p.op === 0 && p.t === "READY") {
+            this.botUserId = p.d.user?.id;
+          } else if (p.op === 0 && p.t === "MESSAGE_CREATE") {
+            const d = p.d;
+            if (d.author?.bot) return;
+            const isDm = !d.guild_id;
+            const mentioned = (d.mentions ?? []).some((u: any) => u.id === this.botUserId);
+            if (!isDm && !mentioned) return;
+            const text = String(d.content ?? "").replace(/<@!?\d+>\s*/g, "").trim();
+            onMessage({ channel: "discord", chatId: d.channel_id, from: d.author.username, fromId: d.author.id, text });
+          } else if (p.op === 0 && p.t === "INTERACTION_CREATE" && p.d.type === 3) {
+            const [kind, id, verdict] = String(p.d.data?.custom_id ?? "").split(":");
+            const user = p.d.member?.user?.id ?? p.d.user?.id;
+            this.rest("POST", `/interactions/${p.d.id}/${p.d.token}/callback`, { type: 6 }).catch(() => {});
+            if (kind === "ap") onApproval(id, verdict === "y", user);
+          } else if (p.op === 7 || p.op === 9) {
+            ws.close(); // reconnect / invalid session
+          }
+        };
+        ws.onclose = () => {
+          clearInterval(this.hb);
+          if (this.running) setTimeout(connect, 2000);
+        };
+        ws.onerror = () => ws.close();
+      } catch {
+        setTimeout(connect, 5000);
+      }
+    };
+    connect();
+  }
+
+  async stop() {
+    this.running = false;
+    clearInterval(this.hb);
+    this.ws?.close();
+  }
+
+  async send(chatId: string, text: string) {
+    await this.rest("POST", `/channels/${chatId}/messages`, { content: text.slice(0, 1990) });
+  }
+
+  async askApproval(chatId: string, id: string, title: string) {
+    await this.rest("POST", `/channels/${chatId}/messages`, {
+      content: `Approval needed: ${title}`,
+      components: [
+        { type: 1, components: [
+          { type: 2, style: 3, label: "Approve", custom_id: `ap:${id}:y` },
+          { type: 2, style: 4, label: "Deny", custom_id: `ap:${id}:n` },
+        ] },
+      ],
+    });
+  }
+}

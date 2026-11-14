@@ -30,6 +30,9 @@ export interface AgentSpec {
   agentPubkey: string;
   channels: {
     telegram?: { token: string; ownerChatId?: number };
+    /** Slack Socket Mode: app-level token (xapp-) + bot token (xoxb-). */
+    slack?: { appToken: string; botToken: string };
+    discord?: { token: string };
     /** Nostr DMs (NIP-17). ownerPubkey receives approvals; defaults to the app owner key. */
     nostr?: { relays?: string[]; ownerPubkey?: string };
   };
@@ -132,7 +135,7 @@ export type ClientMsg =
   | { t: "chat"; text: string }
   | { t: "approval"; id: string; ok: boolean }
   | { t: "stop" }
-  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; channels?: { telegram?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
+  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   | { t: "pause"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "crew"; members: CrewMember[] };
@@ -148,10 +151,10 @@ export type ServerMsg =
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; nostr: boolean } }
+  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
   | { t: "paused"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
-  | { t: "pairing"; telegram?: { bot?: string; code?: string; owner?: string } };
+  | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 
 export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" | "quiescing" | "retired";
 

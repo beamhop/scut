@@ -36,7 +36,7 @@ const STAGE_LABEL: Record<string, string> = {
 type ChatLine = { from: string; channel: string; text: string; ts: number };
 type Approval = { id: string; title: string; detail?: string; ts: number };
 type Settings = Extract<ServerMsg, { t: "settings" }>;
-type Pairing = Extract<ServerMsg, { t: "pairing" }>["telegram"];
+type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
 function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [frame, setFrame] = useState<string>();
   const [state, setState] = useState<AgentState>("starting");
@@ -82,7 +82,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
         else if (m.t === "narration") setNarration((n) => [...n.slice(-150), m]);
         else if (m.t === "stats") setStats(m);
         else if (m.t === "settings") setSettings(m);
-        else if (m.t === "pairing") setPairing(m.telegram);
+        else if (m.t === "pairing") setPairing(m);
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
@@ -485,10 +485,15 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
             <span>NOSTR</span>
             <button className="truncate text-beam hover:underline" title="Copy npub" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 24)}…</button>
           </div>}
-          {a.pairing && !a.pairing.owner && a.pairing.code && (
+          {a.pairing?.code && (
             <div className="m-3 rounded-xl border border-beam/30 bg-beam/5 p-3 text-sm">
-              <div className="font-semibold">Pair your Telegram</div>
-              <div className="text-slate-400">Send <span className="font-mono text-beam">/pair {a.pairing.code}</span> to <a className="text-beam underline" target="_blank" href={`https://t.me/${a.pairing.bot}`}>@{a.pairing.bot}</a> so approvals reach you there.</div>
+              <div className="font-semibold">Pair your chat apps</div>
+              <div className="text-slate-400">
+                Send <span className="font-mono text-beam">/pair {a.pairing.code}</span> to {agent.name} on{" "}
+                {Object.entries(a.pairing.channels ?? {}).filter(([, v]) => !v.owner).map(([k, v], i) => (
+                  <span key={k}>{i ? ", " : ""}{k === "telegram" && v.bot ? <a className="text-beam underline" target="_blank" href={`https://t.me/${v.bot}`}>Telegram @{v.bot}</a> : <span className="capitalize text-slate-200">{k}{v.bot ? ` (@${v.bot})` : ""}</span>}</span>
+                ))}{" "}so approvals reach you there. Only you can approve; anyone in a channel can chat.
+              </div>
             </div>
           )}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -601,11 +606,31 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
           <button onClick={() => { if (tg.trim()) a.send({ t: "settings", channels: { telegram: { token: tg.trim() } } }); setTg(""); }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button></>
         )}
       </div>
+      <SecretRow label="Slack" connected={!!ch?.slack} fields={["App token (xapp-…)", "Bot token (xoxb-…)"]}
+        onConnect={([appToken, botToken]) => a.send({ t: "settings", channels: { slack: { appToken, botToken } } })}
+        onDisconnect={() => a.send({ t: "settings", channels: { slack: null } })} />
+      <SecretRow label="Discord" connected={!!ch?.discord} fields={["Bot token"]}
+        onConnect={([token]) => a.send({ t: "settings", channels: { discord: { token } } })}
+        onDisconnect={() => a.send({ t: "settings", channels: { discord: null } })} />
       <div className="flex items-center gap-2">
         <span className="w-20">Nostr</span>
         {ch?.nostr ? <span className="text-emerald-300">DMs on</span> : <span className="text-slate-500">off</span>}
         <button onClick={() => a.send({ t: "settings", channels: { nostr: ch?.nostr ? null : {} } })} className="ml-auto text-slate-500 hover:text-white">{ch?.nostr ? "Turn off" : "Turn on"}</button>
       </div>
+    </div>
+  );
+}
+
+function SecretRow({ label, connected, fields, onConnect, onDisconnect }: { label: string; connected: boolean; fields: string[]; onConnect: (v: string[]) => void; onDisconnect: () => void }) {
+  const [vals, setVals] = useState(fields.map(() => ""));
+  if (connected) return <div className="flex items-center gap-2"><span className="w-20">{label}</span><span className="text-emerald-300">connected</span><button onClick={onDisconnect} className="ml-auto text-slate-500 hover:text-red-300">Disconnect</button></div>;
+  return (
+    <div className="flex items-start gap-2">
+      <span className="w-20 pt-1">{label}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {fields.map((f, i) => <input key={f} value={vals[i]} onChange={(e) => setVals(vals.map((v, j) => (j === i ? e.target.value : v)))} placeholder={f} aria-label={`${label} ${f}`} className="rounded-lg border border-white/10 bg-panel2 px-2 py-1" />)}
+      </div>
+      <button onClick={() => { if (vals.every((v) => v.trim())) { onConnect(vals.map((v) => v.trim())); setVals(fields.map(() => "")); } }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button>
     </div>
   );
 }

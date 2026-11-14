@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.10.0 — 2026-11-14 02:38
+
+- Slack channel (Socket Mode: outbound WebSocket, no public URL): answers DMs and @mentions, ignores other channel chatter, approvals as Block Kit buttons.
+- Discord channel (Gateway): answers DMs and @mentions, approvals as message buttons with interaction acks, heartbeats and reconnects.
+- One pairing code for all chat apps: send `/pair <code>` (or `pair <code>`) to the agent on Telegram, Slack or Discord; approvals go to the paired owner on each, and only the owner's clicks count. Scheduled-task results go to every paired channel.
+- Connect Slack and Discord from agent Settings; pairing card lists every unpaired channel.
+- Tested against mock Slack Web API + Socket Mode and mock Discord REST + Gateway (owner pairing, mention filtering, guest clicks ignored, owner approval). Not yet tested with real Slack/Discord apps (no tokens here).
+- Tests: 22/22 e2e, 7/7 UI.
+
 ## v0.9.0 — 2026-11-14 02:33
 
 - Bandwidth: each viewer picks its frame rate (crew tiles 1 fps, agent view 8 fps) and frames identical to the last one sent are skipped, so an idle agent costs ~1 frame per 5 s per viewer instead of a constant stream. Desktop capture raised to 8 fps for a snappier agent view.

@@ -6,8 +6,16 @@ import { tmpdir } from "node:os";
 import type { ServerMsg } from "@scut/protocol";
 import { startMockLlm } from "./mock-llm.ts";
 import { startMockTelegram } from "./mock-telegram.ts";
+import { startMockDiscord, startMockSlack } from "./mock-chat.ts";
 const tg = startMockTelegram();
-process.env.SCUT_AGENT_ENV = `SCUT_TELEGRAM_API=http://host.docker.internal:${tg.port},SCUT_SCHEDULE_TICK_MS=1000`;
+const slack = startMockSlack();
+const discord = startMockDiscord();
+process.env.SCUT_AGENT_ENV = [
+  `SCUT_TELEGRAM_API=http://host.docker.internal:${tg.port}`,
+  `SCUT_SLACK_API=http://host.docker.internal:${slack.server.port}/api`,
+  `SCUT_DISCORD_API=http://host.docker.internal:${discord.server.port}/api/v10`,
+  "SCUT_SCHEDULE_TICK_MS=1000",
+].join(",");
 
 process.env.SCUT_HOME = mkdtempSync(`${tmpdir()}/scut-test-`);
 process.env.SCUT_SIM_CLOUD = "1";
@@ -72,6 +80,8 @@ afterAll(async () => {
   for (const a of [...scut.agents]) await scut.remove(a.id).catch(() => {});
   llm.server.stop(true);
   tg.server.stop(true);
+  slack.server.stop(true);
+  discord.server.stop(true);
 });
 
 describe("mock harness agent", () => {
@@ -352,6 +362,62 @@ describe("v0.9: rollback, frame budget, channels from settings", () => {
     expect(s.channels.telegram).toBe(true);
     const p = await c.waitFor<any>((m) => m.t === "pairing" && !!m.telegram?.code);
     expect(p.telegram.bot).toBe("mock_bot");
+    c.close();
+  });
+});
+
+async function until<T>(f: () => T | undefined, ms = 30_000, what = "condition"): Promise<T> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const v = f();
+    if (v) return v;
+    await Bun.sleep(100);
+  }
+  throw new Error(`timeout waiting for ${what}`);
+}
+
+describe("v0.10: Slack (Socket Mode) and Discord (Gateway), mocked", () => {
+  test("Slack: pair by DM, ignore unmentioned channel chatter, owner-only approvals", async () => {
+    const rec = await scut.create({ name: "Slacky", harness: "mock", autonomy: "ask", slack: { appToken: "xapp-test", botToken: "xoxb-test" } });
+    const c = await client(rec.id);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!m.code && !!m.channels?.slack);
+    expect(p.channels.slack.bot).toBe("mock_slack");
+    await until(() => slack.connected() > 0, 15_000, "slack socket");
+    slack.dm("UOWNER", `pair ${p.code}`);
+    await until(() => slack.posts.find((m) => m.channel === "DUOWNER" && m.text.startsWith("Paired")), 15_000, "paired");
+    slack.channelMessage("UGUEST", "open https://example.com"); // not mentioned: ignored
+    slack.mention("UGUEST", "please open https://example.com");
+    const ask = await until(() => slack.posts.find((m) => m.channel === "DUOWNER" && m.blocks), 15_000, "approval blocks");
+    const value = ask.blocks[1].elements[0].value;
+    slack.click("UGUEST", value); // guest can't approve
+    await Bun.sleep(2000);
+    expect(slack.posts.find((m) => m.channel === "CGEN" && m.text?.startsWith("mock:"))).toBeUndefined();
+    slack.click("UOWNER", value);
+    const reply = await until(() => slack.posts.find((m) => m.channel === "CGEN" && m.text?.startsWith("mock:")), 15_000, "reply");
+    expect(reply.text).toContain("message #1"); // the ignored channel message never reached the agent
+    c.close();
+  });
+
+  test("Discord: DMs and mentions only, owner-only button approvals", async () => {
+    const rec = await scut.create({ name: "Disco", harness: "mock", autonomy: "ask", discordToken: "discord-test" });
+    const c = await client(rec.id);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!m.code && !!m.channels?.discord);
+    expect(p.channels.discord.bot).toBe("mock_discord");
+    await until(() => discord.connected() > 0, 15_000, "discord gateway");
+    await Bun.sleep(500); // identify -> READY
+    discord.dm("42", `/pair ${p.code}`);
+    await until(() => discord.posts.find((m) => m.channel === "DM42" && m.body.content.startsWith("Paired")), 15_000, "paired");
+    discord.guildMessage("7", "open https://example.com"); // no mention: ignored
+    discord.guildMessage("7", "please open https://example.com", true);
+    const ask = await until(() => discord.posts.find((m) => m.channel === "DM42" && m.body.components), 15_000, "approval buttons");
+    const id = ask.body.components[0].components[0].custom_id;
+    discord.click("7", id); // guest
+    await Bun.sleep(2000);
+    expect(discord.posts.find((m) => m.channel === "CH1")).toBeUndefined();
+    discord.click("42", id); // owner
+    const reply = await until(() => discord.posts.find((m) => m.channel === "CH1"), 15_000, "reply");
+    expect(reply.body.content).toContain("message #1");
+    expect(discord.callbacks.length).toBeGreaterThan(0); // interactions acknowledged
     c.close();
   });
 });

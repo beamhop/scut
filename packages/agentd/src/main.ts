@@ -7,7 +7,7 @@ import {
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
-import { NostrChannel, TelegramChannel, type Channel } from "@scut/channels";
+import { DiscordChannel, NostrChannel, SlackChannel, TelegramChannel, type Channel } from "@scut/channels";
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
@@ -39,9 +39,10 @@ const channels: Channel[] = [];
 const tokens = { input: 0, output: 0 };
 let lastTelegramChat: string | undefined;
 // Telegram owner pairing: the owner proves themselves by sending "/pair <code>" to the bot.
-let tgOwner: { userId: string; chatId: string; name: string } | null = null;
-let tgPairCode = "";
-let tgBot: string | undefined;
+type ChannelOwner = { userId: string; chatId: string; name: string };
+let owners: Record<string, ChannelOwner> = {};
+let pairCode = "";
+const bots: Record<string, string | undefined> = {};
 type ChatLine = { from: string; channel: string; text: string; ts: number };
 const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
@@ -96,10 +97,16 @@ function recordChat(line: ChatLine) {
   appendFile(`${DATA}/chat.jsonl`, JSON.stringify(line) + "\n").catch(() => {});
 }
 function settingsMsg(): ServerMsg {
-  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens, channels: { telegram: !!spec?.channels.telegram, nostr: !!spec?.channels.nostr } };
+  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr } };
 }
 function pairingMsg(): ServerMsg {
-  return { t: "pairing", telegram: spec?.channels.telegram ? { bot: tgBot, code: tgOwner ? undefined : tgPairCode, owner: tgOwner?.name } : undefined };
+  const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
+  return {
+    t: "pairing",
+    code: chans.some((n) => !owners[n]) ? pairCode : undefined,
+    channels: Object.fromEntries(chans.map((n) => [n, { bot: bots[n], owner: owners[n]?.name }])),
+    telegram: spec?.channels.telegram ? { bot: bots.telegram, code: owners.telegram ? undefined : pairCode, owner: owners.telegram?.name } : undefined,
+  };
 }
 
 // ---------- approvals ----------
@@ -110,9 +117,10 @@ function requestApproval(title: string, detail?: string): Promise<boolean> {
   const req = { t: "approval.request" as const, id, title, detail, ts: Date.now() };
   pendingApprovals.set(id, req);
   broadcast(req);
-  const chat = tgOwner?.chatId;
-  const tg = channels.find((c) => c.name === "telegram");
-  if (tg && chat) tg.askApproval(chat, id, title).catch(() => {});
+  for (const c of channels) {
+    const owner = owners[c.name];
+    if (owner && c.name !== "nostr") c.askApproval(owner.chatId, id, title).catch(() => {});
+  }
   const nc = channels.find((c) => c.name === "nostr");
   const no = nostrOwner();
   if (nc && no) nc.askApproval(no, id, title).catch(() => {});
@@ -190,7 +198,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
     if (budget > 0 && dayTokens >= budget) {
       const msg = `I've used today's token budget (${dayTokens.toLocaleString()} of ${budget.toLocaleString()}). Raise it in my settings or try again tomorrow.`;
       recordChat({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
-      if ((origin.channel === "telegram" || origin.channel === "nostr") && origin.chatId) await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, msg);
+      if (origin.chatId) await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, msg).catch(() => {});
       narrate("Budget reached");
       return;
     }
@@ -208,8 +216,15 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       });
       const out = reply || "(no reply)";
       recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
-      if ((origin.channel === "telegram" || origin.notify) && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, origin.notify ? `⏰ ${text}\n\n${out}` : out);
-      if (origin.channel === "nostr" && origin.chatId) await channels.find((c) => c.name === "nostr")?.send(origin.chatId, out).catch((e) => log("nostr send failed", e?.message));
+      if (origin.notify) {
+        // scheduled task: tell the owner wherever they paired
+        for (const c of channels) {
+          const owner = owners[c.name];
+          if (owner) await c.send(owner.chatId, `⏰ ${text}\n\n${out}`).catch(() => {});
+        }
+      } else if (origin.chatId) {
+        await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, out).catch((e) => log(`${origin.channel} send failed`, e?.message));
+      }
       if (origin.channel === "crew") await postCrew(out);
       setState("running");
       narrate("Idle");
@@ -223,39 +238,46 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
 // ---------- lifecycle ----------
 async function startChannels() {
   if (!spec || !holdsLease()) return;
-  const tg = spec.channels.telegram?.token;
-  if (tg) {
-    const c = new TelegramChannel(tg);
-    tgOwner = await readJson(`${DATA}/telegram-owner.json`);
-    const pf = await readJson<{ code: string }>(`${DATA}/telegram-pair.json`);
-    tgPairCode = pf?.code ?? String(100000 + Math.floor(Math.random() * 900000));
-    if (!pf) await Bun.write(`${DATA}/telegram-pair.json`, JSON.stringify({ code: tgPairCode }));
-    tgBot = await c.botName();
+  // Owner pairing is shared by all chat channels: one 6-digit code, "/pair <code>" (or "pair <code>") on any of them.
+  owners = (await readJson(`${DATA}/channel-owners.json`)) ?? {};
+  const legacy = await readJson<{ userId: string; chatId: string; name: string }>(`${DATA}/telegram-owner.json`);
+  if (legacy && !owners.telegram) owners.telegram = legacy;
+  const pf = (await readJson<{ code: string }>(`${DATA}/pair.json`)) ?? (await readJson<{ code: string }>(`${DATA}/telegram-pair.json`));
+  pairCode = pf?.code ?? String(100000 + Math.floor(Math.random() * 900000));
+  await Bun.write(`${DATA}/pair.json`, JSON.stringify({ code: pairCode }));
+  const chatChannels: (Channel & { botName(): Promise<string | undefined> })[] = [];
+  if (spec.channels.telegram?.token) chatChannels.push(new TelegramChannel(spec.channels.telegram.token));
+  if (spec.channels.slack?.appToken && spec.channels.slack.botToken) chatChannels.push(new SlackChannel(spec.channels.slack.appToken, spec.channels.slack.botToken));
+  if (spec.channels.discord?.token) chatChannels.push(new DiscordChannel(spec.channels.discord.token));
+  for (const c of chatChannels) {
+    bots[c.name] = await c.botName().catch(() => undefined);
     c.start(
       async (m) => {
-        lastTelegramChat = m.chatId;
-        const pair = m.text.match(/^\/(?:pair|start)\s+(\d{6})/);
+        if (c.name === "telegram") lastTelegramChat = m.chatId;
+        const pair = m.text.match(/^\/?(?:pair|start)\s+(\d{6})\b/i);
         if (pair) {
-          if (!tgOwner && pair[1] === tgPairCode) {
-            tgOwner = { userId: m.fromId, chatId: m.chatId, name: m.from };
-            await Bun.write(`${DATA}/telegram-owner.json`, JSON.stringify(tgOwner));
+          const owner = owners[c.name];
+          if (!owner && pair[1] === pairCode) {
+            owners[c.name] = { userId: m.fromId, chatId: m.chatId, name: m.from };
+            await Bun.write(`${DATA}/channel-owners.json`, JSON.stringify(owners));
             await c.send(m.chatId, `Paired! I'm ${spec?.name}. You'll get my approval requests here.`);
             broadcast(pairingMsg());
-          } else await c.send(m.chatId, tgOwner ? "I already have an owner." : "That code doesn't match.");
+          } else await c.send(m.chatId, owner ? "I already have an owner." : "That code doesn't match.");
           return;
         }
         if (m.text === "/start") {
-          await c.send(m.chatId, `Hi, I'm ${spec?.name}. ${tgOwner ? "Ask me anything." : "My owner can pair with /pair <code> from the Beamhop app."}`);
+          await c.send(m.chatId, `Hi, I'm ${spec?.name}. ${owners[c.name] ? "Ask me anything." : "My owner can pair with /pair <code> from the Beamhop app."}`);
           return;
         }
-        prompt(m.text, { channel: "telegram", chatId: m.chatId, from: m.from });
+        prompt(m.text, { channel: c.name, chatId: m.chatId, from: m.from });
       },
       (id, ok, byId) => {
-        if (tgOwner && byId === tgOwner.userId) resolveApproval(id, ok, `telegram:${tgOwner.name}`);
+        const owner = owners[c.name];
+        if (owner && byId === owner.userId) resolveApproval(id, ok, `${c.name}:${owner.name}`);
       },
     );
     channels.push(c);
-    log("telegram connected");
+    log(`${c.name} connected`);
   }
   if (spec.channels.nostr && agentSk) {
     const n = new NostrChannel(agentSk, spec.channels.nostr.relays, `${DATA}/nostr-cursor`, {
@@ -412,7 +434,7 @@ setInterval(async () => {
     if (!scheduleDue(s)) continue;
     s.lastRun = Date.now();
     changed = true;
-    prompt(s.prompt, { channel: "schedule", from: "schedule", chatId: tgOwner?.chatId, notify: true });
+    prompt(s.prompt, { channel: "schedule", from: "schedule", notify: true });
   }
   if (changed) {
     await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
@@ -558,6 +580,10 @@ Bun.serve<WsData>({
           const ch = { ...spec.channels };
           if (m.channels.telegram === null) delete ch.telegram;
           else if (m.channels.telegram?.token) ch.telegram = { token: m.channels.telegram.token };
+          if (m.channels.slack === null) delete ch.slack;
+          else if (m.channels.slack?.appToken && m.channels.slack.botToken) ch.slack = m.channels.slack;
+          if (m.channels.discord === null) delete ch.discord;
+          else if (m.channels.discord?.token) ch.discord = m.channels.discord;
           if (m.channels.nostr === null) delete ch.nostr;
           else if (m.channels.nostr) ch.nostr = { ...(ch.nostr ?? {}), ...m.channels.nostr };
           spec.channels = ch;
