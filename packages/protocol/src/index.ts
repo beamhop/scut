@@ -155,6 +155,8 @@ export type ServerMsg =
   | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
   | { t: "paused"; paused: boolean }
   | { t: "memory"; items: MemoryItem[] }
+  /** The agent obtained a cloud provider key during an assisted signup; the app (owner) stores it. */
+  | { t: "cloud.key"; provider: "fly" | "render" | "railway"; token: string; ts: number }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 

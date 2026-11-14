@@ -77,6 +77,25 @@ server.tool("list_memories", "List everything in your long-term memory with ids"
   const r = await call({ kind: "memories" });
   return ok(JSON.stringify(await r.json()));
 });
+server.tool(
+  "connect_channel",
+  "Connect yourself to a chat app once you have its bot token(s): telegram (token from @BotFather), discord (bot token), or slack (appToken xapp-… and botToken xoxb-…).",
+  { channel: z.enum(["telegram", "discord", "slack"]), token: z.string().optional(), appToken: z.string().optional(), botToken: z.string().optional() },
+  async (a) => {
+    const r = await call({ kind: "connect_channel", ...a });
+    return ok(JSON.stringify(await r.json()));
+  },
+);
+server.tool(
+  "give_cloud_key",
+  "Hand a cloud provider API key you created during an assisted signup (fly, render or railway) to your owner's Beamhop app. Never paste keys into chat.",
+  { provider: z.enum(["fly", "render", "railway"]), token: z.string() },
+  async (a) => {
+    const r = await call({ kind: "cloud_key", ...a });
+    const j = (await r.json()) as { delivered: boolean };
+    return ok(j.delivered ? "delivered to the owner's app" : "the owner's app isn't open right now; ask them to open it, then try again");
+  },
+);
 server.tool("crew_post", "Post a message to your crew room (your owner and the other agents). Mention an agent by name to ask it something.", { text: z.string() }, async (a) => {
   const r = await call({ kind: "crew_post", text: a.text });
   const { ok: posted } = (await r.json()) as { ok: boolean };

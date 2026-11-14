@@ -92,6 +92,12 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "memory") setMemory(m.items);
+        else if (m.t === "cloud.key") {
+          fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: m.provider, token: m.token }) })
+            .then((r) => r.json())
+            .then((r) => window.dispatchEvent(new CustomEvent("scut:cloud", { detail: { provider: m.provider, ok: !r.error, error: r.error } })))
+            .catch(() => {});
+        }
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
         else if (m.t === "approval.request") {
           setApprovals((a) => [...a, m]);
@@ -642,6 +648,23 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
   );
 }
 
+const TELEGRAM_SETUP = [
+  "Please set yourself up on Telegram:",
+  "1. Open https://web.telegram.org/k/#@BotFather in your browser.",
+  "2. If Telegram asks me to log in, call request_approval with the title \"Please log in to Telegram on my screen\" and wait until I approve.",
+  "3. Send /newbot to BotFather, call the bot by your name, and pick a username ending in \"bot\".",
+  "4. Copy the token BotFather gives you and call connect_channel with channel \"telegram\" and that token. Never write the token in chat.",
+  "5. Tell me your bot's @username and the pairing code connect_channel returned.",
+].join("\n");
+
+const CLOUD_SETUP = (provider: string, url: string) => [
+  `Please help me connect ${provider} so I can move agents to the cloud:`,
+  `1. Open ${url} in your browser.`,
+  `2. If I need to sign up or log in, call request_approval with the title "Please sign in to ${provider} on my screen" and wait. I'll do any payment details myself.`,
+  "3. Create an API key/token named \"beamhop\".",
+  `4. Call give_cloud_key with provider "${provider.toLowerCase().replace(".io", "")}" and the key. Never write the key in chat.`,
+].join("\n");
+
 function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const [text, setText] = useState("");
   return (
@@ -676,7 +699,8 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
         {ch?.telegram ? (
           <><span className="text-emerald-300">connected</span><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto text-slate-400 hover:text-red-300">Disconnect</button></>
         ) : (
-          <><input value={tg} onChange={(e) => setTg(e.target.value)} placeholder="Bot token from @BotFather" aria-label="Telegram bot token" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+          <><button onClick={() => a.send({ t: "chat", text: TELEGRAM_SETUP })} className="rounded-full bg-beam/90 px-3 py-1 text-sm font-semibold text-black hover:bg-beam" title="Your agent opens Telegram on its screen and creates its own bot">Set it up for me</button>
+          <input value={tg} onChange={(e) => setTg(e.target.value)} placeholder="or paste a token from @BotFather" aria-label="Telegram bot token" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
           <button onClick={() => { if (tg.trim()) a.send({ t: "settings", channels: { telegram: { token: tg.trim() } } }); setTg(""); }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button></>
         )}
       </div>
@@ -781,12 +805,21 @@ function useToasts() {
 }
 
 // ---------------- add a cloud ----------------
+/** Send a one-off task to an agent over its socket, then open its view so the owner can watch. */
+function helpOn(agent: Agent, text: string) {
+  const ws = new WebSocket(`${agent.current.endpoint.replace(/^http/, "ws")}/ws?auth=${agent.token}`);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ t: "chat", text }));
+    setTimeout(() => ws.close(), 500);
+  };
+  location.hash = `#/agent/${agent.id}`;
+}
 const PROVIDERS = [
   { id: "fly", label: "Fly.io", price: "~$21/mo per agent", isolation: "microVM", tokenUrl: "https://fly.io/user/personal_access_tokens", hint: "Create a token, copy it, paste it here." },
   { id: "render", label: "Render", price: "~$85/mo per agent", isolation: "container", tokenUrl: "https://dashboard.render.com/u/settings#api-keys", hint: "Account settings → API keys → Create." },
   { id: "railway", label: "Railway", price: "~$80/mo per agent", isolation: "container", tokenUrl: "https://railway.com/account/tokens", hint: "Account → Tokens → Create (no team)." },
 ];
-function AddCloud({ onClose, onAdded }: { onClose: () => void; onAdded: (label: string) => void }) {
+function AddCloud({ onClose, onAdded, helpers }: { onClose: () => void; onAdded: (label: string) => void; helpers: Agent[] }) {
   const [pick, setPick] = useState("fly");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -819,6 +852,16 @@ function AddCloud({ onClose, onAdded }: { onClose: () => void; onAdded: (label: 
         </ol>
         <input value={token} onChange={(e) => setToken(e.target.value)} type="password" aria-label={`${p.label} token`} placeholder={`${p.label} token`} className="mt-2 w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam" />
         {error && <div className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
+        {helpers.length > 0 && (
+          <div className="mt-4 rounded-xl bg-panel2 p-3 text-sm">
+            <div className="mb-2 text-slate-300">Or let an agent do the signup on its screen while you watch:</div>
+            <div className="flex flex-wrap gap-2">
+              {helpers.slice(0, 4).map((h) => (
+                <button key={h.id} onClick={() => { helpOn(h, CLOUD_SETUP(p.label, p.tokenUrl)); onClose(); }} className="rounded-full bg-white/10 px-3 py-1 hover:bg-white/20">Ask {h.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="mt-5 flex justify-between">
           <button onClick={onClose} className="text-slate-400 hover:text-white">Cancel</button>
           <button disabled={busy || !token.trim()} onClick={connect} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Checking…" : "Connect"}</button>
@@ -942,6 +985,13 @@ function CrewApp() {
   }, [refresh]);
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    const onCloud = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d.ok) { api.destinations().then(setDests); toasts.push(`Your agent connected ${d.provider}. Drag an agent onto it to beam it there.`); }
+      else toasts.push(`The ${d.provider} key from your agent didn't work: ${d.error}`, "err");
+    };
+    addEventListener("scut:cloud", onCloud);
+    return () => removeEventListener("scut:cloud", onCloud);
   }, []);
 
   const beam = useCallback(async (id: string, to: string) => {
@@ -978,7 +1028,7 @@ function CrewApp() {
       {loaded && agents.length === 0 && !creating && <CreateAgent firstRun onDone={refresh} />}
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
       <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} onAddCloud={() => setAddCloud(true)} />
-      {addCloud && <AddCloud onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
+      {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
       {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} />}
       {toasts.view}
     </div>

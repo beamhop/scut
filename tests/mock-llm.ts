@@ -18,9 +18,15 @@ export function startMockLlm(port = 0) {
       const userText = JSON.stringify(msgs.filter((m) => m.role === "user").at(-1)?.content ?? "");
       const rememberTool = tools.find((t) => /__remember$/.test(t.function?.name ?? ""));
       const fact = userText.match(/REMEMBER: ([^"\\]+)/)?.[1];
-      if (fact && rememberTool && !msgs.some((m) => m.role === "tool")) {
+      // Generic: "CALL <tool-suffix> <json>" makes the model call that tool with those arguments.
+      const generic = userText.match(/CALL (\w+) (\{.*?\})(?:\\n|")/);
+      const genericTool = generic && tools.find((t) => (t.function?.name ?? "").endsWith(`__${generic[1]}`));
+      if (((fact && rememberTool) || genericTool) && !msgs.some((m) => m.role === "tool")) {
         requests.push(body);
-        const call = { id: `call_r${requests.length}`, type: "function", function: { name: rememberTool.function.name, arguments: JSON.stringify({ text: fact }) } };
+        const fn = genericTool
+          ? { name: genericTool.function.name, arguments: JSON.parse(`"${generic![2]}"`.replace(/^"|"$/g, "").replace(/\\"/g, '"')) }
+          : { name: rememberTool.function.name, arguments: { text: fact } };
+        const call = { id: `call_r${requests.length}`, type: "function", function: { name: fn.name, arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments) } };
         const base = { id: "x", object: "chat.completion.chunk", model: body.model };
         const sse = [
           { ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, ...call }] }, finish_reason: null }] },

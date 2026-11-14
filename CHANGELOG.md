@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.15.0 — 2026-11-14 03:03
+
+Agents do their own setup chores, as decided in the UX plan.
+
+- Settings → Telegram → **Set it up for me**: the agent opens BotFather on its own screen, asks you (approval with a screenshot) to log in, creates its bot, and connects itself with the new `connect_channel` tool. Tokens never appear in chat.
+- Add a cloud → **Ask <agent>**: the agent opens the provider's key page, asks you to sign in (you do payment details), creates a key and hands it to your app with the new `give_cloud_key` tool; the app verifies and adds the destination.
+- Live-tested with Claude Haiku 5.5: given the Telegram task, the agent opened web.telegram.org/BotFather and asked "Please log in to Telegram on my screen". Mock-tested: `connect_channel` connects Telegram and shows the pairing code; `give_cloud_key` reaches the owner and not the chat.
+- Tests: 27/27 e2e, 8/8 UI, live assisted-setup check.
+
 ## v0.14.0 — 2026-11-14 02:58
 
 - Memory: each agent keeps a long-term memory in `/data/memory.json` (so it beams along). The agent saves facts itself with new MCP tools `remember`, `forget`, `list_memories`; you can add and delete memories in Settings → Memory. Memories are given to the agent with every prompt.

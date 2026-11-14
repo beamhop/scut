@@ -481,3 +481,29 @@ describe("v0.14: memory and approval screenshots", () => {
     c.close();
   });
 });
+
+describe("v0.15: agent-assisted setup tools", () => {
+  const model = () => ({ provider: "scut", api: "openai-completions" as const, baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" });
+  test("the agent connects its own Telegram bot with connect_channel", async () => {
+    const rec = await scut.create({ name: "Selfie", harness: "pi", model: model() });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: 'CALL connect_channel {"channel":"telegram","token":"SELF:TOKEN"}\n' });
+    const s = await c.waitFor<any>((m) => m.t === "settings" && m.channels?.telegram, 120_000);
+    expect(s.channels.telegram).toBe(true);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && m.channels?.telegram?.bot === "mock_bot");
+    expect(p.code).toMatch(/^\d{6}$/);
+    c.close();
+  });
+
+  test("a cloud key from an assisted signup goes to the owner's app, not the chat", async () => {
+    const rec = await scut.create({ name: "Signer", harness: "pi", model: model() });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: 'CALL give_cloud_key {"provider":"fly","token":"fly-secret"}\n' });
+    const k = await c.waitFor<any>((m) => m.t === "cloud.key", 120_000);
+    expect(k.provider).toBe("fly");
+    expect(k.token).toBe("fly-secret");
+    const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent", 60_000);
+    expect(reply.text).not.toContain("fly-secret");
+    c.close();
+  });
+});

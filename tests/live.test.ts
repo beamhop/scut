@@ -172,3 +172,37 @@ describe("crew loop guard (real relays)", () => {
     expect(n2).toBeLessThanOrEqual(2 * 4 + 2);
   });
 });
+
+describe.skipIf(!OR)("assisted Telegram setup with a real model", () => {
+  test("the agent opens BotFather on its screen and asks the owner to log in", async () => {
+    const rec = await scut.create({
+      name: "Helper",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: OR, model: MODEL },
+    });
+    const ep = scut.get(rec.id).current.endpoint;
+    const ws = new WebSocket(`${ep.replace(/^http/, "ws")}/ws?auth=${scut.auth(ep)}`);
+    const seen: string[] = [];
+    const approval = await new Promise<any>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`no approval; narration: ${seen.slice(-6).join(" | ")}`)), 240_000);
+      ws.onopen = () =>
+        ws.send(JSON.stringify({ t: "chat", text: [
+          "Please set yourself up on Telegram:",
+          "1. Open https://web.telegram.org/k/#@BotFather in your browser.",
+          '2. If Telegram asks me to log in, call request_approval with the title "Please log in to Telegram on my screen" and wait until I approve.',
+          "3. Then continue with /newbot.",
+        ].join("\n") }));
+      ws.onmessage = (ev) => {
+        if (typeof ev.data !== "string") return;
+        const m = JSON.parse(ev.data);
+        if (m.t === "narration") seen.push(m.text);
+        if (m.t === "approval.request") { clearTimeout(t); resolve(m); }
+      };
+    });
+    console.log("approval asked:", approval.title, "| narration:", seen.slice(-5).join(" | "));
+    expect(approval.title.toLowerCase()).toContain("log in");
+    expect(approval.shot).toBeTruthy();
+    ws.send(JSON.stringify({ t: "stop" })); // don't continue
+    ws.close();
+  });
+});

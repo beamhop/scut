@@ -176,6 +176,29 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     await saveMemory();
     return Response.json({ ok: true });
   }
+  if (a.kind === "connect_channel") {
+    if (!spec) return new Response("no spec", { status: 409 });
+    const kind = String(a.channel);
+    if (kind === "telegram" && a.token) spec.channels.telegram = { token: String(a.token).trim() };
+    else if (kind === "discord" && a.token) spec.channels.discord = { token: String(a.token).trim() };
+    else if (kind === "slack" && a.appToken && a.botToken) spec.channels.slack = { appToken: String(a.appToken).trim(), botToken: String(a.botToken).trim() };
+    else return new Response("need channel + token(s)", { status: 400 });
+    await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
+    await stopChannels();
+    await startChannels();
+    broadcast(settingsMsg());
+    broadcast(pairingMsg());
+    narrate(`Connected ${kind}`);
+    return Response.json({ ok: true, bot: bots[kind], pairCode: owners[kind] ? undefined : pairCode });
+  }
+  if (a.kind === "cloud_key") {
+    const provider = String(a.provider);
+    if (!["fly", "render", "railway"].includes(provider) || !a.token) return new Response("need provider + token", { status: 400 });
+    // Handed to the owner's app over the authenticated socket; never stored in the agent.
+    broadcast({ t: "cloud.key", provider: provider as any, token: String(a.token).trim(), ts: Date.now() });
+    narrate(`Gave you a ${provider} key`);
+    return Response.json({ ok: true, delivered: clients.size > 0 });
+  }
   if (a.kind === "memories") return Response.json({ items: memory });
   if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
