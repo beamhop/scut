@@ -892,6 +892,10 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
           <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
           <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
         </div>
+        {agent.price && Number(budget) > 0 && (
+          // tokens mean nothing to most people: say roughly what the cap is in money (mostly input tokens in agent work)
+          <div className="text-[12px] text-slate-400">≈ ${((Number(budget) * (agent.price.in * 0.8 + agent.price.out * 0.2)) / 1e6).toFixed(2)} a day at most with {agent.model?.model ?? "this model"}. 0 means no limit.</div>
+        )}
       </div>
       <ChannelSettings a={a} />
       {s.channels.nostr && agent.agentPubkey && (

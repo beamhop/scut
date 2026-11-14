@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.49.1 — The daily limit in money
+
+- Under the daily token limit, Settings now says roughly what it means in money for the agent's model (e.g. "≈ $0.18 a day at most with anthropic/claude-haiku-5.5"), using live OpenRouter prices.
+
 ## v0.49.0 — Correct a memory
 
 - In Settings → Memory, click any memory to fix it in place (Enter saves, Escape cancels) instead of deleting and retyping it. Corrections reach the agent with its next message.
