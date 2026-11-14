@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.18.0 — Safety check
+
+- Settings open with a plain-language safety check: sandboxed computer, autonomy level, daily spending cap (with a dollar estimate and today's use), who can approve risky actions on each connected chat app, and encrypted single-copy beams.
+- Shows "all good" collapsed, or opens itself and lists what to look at (e.g. "Never ask", no cap, a chat app nobody has paired with yet).
+
 ## v0.17.0 — Beam receipts, streamed beams
 
 - After a beam lands, the tile says where the agent arrived, where from, how long it took, how big the move was, and what came along (messages, memories, skills, scheduled tasks, browser logins, files, reconnected chat apps). Dismissible.

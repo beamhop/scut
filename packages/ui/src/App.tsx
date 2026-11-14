@@ -661,6 +661,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
           </label>
         ))}
       </div>
+      <SafetyCheck a={a} agent={agent} />
       <MemorySettings a={a} />
       <SkillSettings a={a} />
       <ChannelSettings a={a} />
@@ -697,6 +698,54 @@ const CLOUD_SETUP = (provider: string, url: string) => [
   "3. Create an API key/token named \"beamhop\".",
   `4. Call give_cloud_key with provider "${provider.toLowerCase().replace(".io", "")}" and the key. Never write the key in chat.`,
 ].join("\n");
+
+/** Plain-language safety posture for one agent: what protects you, and what to look at. */
+function safetyItems(a: ReturnType<typeof useAgent>, agent: Agent) {
+  const s = a.settings!;
+  const items: { ok: boolean; text: string }[] = [];
+  items.push({ ok: true, text: "Works on its own sandboxed computer, separate from your files and accounts" });
+  items.push(s.autonomy === "auto"
+    ? { ok: false, text: "Never asks before acting. \"Risky only\" still lets it work alone but checks payments, messages and logins with you" }
+    : { ok: true, text: s.autonomy === "ask" ? "Asks you before every action" : "Asks you before payments, messages, deletes and logins" });
+  if (!s.dailyTokenBudget) items.push({ ok: false, text: "No daily spending cap" });
+  else {
+    const usd = agent.price ? ` (about $${((s.dailyTokenBudget * (agent.price.in * 0.8 + agent.price.out * 0.2)) / 1e6).toFixed(2)})` : "";
+    const pct = Math.round((100 * s.dayTokens) / s.dailyTokenBudget);
+    items.push({ ok: pct < 90, text: `Stops at ${(s.dailyTokenBudget / 1e6).toFixed(1)}M tokens a day${usd}; ${pct}% used today` });
+  }
+  const names: Record<string, string> = { telegram: "Telegram", slack: "Slack", discord: "Discord", nostr: "Nostr" };
+  for (const k of Object.keys(names)) {
+    if (!(s.channels as any)[k] || k === "nostr") continue;
+    const owner = a.pairing?.channels?.[k]?.owner;
+    items.push(owner
+      ? { ok: true, text: `${names[k]}: anyone in the chat can ask, only you (${owner}) can approve risky things` }
+      : { ok: false, text: `${names[k]}: you haven't paired yet, so risky actions there can only be approved here` });
+  }
+  items.push({ ok: true, text: "Beams are end-to-end encrypted; only one copy can run at a time" });
+  return items;
+}
+
+function SafetyCheck({ a, agent }: { a: ReturnType<typeof useAgent>; agent: Agent }) {
+  const items = safetyItems(a, agent);
+  const todo = items.filter((i) => !i.ok).length;
+  const [open, setOpen] = useState(todo > 0);
+  return (
+    <div className={`rounded-xl p-3 ${todo ? "bg-amber-400/10" : "bg-beam/10"}`}>
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 text-left">
+        <span aria-hidden className={todo ? "text-amber-300" : "text-beam"}>{todo ? "!" : "✓"}</span>
+        <span className="font-medium">{todo ? `Safety: ${todo} thing${todo > 1 ? "s" : ""} to look at` : "Safety: all good"}</span>
+        <span className="ml-auto text-slate-400">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-1">
+          {items.map((i) => (
+            <li key={i.text} className="flex gap-2"><span aria-hidden className={i.ok ? "text-beam" : "text-amber-300"}>{i.ok ? "✓" : "!"}</span><span className={i.ok ? "text-slate-300" : "text-slate-100"}>{i.text}</span></li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function SkillSettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const [src, setSrc] = useState("");

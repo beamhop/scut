@@ -85,6 +85,8 @@ test("agent view: chat round trip, settings panel, history", async () => {
   await page.waitForFunction(() => document.body.innerText.includes("mock: message #1"), { timeout: 30_000 });
   await page.evaluate(() => [...document.querySelectorAll("header button")].find((b) => b.textContent === "Settings")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   await page.waitForFunction(() => document.body.textContent!.includes("Autonomy"), { timeout: 5000 });
+  await page.waitForFunction(() => /Safety: (all good|\d+ things? to look at)/.test(document.body.textContent!), { timeout: 5000 });
+  expect(await page.evaluate(() => document.body.textContent!.includes("end-to-end encrypted") || document.body.textContent!.includes("Safety: all good"))).toBe(true);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.body.innerText.includes("hello from the UI test"), { timeout: 15_000 }); // history replay
   await page.screenshot({ path: `${process.env.SCUT_SHOTS ?? tmpdir()}/ui-test-agent.png` });
