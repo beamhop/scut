@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.25.0 — Accessibility audit
+
+- Ran axe-core (all rules, WCAG 2.2 AA plus best practices) on the crew grid, New agent, Add a cloud, the agent view and Settings. WCAG rules already passed; fixed the remaining structure issues: one level-one heading per screen (Beamhop / the agent's name), a main landmark around the agent's screen, a labelled chat/settings sidebar, and the destination dock as a labelled navigation region.
+- New UI test fails if any axe violation appears on the main screens.
+- `scripts/axe.ts <url>` audits a running app.
+
 ## v0.24.0 — Laptop sleep
 
 - Fixed: a daily task added after today's time (say "daily at 8:00" added at 10:00) ran straight away. Tasks now remember when they were added and first run at the next 8:00.

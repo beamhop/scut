@@ -318,7 +318,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
 function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; onDrop: (dest: string, agentId: string) => void; dragging: boolean; onAddCloud: () => void }) {
   const [hot, setHot] = useState<string>();
   return (
-    <div className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
+    <nav aria-label="Where your agents live" className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
       <div className="mb-2 font-mono text-[11px] uppercase tracking-widest text-slate-400">Where your agents live · drag one here to move it</div>
       <div className="flex gap-3 overflow-x-auto">
         {dests.map((d) => (
@@ -333,7 +333,7 @@ function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; o
         ))}
         <button onClick={onAddCloud} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">+ Add a cloud</button>
       </div>
-    </div>
+    </nav>
   );
 }
 
@@ -557,7 +557,7 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
       <header className="flex flex-wrap items-center gap-3 border-b border-white/5 px-5 py-3">
         {!standalone && <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>}
         <Mascot variant={agent.mascot} size={32} state={a.state} />
-        <div className="font-semibold">{agent.name}</div>
+        <h1 className="text-base font-semibold">{agent.name}</h1>
         <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
         <StateChip state={a.state} />
         <div className="ml-auto flex items-center gap-2">
@@ -574,7 +574,7 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
         </div>
       </header>
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col p-4">
+        <main className="flex min-w-0 flex-1 flex-col p-4">
           {a.state === "busy" || a.state === "stuck" || a.paused ? (
             <div className="mb-2 flex items-center gap-2 rounded-lg bg-panel2 px-3 py-1.5 font-mono text-[13px] text-slate-200" aria-live="polite">
               <span className="text-slate-400">NOW</span> {a.paused ? `Paused — you're driving` : (a.narration.at(-1)?.text ?? STATE_META[a.state]?.label)}
@@ -608,8 +608,8 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
             </button>
           </div>
           <div className="mt-2 text-center text-xs text-slate-400">This is {agent.name}'s computer. Click to use it together; do logins and payments yourself.</div>
-        </div>
-        <aside className="flex min-h-[60vh] w-full flex-col border-t border-white/5 bg-panel lg:min-h-0 lg:w-96 lg:border-l lg:border-t-0">
+        </main>
+        <aside aria-label={showSettings ? "Settings" : `Chat with ${agent.name}`} className="flex min-h-[60vh] w-full flex-col border-t border-white/5 bg-panel lg:min-h-0 lg:w-96 lg:border-l lg:border-t-0">
           {showSettings ? <SettingsPanel a={a} agent={agent} onClose={() => setShowSettings(false)} /> : <>
           {a.pairing?.code && (
             <div className="m-3 rounded-xl border border-beam/30 bg-beam/5 p-3 text-sm">
@@ -1195,7 +1195,7 @@ function CrewApp() {
     <div className="stars min-h-screen pb-40">
       <header className="flex items-center gap-3 px-8 py-6">
         <Mascot variant="cyan" size={36} />
-        <div className="text-2xl font-bold tracking-tight">Beam<span className="text-beam">hop</span></div>
+        <h1 className="text-2xl font-bold tracking-tight">Beam<span className="text-beam">hop</span></h1>
         <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">
           {agents.length} agent{agents.length === 1 ? "" : "s"}{needCount ? <span className="text-amber-300"> · {needCount} need{needCount === 1 ? "s" : ""} you</span> : ""}
         </div>

@@ -193,3 +193,23 @@ test("add a cloud: wrong token shows an error, right token adds a destination", 
 test("no console errors on any page", () => {
   expect(errors).toEqual([]);
 });
+
+test("no accessibility violations on the main screens (axe-core, all rules)", async () => {
+  const axePath = new URL("../node_modules/axe-core/axe.min.js", import.meta.url).pathname;
+  const audit = async (page: Page) => {
+    await page.addScriptTag({ path: axePath });
+    return page.evaluate(async () => (await (window as any).axe.run(document)).violations.map((v: any) => `${v.id}: ${v.nodes.map((n: any) => n.target.join(" ")).slice(0, 3).join(", ")}`));
+  };
+  const home = await open("/");
+  await home.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 15_000 });
+  await Bun.sleep(1500);
+  expect(await audit(home)).toEqual([]);
+  await home.close();
+  const view = await open(`/#/agent/${agentId}`);
+  await view.waitForSelector('input[aria-label^="Message"]', { timeout: 15_000 });
+  expect(await audit(view)).toEqual([]);
+  await view.evaluate(() => [...document.querySelectorAll("header button")].find((b) => b.textContent === "Settings")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await view.waitForFunction(() => document.body.textContent!.includes("Autonomy"), { timeout: 5000 });
+  expect(await audit(view)).toEqual([]);
+  await view.close();
+});
