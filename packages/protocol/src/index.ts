@@ -24,6 +24,8 @@ export interface AgentSpec {
   model?: ModelConfig;
   template?: "assistant" | "researcher" | "developer" | "custom";
   persona?: string;
+  /** The owner's time zone (IANA), learned from the app; daily tasks the agent sets itself use it. */
+  ownerTz?: string;
   mascot?: string;
   autonomy: Autonomy;
   ownerPubkey: string;
@@ -129,7 +131,7 @@ export function unseal<T>(recipientSk: Uint8Array, senderPubkey: string, payload
 
 // ---- WebSocket messages between UI and agentd ----
 export type ClientMsg =
-  | { t: "subscribe"; frames: boolean; fps?: number; /** small 480 px frames, for tiles and phones */ small?: boolean }
+  | { t: "subscribe"; frames: boolean; fps?: number; /** small 480 px frames, for tiles and phones */ small?: boolean; /** the owner's IANA time zone, for tasks the agent schedules */ tz?: string }
   | { t: "input"; kind: "move" | "click" | "dblclick" | "down" | "up" | "scroll" | "key" | "type"; x?: number; y?: number; button?: number; dy?: number; keys?: string; text?: string }
   | { t: "cursor"; x: number; y: number }
   | { t: "chat"; text: string }

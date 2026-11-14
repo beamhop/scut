@@ -87,6 +87,21 @@ server.tool(
   },
 );
 
+server.tool(
+  "schedule_task",
+  "Set up a task you will run on your own on a schedule, e.g. 'every morning at 8 send the top 3 Hacker News stories'. Give daily_at as HH:MM in your owner's local time, or every_minutes (5 or more). Results go to your owner's chat apps.",
+  { prompt: z.string().describe("what to do each time, as an instruction to yourself"), daily_at: z.string().optional(), every_minutes: z.number().optional() },
+  async (a) => {
+    const r = await call({ kind: "schedule_task", ...a });
+    const j = (await r.json()) as { id: string; timeZone: string };
+    return ok(`scheduled (id ${j.id}, time zone ${j.timeZone}); your owner can see and change it in Settings`);
+  },
+);
+server.tool("list_tasks", "List your scheduled tasks", {}, async () => ok(JSON.stringify((await (await call({ kind: "list_tasks" })).json()) as object)));
+server.tool("cancel_task", "Cancel one of your scheduled tasks by id (see list_tasks)", { id: z.string() }, async (a) => {
+  const j = (await (await call({ kind: "cancel_task", id: a.id })).json()) as { ok: boolean };
+  return ok(j.ok ? "cancelled" : "no task with that id");
+});
 server.tool("remember", "Save a durable fact to your long-term memory (preferences, names, decisions). Keep it short.", { text: z.string() }, async (a) => {
   await call({ kind: "remember", text: a.text });
   return ok("remembered");

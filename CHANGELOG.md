@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.46.0 — Agents set up their own routines
+
+- "Every morning at 8, send me the top 3 Hacker News stories" now actually gets scheduled: agents have `schedule_task`, `list_tasks` and `cancel_task` tools, and their instructions tell them to use them instead of just promising. The task shows up in Settings → Scheduled tasks with its run history, where you can change or delete it.
+- Daily times the agent sets are in your local time: the app tells each agent your time zone when you open it.
+- Tests: the mock model's `schedule_task` call creates an 08:00 Europe/Amsterdam task; live, a real model turned the request into a daily 08:00 task with a well-written instruction to itself.
+
 ## v0.45.0 — Start an agent straight in the cloud
 
 - New agent → More options → **Runs on**: this computer or any cloud you've connected. Before, every agent started on this computer and had to be beamed out.

@@ -847,3 +847,22 @@ describe("v0.42: slow approvals", () => {
     c.close();
   }, 400_000);
 });
+
+describe("v0.46: agents schedule their own tasks", () => {
+  test("schedule_task creates a daily task in the owner's time zone", async () => {
+    const rec = await scut.create({
+      name: "Planner",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    c.send({ t: "subscribe", frames: false, tz: "Europe/Amsterdam" });
+    await Bun.sleep(500);
+    c.send({ t: "chat", text: 'CALL schedule_task {"prompt":"Send me the top 3 Hacker News stories","daily_at":"08:00"}\n' });
+    const s = await c.waitFor<any>((m) => m.t === "schedules" && m.schedules.some((x: any) => x.prompt.includes("Hacker News")), 120_000);
+    const task = s.schedules.find((x: any) => x.prompt.includes("Hacker News"));
+    expect(task).toMatchObject({ kind: "daily", minuteOfDay: 480, tz: "Europe/Amsterdam", enabled: true });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
+    c.close();
+  });
+});

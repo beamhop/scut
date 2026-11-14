@@ -212,6 +212,29 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     return Response.json({ ok: true, delivered: clients.size > 0 });
   }
   if (a.kind === "memories") return Response.json({ items: memory });
+  if (a.kind === "schedule_task") {
+    // The agent can set up its own routines ("every morning at 8 …"), in the owner's local time.
+    const prompt = String(a.prompt ?? "").trim().slice(0, 2000);
+    const at = String(a.daily_at ?? "").match(/^(\d{1,2}):(\d{2})$/);
+    const every = Number(a.every_minutes ?? 0);
+    if (!prompt || (!at && !(every >= 5))) return new Response("need prompt and daily_at (HH:MM) or every_minutes (>= 5)", { status: 400 });
+    const s: Schedule = at
+      ? { id: bytesToHex(crypto.getRandomValues(new Uint8Array(3))), prompt, kind: "daily", minuteOfDay: Math.min(23, +at[1]) * 60 + Math.min(59, +at[2]), enabled: true, createdAt: Date.now(), ...(spec?.ownerTz ? { tz: spec.ownerTz } : {}) }
+      : { id: bytesToHex(crypto.getRandomValues(new Uint8Array(3))), prompt, kind: "every", minutes: Math.round(every), enabled: true, createdAt: Date.now(), lastRun: Date.now() };
+    schedules = [...schedules, s].slice(-50);
+    await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
+    broadcast({ t: "schedules", schedules });
+    narrate(`Scheduled: ${prompt.slice(0, 50)}`);
+    return Response.json({ ok: true, id: s.id, timeZone: s.tz ?? "UTC" });
+  }
+  if (a.kind === "list_tasks") return Response.json({ tasks: schedules.map((s) => ({ id: s.id, prompt: s.prompt, when: s.kind === "daily" ? `daily ${String(Math.floor((s.minuteOfDay ?? 0) / 60)).padStart(2, "0")}:${String((s.minuteOfDay ?? 0) % 60).padStart(2, "0")} ${s.tz ?? "UTC"}` : `every ${s.minutes} min`, enabled: s.enabled })) });
+  if (a.kind === "cancel_task") {
+    const before = schedules.length;
+    schedules = schedules.filter((s) => s.id !== String(a.id));
+    await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
+    broadcast({ t: "schedules", schedules });
+    return Response.json({ ok: schedules.length < before });
+  }
   if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
     const ok = await requestApproval(String(a.title), a.detail);
@@ -715,6 +738,10 @@ Bun.serve<WsData>({
         return;
       }
       if (m.t === "subscribe") {
+        if (spec && typeof m.tz === "string" && m.tz.length < 64 && m.tz !== spec.ownerTz) {
+          spec.ownerTz = m.tz;
+          await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
+        }
         ws.data.frames = m.frames;
         ws.data.small = !!m.small;
         ws.data.fps = Math.max(0.2, Math.min(15, Number(m.fps ?? 8)));

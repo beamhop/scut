@@ -62,6 +62,24 @@ describe.skipIf(!OR)("openrouter + pi", () => {
   });
 });
 
+describe.skipIf(!OR)("self-scheduling", () => {
+  test("a real model turns 'every morning at 8' into a scheduled task", async () => {
+    const rec = await scut.create({
+      name: "Routine",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: OR, model: MODEL },
+    });
+    const ep = scut.get(rec.id).current.endpoint;
+    const r = await chat(ep, scut.auth(ep), "Every morning at 8, send me the top 3 Hacker News stories. Just set it up; don't fetch them now.");
+    console.log("reply:", r.reply.slice(0, 200));
+    const ws = new WebSocket(`${ep.replace(/^http/, "ws")}/ws?auth=${scut.auth(ep)}`);
+    const sched = await new Promise<any>((res) => { ws.onmessage = (e) => { if (typeof e.data === "string") { const m = JSON.parse(e.data); if (m.t === "schedules") { ws.close(); res(m.schedules); } } }; });
+    console.log("schedules:", JSON.stringify(sched));
+    expect(sched.some((s: any) => s.kind === "daily" && s.minuteOfDay === 480)).toBe(true);
+    await scut.remove(rec.id);
+  }, 400_000);
+});
+
 describe.skipIf(!OR)("CLI harnesses on the picked brain", () => {
   for (const harness of ["opencode", "codex", "copilot"] as const) {
     test(`${harness} answers with the OpenRouter key from Beamhop (no sign-in) and can use the agent's screen`, async () => {

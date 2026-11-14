@@ -75,7 +75,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = fa
       ws.current = sock;
       sock.onopen = () => {
         setConnected(true);
-        sock.send(JSON.stringify({ t: "subscribe", frames, fps, small }));
+        sock.send(JSON.stringify({ t: "subscribe", frames, fps, small, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }));
         for (const m of outbox.current.splice(0)) sock.send(m);
       };
       sock.onmessage = (ev) => {
