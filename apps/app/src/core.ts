@@ -9,6 +9,10 @@ import { mkdir } from "node:fs/promises";
 
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
 export const IMAGE = process.env.SCUT_IMAGE ?? "ghcr.io/beamhop/scut-agent:latest";
+/** Dev/test only: extra env for agent instances, e.g. SCUT_AGENT_ENV="SCUT_TELEGRAM_API=http://host.docker.internal:9999". */
+const EXTRA_ENV: Record<string, string> = Object.fromEntries(
+  (process.env.SCUT_AGENT_ENV ?? "").split(",").filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]),
+);
 
 export interface AgentRecord {
   id: string;
@@ -113,6 +117,7 @@ export class Scut {
     autonomy?: Autonomy;
     telegramToken?: string;
     driver?: string;
+    dailyTokenBudget?: number;
   }): Promise<AgentRecord> {
     const driver = this.drivers.get(o.driver ?? "local");
     if (!driver) throw new Error(`unknown destination ${o.driver}`);
@@ -131,9 +136,10 @@ export class Scut {
       agentPubkey: getPublicKey(agentSk),
       channels: o.telegramToken ? { telegram: { token: o.telegramToken } } : {},
       createdAt: Date.now(),
+      dailyTokenBudget: o.dailyTokenBudget,
     };
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
-    const inst = await driver.create({ name: id, image: IMAGE, env: { BEAM_TICKET: encodeTicket(ticket) } });
+    const inst = await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
     try {
       const hello = await (async () => {
         await waitHealthy(inst.endpoint);
@@ -181,7 +187,7 @@ export class Scut {
       const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
       const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: rec.agentPubkey, bundleHash: prep.hash, issuedAt: Date.now() };
       const suffix = bytesToHex(crypto.getRandomValues(new Uint8Array(2)));
-      target = await driver.create({ name: `${rec.id}-${suffix}`, image: IMAGE, env: { BEAM_TICKET: encodeTicket(ticket) } });
+      target = await driver.create({ name: `${rec.id}-${suffix}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
       await waitHealthy(target.endpoint);
       const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
 

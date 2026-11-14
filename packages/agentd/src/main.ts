@@ -10,7 +10,7 @@ import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
 import { TelegramChannel, type Channel } from "@scut/channels";
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
-import { mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { Desktop } from "./desktop.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
@@ -38,6 +38,15 @@ let harness: Harness | null = null;
 const channels: Channel[] = [];
 const tokens = { input: 0, output: 0 };
 let lastTelegramChat: string | undefined;
+// Telegram owner pairing: the owner proves themselves by sending "/pair <code>" to the bot.
+let tgOwner: { userId: string; chatId: string; name: string } | null = null;
+let tgPairCode = "";
+let tgBot: string | undefined;
+type ChatLine = { from: string; channel: string; text: string; ts: number };
+const chatLog: ChatLine[] = [];
+const narrationLog: { text: string; ts: number }[] = [];
+let usageDay = new Date().toISOString().slice(0, 10);
+let dayTokens = 0;
 
 async function readJson<T>(p: string): Promise<T | null> {
   try {
@@ -68,7 +77,22 @@ function broadcast(m: ServerMsg, except?: ServerWebSocket<WsData>) {
   for (const c of clients) if (c !== except) c.send(s);
 }
 function narrate(text: string) {
-  broadcast({ t: "narration", text, ts: Date.now() });
+  const n = { text, ts: Date.now() };
+  narrationLog.push(n);
+  if (narrationLog.length > 200) narrationLog.shift();
+  broadcast({ t: "narration", ...n });
+}
+function recordChat(line: ChatLine) {
+  chatLog.push(line);
+  if (chatLog.length > 500) chatLog.shift();
+  broadcast({ t: "chat", ...line });
+  appendFile(`${DATA}/chat.jsonl`, JSON.stringify(line) + "\n").catch(() => {});
+}
+function settingsMsg(): ServerMsg {
+  return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, dayTokens };
+}
+function pairingMsg(): ServerMsg {
+  return { t: "pairing", telegram: spec?.channels.telegram ? { bot: tgBot, code: tgOwner ? undefined : tgPairCode, owner: tgOwner?.name } : undefined };
 }
 
 // ---------- approvals ----------
@@ -76,7 +100,7 @@ const approvals = new Map<string, (ok: boolean, by: string) => void>();
 function requestApproval(title: string, detail?: string): Promise<boolean> {
   const id = bytesToHex(crypto.getRandomValues(new Uint8Array(6)));
   broadcast({ t: "approval.request", id, title, detail, ts: Date.now() });
-  const chat = spec?.channels.telegram?.ownerChatId ? String(spec.channels.telegram.ownerChatId) : lastTelegramChat;
+  const chat = tgOwner?.chatId;
   const tg = channels.find((c) => c.name === "telegram");
   if (tg && chat) tg.askApproval(chat, id, title).catch(() => {});
   setState("stuck");
@@ -130,9 +154,22 @@ function describe(a: Record<string, any>) {
 // ---------- prompts (serialized) ----------
 let queue: Promise<unknown> = Promise.resolve();
 function prompt(text: string, origin: { channel: string; chatId?: string; from: string }) {
-  broadcast({ t: "chat", from: origin.from, channel: origin.channel, text, ts: Date.now() });
+  recordChat({ from: origin.from, channel: origin.channel, text, ts: Date.now() });
   queue = queue.then(async () => {
     if (!harness || state === "retired" || state === "quiescing") return;
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== usageDay) {
+      usageDay = today;
+      dayTokens = 0;
+    }
+    const budget = spec?.dailyTokenBudget ?? 0;
+    if (budget > 0 && dayTokens >= budget) {
+      const msg = `I've used today's token budget (${dayTokens.toLocaleString()} of ${budget.toLocaleString()}). Raise it in my settings or try again tomorrow.`;
+      recordChat({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
+      if (origin.channel === "telegram" && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, msg);
+      narrate("Budget reached");
+      return;
+    }
     setState("busy");
     try {
       const reply = await harness.prompt(text, (e) => {
@@ -140,11 +177,13 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
         if (e.type === "usage") {
           tokens.input += e.input;
           tokens.output += e.output;
+          dayTokens += e.input + e.output;
+          Bun.write(`${DATA}/usage.json`, JSON.stringify({ tokens, usageDay, dayTokens })).catch(() => {});
         }
         if (e.type === "error") narrate(`Problem: ${e.message.slice(0, 160)}`);
       });
       const out = reply || "(no reply)";
-      broadcast({ t: "chat", from: "agent", channel: origin.channel, text: out, ts: Date.now() });
+      recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
       if (origin.channel === "telegram" && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, out);
       setState("running");
       narrate("Idle");
@@ -161,12 +200,33 @@ async function startChannels() {
   const tg = spec.channels.telegram?.token;
   if (tg) {
     const c = new TelegramChannel(tg);
+    tgOwner = await readJson(`${DATA}/telegram-owner.json`);
+    const pf = await readJson<{ code: string }>(`${DATA}/telegram-pair.json`);
+    tgPairCode = pf?.code ?? String(100000 + Math.floor(Math.random() * 900000));
+    if (!pf) await Bun.write(`${DATA}/telegram-pair.json`, JSON.stringify({ code: tgPairCode }));
+    tgBot = await c.botName();
     c.start(
-      (m) => {
+      async (m) => {
         lastTelegramChat = m.chatId;
+        const pair = m.text.match(/^\/(?:pair|start)\s+(\d{6})/);
+        if (pair) {
+          if (!tgOwner && pair[1] === tgPairCode) {
+            tgOwner = { userId: m.fromId, chatId: m.chatId, name: m.from };
+            await Bun.write(`${DATA}/telegram-owner.json`, JSON.stringify(tgOwner));
+            await c.send(m.chatId, `Paired! I'm ${spec?.name}. You'll get my approval requests here.`);
+            broadcast(pairingMsg());
+          } else await c.send(m.chatId, tgOwner ? "I already have an owner." : "That code doesn't match.");
+          return;
+        }
+        if (m.text === "/start") {
+          await c.send(m.chatId, `Hi, I'm ${spec?.name}. ${tgOwner ? "Ask me anything." : "My owner can pair with /pair <code> from the Beamhop app."}`);
+          return;
+        }
         prompt(m.text, { channel: "telegram", chatId: m.chatId, from: m.from });
       },
-      resolveApproval,
+      (id, ok, byId) => {
+        if (tgOwner && byId === tgOwner.userId) resolveApproval(id, ok, `telegram:${tgOwner.name}`);
+      },
     );
     channels.push(c);
     log("telegram connected");
@@ -183,6 +243,16 @@ async function run() {
   agentSk = (await sk.exists()) ? hexToBytes((await sk.text()).trim()) : null;
   if (!spec) return setState("awaiting");
   if (!holdsLease()) return setState("retired");
+  const usage = await readJson<{ tokens: typeof tokens; usageDay: string; dayTokens: number }>(`${DATA}/usage.json`);
+  if (usage) {
+    Object.assign(tokens, usage.tokens);
+    usageDay = usage.usageDay;
+    dayTokens = usage.dayTokens;
+  }
+  try {
+    const lines = (await readFile(`${DATA}/chat.jsonl`, "utf8")).trim().split("\n").filter(Boolean).slice(-500);
+    chatLog.splice(0, chatLog.length, ...lines.map((l) => JSON.parse(l)));
+  } catch {}
   setState("starting");
   await mkdir(`${DATA}/workspace`, { recursive: true });
   desktop = new Desktop(DATA);
@@ -365,6 +435,9 @@ Bun.serve<WsData>({
           screen: SCREEN,
         } satisfies ServerMsg),
       );
+      ws.send(JSON.stringify({ t: "history", chat: chatLog.slice(-100), narration: narrationLog.slice(-30) } satisfies ServerMsg));
+      ws.send(JSON.stringify(pairingMsg()));
+      ws.send(JSON.stringify(settingsMsg()));
     },
     async message(ws, raw) {
       let m: ClientMsg;
@@ -384,6 +457,16 @@ Bun.serve<WsData>({
         prompt(m.text, { channel: "app", from: "owner" });
       } else if (m.t === "approval") {
         resolveApproval(m.id, m.ok, "owner");
+      } else if (m.t === "settings" && spec) {
+        if (m.autonomy && ["ask", "risky", "auto"].includes(m.autonomy)) spec.autonomy = m.autonomy;
+        if (typeof m.dailyTokenBudget === "number" && m.dailyTokenBudget >= 0) spec.dailyTokenBudget = Math.floor(m.dailyTokenBudget);
+        if (typeof m.persona === "string") spec.persona = m.persona.slice(0, 2000);
+        await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
+        broadcast(settingsMsg());
+      } else if (m.t === "stop") {
+        harness?.abort?.();
+        for (const [id] of approvals) resolveApproval(id, false, "owner");
+        narrate("Stopped by you");
       }
     },
     close(ws) {

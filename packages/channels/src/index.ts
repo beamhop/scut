@@ -5,12 +5,13 @@ export interface IncomingMessage {
   channel: string; // "telegram"
   chatId: string;
   from: string;
+  fromId: string;
   text: string;
 }
 
 export interface Channel {
   name: string;
-  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, by: string) => void): void;
+  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, byId: string) => void): void;
   stop(): Promise<void>;
   send(chatId: string, text: string): Promise<void>;
   askApproval(chatId: string, id: string, title: string): Promise<void>;
@@ -37,7 +38,11 @@ export class TelegramChannel implements Channel {
     return j.result;
   }
 
-  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, by: string) => void) {
+  async botName(): Promise<string | undefined> {
+    return (await this.call("getMe", {}).catch(() => null))?.username;
+  }
+
+  start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, byId: string) => void) {
     if (this.running) return;
     this.running = true;
     this.loop = (async () => {
@@ -58,11 +63,12 @@ export class TelegramChannel implements Channel {
                 channel: "telegram",
                 chatId: String(u.message.chat.id),
                 from: u.message.from?.username ?? String(u.message.from?.id),
+                fromId: String(u.message.from?.id),
                 text: u.message.text,
               });
             } else if (u.callback_query?.data?.startsWith("ap:")) {
               const [, id, verdict] = u.callback_query.data.split(":");
-              onApproval(id, verdict === "y", u.callback_query.from?.username ?? "telegram");
+              onApproval(id, verdict === "y", String(u.callback_query.from?.id));
               await this.call("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
             }
           }

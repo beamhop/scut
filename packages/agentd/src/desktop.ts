@@ -139,9 +139,23 @@ export class Desktop {
       }
       case "key": return this.xdotool("key", "--clearmodifiers", ...(a.keys ?? "").split(" ").filter(Boolean));
       case "type": return this.xdotool("type", "--delay", "8", "--", a.text ?? "");
-      case "open_url": return this.startBrowser(a.url);
+      case "open_url": return this.navigate(a.url ?? "about:blank");
       default: throw new Error(`unknown action ${a.kind}`);
     }
+  }
+
+  /** Navigate the current browser tab (like typing in the address bar); start the browser if it is gone. */
+  async navigate(url: string) {
+    const win = await this.xdotool("search", "--onlyvisible", "--class", "chromium").catch(() => "");
+    const id = win.split("\n").filter(Boolean).at(-1);
+    if (!id) {
+      this.startBrowser(url);
+      return;
+    }
+    await this.xdotool("windowactivate", "--sync", id).catch(() => {});
+    await this.xdotool("key", "--clearmodifiers", "ctrl+l");
+    await this.xdotool("type", "--delay", "4", "--", url);
+    await this.xdotool("key", "Return");
   }
 
   stop() {

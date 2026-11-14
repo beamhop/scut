@@ -5,6 +5,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { ServerMsg } from "@scut/protocol";
 import { startMockLlm } from "./mock-llm.ts";
+import { startMockTelegram } from "./mock-telegram.ts";
+const tg = startMockTelegram();
+process.env.SCUT_AGENT_ENV = `SCUT_TELEGRAM_API=http://host.docker.internal:${tg.port}`;
 
 process.env.SCUT_HOME = mkdtempSync(`${tmpdir()}/scut-test-`);
 process.env.SCUT_SIM_CLOUD = "1";
@@ -64,6 +67,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const a of [...scut.agents]) await scut.remove(a.id).catch(() => {});
   llm.server.stop(true);
+  tg.server.stop(true);
 });
 
 describe("mock harness agent", () => {
@@ -169,6 +173,71 @@ describe("pi harness", () => {
     expect(reply.text).toContain("image=true");
     const names = (llm.requests[0].tools ?? []).map((t: any) => t.function.name);
     expect(names).toContain("mcp__computer__screenshot");
+    c.close();
+  });
+});
+
+describe("v0.2: history, settings, stop, budget", () => {
+  test("chat history is replayed on reconnect and survives a beam", async () => {
+    const rec = await scut.create({ name: "Memo", harness: "mock" });
+    let c = await client(rec.id);
+    c.send({ t: "chat", text: "remember me" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    c.close();
+    await scut.beam(rec.id, "sim-cloud", { destroySource: true });
+    c = await client(rec.id);
+    const h = await c.waitFor<any>((m) => m.t === "history");
+    expect(h.chat.map((x: any) => x.text)).toContain("remember me");
+    expect(h.chat.length).toBe(2);
+    c.close();
+  });
+
+  test("settings change autonomy and persist", async () => {
+    const rec = await scut.create({ name: "Tuner", harness: "mock", autonomy: "auto" });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "settings");
+    c.send({ t: "settings", autonomy: "ask", dailyTokenBudget: 5000 });
+    const s = await c.waitFor<any>((m) => m.t === "settings" && (m as any).autonomy === "ask");
+    expect(s.dailyTokenBudget).toBe(5000);
+    c.send({ t: "chat", text: "open https://example.com" });
+    const req = await c.waitFor<any>((m) => m.t === "approval.request");
+    c.send({ t: "stop" }); // stop denies pending approvals
+    await c.waitFor((m) => m.t === "approval.resolved" && (m as any).id === req.id && (m as any).ok === false);
+    c.close();
+  });
+
+  test("daily token budget blocks prompts once spent", async () => {
+    const rec = await scut.create({ name: "Thrifty", harness: "mock", dailyTokenBudget: 10 });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "first message uses more than ten tokens" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).text.includes("message #1"));
+    c.send({ t: "chat", text: "second" });
+    const r = await c.waitFor<any>((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).text.includes("budget"));
+    expect(r.text).toContain("token budget");
+    c.close();
+  });
+});
+
+describe("telegram pairing and owner-only approvals (mock Bot API)", () => {
+  test("pair with code, chat from anyone, approvals only from the owner", async () => {
+    const rec = await scut.create({ name: "Teleo", harness: "mock", autonomy: "ask", telegramToken: "TEST:TOKEN" });
+    const c = await client(rec.id);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!(m as any).telegram?.code);
+    expect(p.telegram.bot).toBe("mock_bot");
+    tg.message(42, "/pair 000000");
+    await tg.waitSent((m) => m.chat_id === "42" && m.text.includes("doesn't match"));
+    tg.message(42, `/pair ${p.telegram.code}`);
+    await tg.waitSent((m) => m.chat_id === "42" && m.text.startsWith("Paired"));
+    // a guest in a group asks for something risky
+    tg.message(99, "please open https://example.com", -500);
+    const ask = await tg.waitSent((m) => m.chat_id === "42" && !!m.reply_markup);
+    const data = ask.reply_markup.inline_keyboard[0][0].callback_data as string;
+    tg.callback(99, data); // guest tries to approve: ignored
+    await Bun.sleep(3000);
+    expect(tg.sent.find((m) => m.chat_id === "-500" && m.text.startsWith("mock:"))).toBeUndefined();
+    tg.callback(42, data); // owner approves
+    const reply = await tg.waitSent((m) => m.chat_id === "-500" && m.text.startsWith("mock:"));
+    expect(reply.text).toContain("message #1");
     c.close();
   });
 });

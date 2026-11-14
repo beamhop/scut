@@ -33,6 +33,8 @@ export interface AgentSpec {
     nostr?: { relays: string[] };
   };
   createdAt: number;
+  /** Hard cap on model tokens per day (input + output). 0 or missing = no cap. */
+  dailyTokenBudget?: number;
 }
 
 /** Ticket passed to a fresh instance via the BEAM_TICKET env var. Holds no secrets. */
@@ -125,7 +127,9 @@ export type ClientMsg =
   | { t: "input"; kind: "move" | "click" | "dblclick" | "down" | "up" | "scroll" | "key" | "type"; x?: number; y?: number; button?: number; dy?: number; keys?: string; text?: string }
   | { t: "cursor"; x: number; y: number }
   | { t: "chat"; text: string }
-  | { t: "approval"; id: string; ok: boolean };
+  | { t: "approval"; id: string; ok: boolean }
+  | { t: "stop" }
+  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
@@ -136,7 +140,10 @@ export type ServerMsg =
   | { t: "approval.resolved"; id: string; ok: boolean; by: string }
   | { t: "stats"; cpu: number; memMb: number; memTotalMb: number; tokens: { input: number; output: number } }
   | { t: "cursor"; x: number; y: number; who: string }
-  | { t: "error"; message: string };
+  | { t: "error"; message: string }
+  | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
+  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number }
+  | { t: "pairing"; telegram?: { bot?: string; code?: string; owner?: string } };
 
 export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" | "quiescing" | "retired";
 

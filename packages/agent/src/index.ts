@@ -15,6 +15,8 @@ export interface Harness {
   /** Run one prompt to completion; resolves with the final assistant text. */
   prompt(text: string, onEvent: (e: HarnessEvent) => void): Promise<string>;
   stop(): Promise<void>;
+  /** Interrupt the current prompt, keeping the session. */
+  abort?(): void;
 }
 
 export interface HarnessContext {
@@ -168,6 +170,10 @@ export class PiHarness implements Harness {
       this.listeners.add(l);
       const id = this.send({ type: "prompt", message: text });
     });
+  }
+
+  abort() {
+    if (this.proc) this.send({ type: "abort" });
   }
 
   async stop() {
