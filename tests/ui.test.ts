@@ -56,6 +56,11 @@ test("first run shows the guided setup", async () => {
 test("the brain step checks the key before moving on", async () => {
   const page = await open("/");
   await page.waitForSelector('input[aria-label="API key"]', { timeout: 10_000 });
+  const clickBtn = (t: string) => page.evaluate((t) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === t)!.dispatchEvent(new MouseEvent("click", { bubbles: true })), t);
+  // Picking local models looks for Ollama right away and explains what's missing
+  await clickBtn("Local (Ollama)");
+  await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent?.includes("Ollama isn't running"), { timeout: 15_000 });
+  await clickBtn("OpenRouter");
   await page.evaluate(() => document.querySelector("details")!.setAttribute("open", ""));
   const setVal = async (label: string, v: string) => {
     await page.focus(`input[aria-label="${label}"]`);
@@ -66,12 +71,16 @@ test("the brain step checks the key before moving on", async () => {
   await setVal("Base URL", `http://127.0.0.1:${llm.port}/v1`);
   await setVal("Model", "m1");
   await setVal("API key", "bad");
-  const clickBtn = (t: string) => page.evaluate((t) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === t)!.dispatchEvent(new MouseEvent("click", { bubbles: true })), t);
   await clickBtn("Next");
   await page.waitForSelector('[role="alert"]', { timeout: 15_000 });
   expect(await page.$eval('[role="alert"]', (e) => e.textContent)).toContain("rejected");
   expect(await page.evaluate(() => document.body.textContent!.includes("Continue anyway"))).toBe(true);
   await setVal("API key", "good");
+  await setVal("Model", "zzz");
+  await clickBtn("Next");
+  await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent?.includes("isn't offered"), { timeout: 15_000 });
+  expect(await page.$$eval("#model-options option", (o) => o.map((x) => (x as HTMLOptionElement).value))).toEqual(["m1"]);
+  await setVal("Model", "m1");
   await clickBtn("Next");
   await page.waitForFunction(() => document.body.textContent!.includes("What should your agent do?"), { timeout: 15_000 });
   await page.close();

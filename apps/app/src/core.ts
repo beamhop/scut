@@ -80,7 +80,7 @@ export class Scut {
   }
 
   /** Check a model endpoint + key before an agent depends on it. Never throws: returns a plain-language answer. */
-  static async verifyModel(m: ModelConfig): Promise<{ ok: boolean; error?: string; modelFound?: boolean }> {
+  static async verifyModel(m: ModelConfig): Promise<{ ok: boolean; error?: string; modelFound?: boolean; models?: string[] }> {
     // host.docker.internal is how agents reach this computer; from the app itself it is just localhost.
     const base = (m.baseUrl ?? "").replace(/\/+$/, "").replace("host.docker.internal", "127.0.0.1");
     if (!base) return { ok: false, error: "Missing endpoint URL" };
@@ -92,7 +92,7 @@ export class Scut {
         r = await fetch(`${base}/key`, { headers: { authorization: `Bearer ${m.apiKey ?? ""}` }, signal: AbortSignal.timeout(10_000) });
         if (r.ok) {
           const list = (await (await fetch(`${base}/models`, { signal: AbortSignal.timeout(10_000) })).json().catch(() => ({ data: [] }))) as { data?: { id: string }[] };
-          return { ok: true, modelFound: !!list.data?.some((x) => x.id === m.model) };
+          return { ok: true, modelFound: !!list.data?.some((x) => x.id === m.model), models: list.data?.map((x) => x.id).slice(0, 500) };
         }
       } else {
         r = await fetch(`${base}/models`, { headers: m.apiKey ? { authorization: `Bearer ${m.apiKey}` } : {}, signal: AbortSignal.timeout(10_000) });
@@ -100,8 +100,9 @@ export class Scut {
       if (r.status === 401 || r.status === 403) return { ok: false, error: "That key was rejected — check it and paste it again" };
       if (!r.ok) return { ok: false, error: `The endpoint answered ${r.status}` };
       const list = (await r.json().catch(() => ({}))) as { data?: { id: string }[] };
-      return { ok: true, modelFound: list.data ? list.data.some((x) => x.id === m.model) : undefined };
+      return { ok: true, modelFound: list.data ? list.data.some((x) => x.id === m.model) : undefined, models: list.data?.map((x) => x.id).slice(0, 500) };
     } catch (e: any) {
+      if (/:11434\b/.test(base)) return { ok: false, error: "Ollama isn't running on this computer. Install it from ollama.com, start it, then try again." };
       return { ok: false, error: /timeout|abort/i.test(String(e?.name ?? e)) ? "No answer from that endpoint" : `Couldn't reach it: ${String(e?.message ?? e).slice(0, 120)}` };
     }
   }

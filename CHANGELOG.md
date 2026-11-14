@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.22.0 — Local models and model suggestions
+
+- Picking "Local (Ollama)" looks for Ollama on this computer right away: it uses an installed model, says how many it found, or explains what's missing ("Ollama isn't running…", "no models yet: ollama pull …").
+- After a key check, the Model field suggests the models your provider actually offers; if the chosen one isn't offered, Advanced opens so you can pick another.
+- Re-ran the live suite (real model on OpenRouter, Telegram, Nostr DMs, crew room): 6/6.
+
 ## v0.21.0 — The brain is remembered and checked
 
 - Fixed: agents created after the first one got no API key. The app now remembers your brain (endpoint, model, key) in `~/.scut/brain.json` (readable only by you), and new agents reuse it. New agent shows "Brain: OpenRouter · model — Change".

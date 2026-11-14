@@ -20,7 +20,7 @@ const api = {
   beam: (id: string, to: string) => fetch(`/api/agents/${id}/beam`, { method: "POST", body: JSON.stringify({ to }) }).then((r) => r.json()),
   remove: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }).then((r) => r.json()),
   brain: (): Promise<{ api: string; baseUrl: string; model: string; hasKey: boolean } | null> => fetch("/api/brain").then((r) => r.json()).catch(() => null),
-  verifyBrain: (m: unknown): Promise<{ ok: boolean; error?: string; modelFound?: boolean }> =>
+  verifyBrain: (m: unknown): Promise<{ ok: boolean; error?: string; modelFound?: boolean; models?: string[] }> =>
     fetch("/api/brain/verify", { method: "POST", body: JSON.stringify(m) }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) })),
 };
 
@@ -381,6 +381,8 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [error, setError] = useState<string>();
   const [brain, setBrain] = useState<Awaited<ReturnType<typeof api.brain>>>();
   const [check, setCheck] = useState<{ busy?: boolean; error?: string; failed?: boolean }>({});
+  const [models, setModels] = useState<string[]>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const last = 1;
   useEffect(() => {
     api.brain().then((b) => {
@@ -396,8 +398,20 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
     if (check.failed) { setCheck({}); setStep(1); return; } // "Continue anyway"
     setCheck({ busy: true });
     const r = await api.verifyBrain({ provider: "scut", api: PRESETS[kind].api, baseUrl: model.baseUrl, apiKey: model.apiKey || undefined, model: model.model });
+    if (r.models?.length) setModels(r.models);
     if (r.ok && r.modelFound !== false) { setCheck({}); setStep(1); return; }
-    setCheck({ failed: true, error: r.ok ? `The key works, but "${model.model}" isn't offered there. Pick another model under Advanced.` : r.error });
+    if (r.ok) setDetailsOpen(true);
+    setCheck({ failed: true, error: r.ok ? `The key works, but "${model.model}" isn't offered there. Pick another model below.` : r.error });
+  }
+  /** Local models: look at what's installed as soon as Ollama is picked. */
+  async function pickOllama(baseUrl: string) {
+    setCheck({ busy: true });
+    const r = await api.verifyBrain({ provider: "scut", api: "openai-completions", baseUrl, model: "" });
+    setModels(r.models ?? []);
+    if (!r.ok) return setCheck({ failed: true, error: r.error });
+    if (!r.models?.length) return setCheck({ failed: true, error: "Ollama is running but has no models yet. Run: ollama pull qwen3.8:8b" });
+    setModel((m) => ({ ...m, baseUrl, model: r.models!.includes(m.model) ? m.model : r.models![0] }));
+    setCheck({});
   }
 
   async function go() {
@@ -433,18 +447,20 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
           <div className="space-y-4">
             <div className="grid grid-cols-4 gap-2">
               {Object.entries(PRESETS).map(([k, p]) => (
-                <button key={k} className={`${card} ${kind === k ? "border-beam" : "border-white/10"}`} onClick={() => { setKind(k); setModel({ ...model, baseUrl: p.baseUrl, model: p.model }); }}>
+                <button key={k} className={`${card} ${kind === k ? "border-beam" : "border-white/10"}`} onClick={() => { setKind(k); setModels([]); setCheck({}); setModel({ ...model, baseUrl: p.baseUrl, model: p.model }); if (k === "ollama") pickOllama(p.baseUrl); }}>
                   <div className="text-sm font-medium">{p.label}</div>
                 </button>
               ))}
             </div>
             <input className={input} aria-label="API key" placeholder={usesSavedKey ? "Using your saved key — paste a new one to replace it" : `API key (${PRESETS[kind].keyHint}) — stays on this computer and inside your agents`} type="password" value={model.apiKey} onChange={(e) => { setModel({ ...model, apiKey: e.target.value }); setCheck({}); }} />
             {check.error && <div role="alert" className="rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{check.error}</div>}
-            <details className="text-sm text-slate-400">
+            {kind === "ollama" && !check.error && models.length > 0 && <div className="text-sm text-slate-300">Found {models.length} local model{models.length > 1 ? "s" : ""}. Using <span className="font-mono">{model.model}</span>.</div>}
+            <details className="text-sm text-slate-400" open={detailsOpen} onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}>
               <summary className="cursor-pointer">Advanced: endpoint and model</summary>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <input className={input} aria-label="Base URL" value={model.baseUrl} onChange={(e) => setModel({ ...model, baseUrl: e.target.value })} />
-                <input className={input} aria-label="Model" value={model.model} onChange={(e) => setModel({ ...model, model: e.target.value })} />
+                <input className={input} aria-label="Model" list="model-options" value={model.model} onChange={(e) => { setModel({ ...model, model: e.target.value }); setCheck({}); }} />
+                <datalist id="model-options">{models.map((m) => <option key={m} value={m} />)}</datalist>
               </div>
             </details>
             <p className="text-xs text-slate-400">Have a ChatGPT or GitHub Copilot subscription instead? <button onClick={() => { setCheck({}); setStep(1); }} className="text-beam hover:underline">Skip this</button>, choose Codex or Copilot CLI under More options, then sign in on the agent's own screen.</p>
