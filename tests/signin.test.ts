@@ -55,9 +55,9 @@ test("a ChatGPT agent that isn't signed in says so, plainly", async () => {
 test("Codex's models are offered once signed in, and the one picked is kept", async () => {
   // Signed out, Codex only knows its general catalog (models a plan may not have): none are offered then. Without a
   // sandbox on a Mac, Codex can also see the owner's own login in the keychain: then the plan's models show.
-  const signedIn = c.msgs.filter((m: any) => m.t === "signin").at(-1)?.state === "signed-in";
+  const signedIn = (c.msgs.filter((m: any) => m.t === "signin").at(-1) as any)?.state === "signed-in";
   if (!signedIn) {
-    expect(c.msgs.filter((m: any) => m.t === "settings").at(-1)?.subModels ?? []).toEqual([]);
+    expect((c.msgs.filter((m: any) => m.t === "settings").at(-1) as any)?.subModels ?? []).toEqual([]);
     return;
   }
   const s = await c.waitFor((m) => m.t === "settings" && m.subModels?.length > 0);
