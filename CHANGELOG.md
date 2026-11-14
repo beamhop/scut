@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.49.0 — Correct a memory
+
+- In Settings → Memory, click any memory to fix it in place (Enter saves, Escape cancels) instead of deleting and retyping it. Corrections reach the agent with its next message.
+- UI test: add "Likes tea", correct it to "Likes green tea, no sugar".
+
 ## v0.48.1 — No freezes while starting agents
 
 - Starting an agent container no longer blocks the app's server (it used a synchronous `docker run`; a slow start or download froze the whole UI until it finished).

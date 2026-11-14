@@ -300,3 +300,20 @@ test("remove an agent from Settings (two steps)", async () => {
   expect(scut.agents.find((a) => a.id === rec.id)).toBeUndefined();
   await page.close();
 });
+
+test("memories can be added and corrected in Settings", async () => {
+  const page = await open(`/#/agent/${agentId}`);
+  await page.waitForSelector('input[aria-label^="Message"]', { timeout: 20_000 });
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("header button")].find((b) => b.textContent === "Settings")!.click());
+  await page.waitForSelector('input[aria-label="Add a memory"]');
+  await page.type('input[aria-label="Add a memory"]', "Likes tea");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Likes tea"), { timeout: 10_000 });
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Likes tea")!.click());
+  await page.waitForSelector('input[aria-label="Edit memory"]');
+  await page.evaluate(() => { const i = document.querySelector<HTMLInputElement>('input[aria-label="Edit memory"]')!; i.select(); });
+  await page.keyboard.type("Likes green tea, no sugar");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Likes green tea, no sugar"), { timeout: 10_000 });
+  await page.close();
+});

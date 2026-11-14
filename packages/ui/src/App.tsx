@@ -1079,6 +1079,19 @@ function SkillSettings({ a }: { a: ReturnType<typeof useAgent> }) {
   );
 }
 
+/** A memory you can correct in place: click it, edit, Enter to save, Escape to cancel. */
+function MemoryText({ a, item }: { a: ReturnType<typeof useAgent>; item: MemoryItem }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(item.text);
+  if (!editing) return <button onClick={() => { setText(item.text); setEditing(true); }} title="Click to edit" className="min-w-0 flex-1 text-left hover:text-white">{item.text}</button>;
+  const save = () => { const t = text.trim(); if (t && t !== item.text) a.send({ t: "memory", op: "edit", id: item.id, text: t }); setEditing(false); };
+  return (
+    <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onBlur={save} aria-label="Edit memory"
+      onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+      className="min-w-0 flex-1 rounded border border-white/10 bg-panel px-1" />
+  );
+}
+
 function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const [text, setText] = useState("");
   return (
@@ -1088,7 +1101,7 @@ function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
       <div className="max-h-48 space-y-1 overflow-y-auto">
         {a.memory.map((m) => (
           <div key={m.id} className="group flex items-start gap-2 rounded-lg bg-panel2 px-2 py-1.5">
-            <span className="min-w-0 flex-1">{m.text}</span>
+            <MemoryText a={a} item={m} />
             <span className="font-mono text-[11px] text-slate-400">{m.source === "owner" ? "you" : "agent"}</span>
             <button aria-label="Forget" onClick={() => a.send({ t: "memory", op: "delete", id: m.id })} className="text-slate-400 hover:text-red-300">✕</button>
           </div>
