@@ -2,6 +2,7 @@
 export function startMockTelegram() {
   const queue: any[] = [];
   const sent: any[] = [];
+  const edited: any[] = [];
   let updateId = 1;
   const server = Bun.serve({
     port: 0,
@@ -21,12 +22,17 @@ export function startMockTelegram() {
         sent.push(body);
         return Response.json({ ok: true, result: { message_id: sent.length } });
       }
+      if (method === "editMessageText") {
+        edited.push(body);
+        return Response.json({ ok: true, result: { message_id: body.message_id } });
+      }
       return Response.json({ ok: true, result: true });
     },
   });
   return {
     server,
     sent,
+    edited,
     port: server.port,
     message(fromId: number, text: string, chatId = fromId) {
       queue.push({ update_id: updateId++, message: { text, chat: { id: chatId }, from: { id: fromId, username: `user${fromId}` } } });

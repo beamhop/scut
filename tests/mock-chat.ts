@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 
 export function startMockSlack() {
   const posts: any[] = [];
+  const updates: any[] = [];
   const sockets = new Set<ServerWebSocket<unknown>>();
   let env = 0;
   const server: ReturnType<typeof Bun.serve> = Bun.serve({
@@ -17,7 +18,11 @@ export function startMockSlack() {
       if (method === "apps.connections.open") return Response.json({ ok: true, url: `ws://host.docker.internal:${server.port}/ws` });
       if (method === "chat.postMessage") {
         posts.push(body);
-        return Response.json({ ok: true, ts: String(posts.length) });
+        return Response.json({ ok: true, channel: body.channel, ts: String(posts.length) });
+      }
+      if (method === "chat.update") {
+        updates.push(body);
+        return Response.json({ ok: true, channel: body.channel, ts: body.ts });
       }
       return Response.json({ ok: false, error: "unknown_method" });
     },
@@ -38,6 +43,7 @@ export function startMockSlack() {
   return {
     server,
     posts,
+    updates,
     connected: () => sockets.size,
     /** Kill every socket from the server side, as a network drop during laptop sleep would. */
     dropAll: () => { for (const s of [...sockets]) s.close(1006 as any); },
@@ -50,6 +56,7 @@ export function startMockSlack() {
 
 export function startMockDiscord() {
   const posts: { channel: string; body: any }[] = [];
+  const edits: { channel: string; id: string; body: any }[] = [];
   const callbacks: string[] = [];
   const sockets = new Set<ServerWebSocket<unknown>>();
   let seq = 1;
@@ -65,6 +72,11 @@ export function startMockDiscord() {
       if (m && req.method === "POST") {
         posts.push({ channel: m[1], body: await req.json() });
         return Response.json({ id: String(posts.length) });
+      }
+      const e = path.match(/\/channels\/([^/]+)\/messages\/([^/]+)$/);
+      if (e && req.method === "PATCH") {
+        edits.push({ channel: e[1], id: e[2], body: await req.json() });
+        return Response.json({ id: e[2] });
       }
       if (path.includes("/interactions/")) {
         callbacks.push(path);
@@ -92,6 +104,7 @@ export function startMockDiscord() {
   return {
     server,
     posts,
+    edits,
     callbacks,
     connected: () => sockets.size,
     dm: (userId: string, text: string) => dispatch("MESSAGE_CREATE", { channel_id: `DM${userId}`, content: text, author: { id: userId, username: `u${userId}` }, mentions: [] }),

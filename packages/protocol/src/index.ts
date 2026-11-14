@@ -147,12 +147,21 @@ export type ClientMsg =
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
-  | { t: "state"; state: AgentState }
+  | { t: "state"; state: AgentState; /** ms epoch when this state began */ since?: number }
   | { t: "chat"; from: "owner" | "agent" | string; channel: string; text: string; ts: number }
   | { t: "narration"; text: string; ts: number }
-  | { t: "approval.request"; id: string; title: string; detail?: string; ts: number; /** small JPEG data URL of the screen when asked */ shot?: string }
-  | { t: "approval.resolved"; id: string; ok: boolean; by: string }
-  | { t: "stats"; cpu: number; memMb: number; memTotalMb: number; tokens: { input: number; output: number } }
+  | ApprovalRequest
+  | {
+      t: "approval.resolved"; id: string; ok: boolean;
+      /** Human-readable decider: "you in Beamhop", "you on Telegram", "you on Slack", "you on Discord", "you on Nostr", or "timeout". */
+      by: string;
+      /** Machine-readable source of the decision. */
+      via?: ApprovalVia;
+      /** When it was decided (ms epoch). */
+      at?: number;
+    }
+  | { t: "stats"; cpu: number; memMb: number; memTotalMb: number; tokens: { input: number; output: number }; /** model tokens used today (UTC day, input + output) */ dayTokens?: number }
+  | StatusMsg
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
@@ -167,6 +176,119 @@ export type ServerMsg =
   | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string; error?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 
 export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" | "quiescing" | "retired";
+
+// ---- structured approvals ----
+export type ApprovalKind = "payment" | "message" | "login" | "delete" | "open" | "other";
+export const APPROVAL_KINDS: readonly ApprovalKind[] = ["payment", "message", "login", "delete", "open", "other"];
+export type Risk = "low" | "medium" | "high";
+/** Where a decision came from: an app socket, a chat app, the expiry timer, or the owner pressing Stop. */
+export type ApprovalVia = "app" | "telegram" | "slack" | "discord" | "nostr" | "timeout" | "stop";
+
+export interface ApprovalRequest {
+  t: "approval.request";
+  id: string;
+  /** Verb-first, plain language: "Pay the invoice", "Open https://example.com". */
+  title: string;
+  /** Payload: the message text, amount, URL… (as given by the agent; selectable). */
+  detail?: string;
+  ts: number;
+  /** small JPEG data URL of the screen when asked */
+  shot?: string;
+  /** What sort of action this is. The agent may suggest one; agentd upgrades it when the words say otherwise. */
+  kind?: ApprovalKind;
+  /** Computed by agentd from kind + keywords in title/detail. Never the agent's self-report. */
+  risk?: Risk;
+  /** ms epoch after which agentd denies it on its own (SCUT_APPROVAL_TTL_MIN, default 25). */
+  expiresAt?: number;
+  /** What started the task that asks: "app chat", "your Telegram message", "a Telegram message from @jan", "routine: HN digest", "crew room: Scout". */
+  origin?: string;
+}
+
+/** Bench data: what the agent is doing, in one place. Sent on connect and whenever any of it changes. */
+export interface StatusMsg {
+  t: "status";
+  state: AgentState;
+  /** One plain sentence: the latest step while working, "Waiting for you: {title}" with an approval pending, "Free" when idle. */
+  headline: string;
+  /** ms epoch when the current state began ("Free since 14:02"). */
+  since: number;
+  /** The task being worked on right now, if any. */
+  task?: { prompt: string; origin?: string; startedAt: number };
+  /** First line of the agent's last reply (≤ 120 chars) and when it was sent. */
+  lastResult?: { text: string; ts: number };
+  /** The next scheduled task to run (see nextRunAt). */
+  nextRun?: { id: string; prompt: string; at: number };
+  /** Number of approvals waiting for the owner. */
+  pending: number;
+  /** Model tokens used today (input + output). */
+  dayTokens: number;
+  /** Owner has taken over the screen. */
+  paused?: boolean;
+}
+
+const RISK_RANK: Record<Risk, number> = { low: 0, medium: 1, high: 2 };
+const KIND_RISK: Record<ApprovalKind, Risk> = { payment: "high", login: "high", delete: "high", message: "medium", open: "medium", other: "low" };
+const KIND_WORDS: [ApprovalKind, RegExp][] = [
+  ["payment", /\b(pay|pays|paid|paying|payments?|purchases?|purchasing|buy|buying|checkout|check out|place (an |the |my )?order|invoices?|cards?|iban|bank|transfer|subscribe|donate)\b|[€$£]\s?\d|\d\s?(eur|usd|gbp|euros?)\b/i],
+  ["login", /\b(log ?in|logging in|logon|sign ?in|signing in|passwords?|passcode|passphrase|credentials?|2fa|otp|one-time code|verification code)\b/i],
+  ["delete", /\b(delete|deleting|remove|removing|erase|wipe|destroy|empty the trash|unsubscribe|cancel (my|the|your))\b/i],
+  ["message", /\b(send|sending|messages?|e-?mails?|mail|reply|replying|respond|post|posting|tweet|dm|contact|invite|share)\b/i],
+  ["open", /\b(open|opening|visit|go to|browse|navigate|download|install)\b|https?:\/\/|www\./i],
+];
+const HIGH_WORDS = /\b(pay|pays|paid|paying|payments?|purchases?|buy|checkout|send|sending|delete|deleting|log ?in|sign ?in|credentials?|cards?|passwords?|passcode|iban|transfer)\b|[€$£]\s?\d/i;
+const MEDIUM_WORDS = /\b(messages?|e-?mails?|mail|reply|post|tweet|dm|contact|new site|unknown site|visit|open)\b|https?:\/\//i;
+
+/**
+ * Classify an approval. `suggested` is the agent's own `kind` (a hint): agentd keeps it unless the words point to a
+ * riskier kind. Risk is never taken from the agent: it is the higher of the kind's risk and the keyword risk.
+ */
+export function assessApproval(title: string, detail?: string, suggested?: string): { kind: ApprovalKind; risk: Risk } {
+  const text = `${title}\n${detail ?? ""}`;
+  const inferred = KIND_WORDS.find(([, re]) => re.test(text))?.[0] ?? "other";
+  const hint = APPROVAL_KINDS.includes(suggested as ApprovalKind) ? (suggested as ApprovalKind) : "other";
+  const kind = hint !== "other" && RISK_RANK[KIND_RISK[hint]] >= RISK_RANK[KIND_RISK[inferred]] ? hint : inferred;
+  const words: Risk = HIGH_WORDS.test(text) ? "high" : MEDIUM_WORDS.test(text) ? "medium" : "low";
+  const risk = RISK_RANK[words] > RISK_RANK[KIND_RISK[kind]] ? words : KIND_RISK[kind];
+  return { kind, risk };
+}
+
+/** Risk as words (never colour alone): Low risk / Check this / High risk. */
+export const RISK_WORD: Record<Risk, string> = { low: "Low risk", medium: "Check this", high: "High risk" };
+
+/** "14:02" in the owner's time zone (UTC when unknown or invalid). */
+export function clock(t: number, tz?: string): string {
+  const f = (timeZone: string) => new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(t);
+  try {
+    return f(tz || "UTC");
+  } catch {
+    return f("UTC");
+  }
+}
+
+/** Text-first approval message for chat apps (screen readers in chat apps read text, not images). */
+export function approvalText(req: Omit<ApprovalRequest, "t">, agentName: string, now = Date.now()): string {
+  const lines = [`${agentName} wants to: ${req.title}`];
+  if (req.risk || req.kind) lines.push([req.risk && RISK_WORD[req.risk], req.kind && req.kind !== "other" ? req.kind : undefined].filter(Boolean).join(" · "));
+  if (req.detail) lines.push("", req.detail.slice(0, 1500), "");
+  if (req.origin) lines.push(`Came from: ${req.origin}`);
+  if (req.expiresAt) lines.push(`Decide within ${Math.max(1, Math.ceil((req.expiresAt - now) / 60_000))} min, then ${agentName} skips it.`);
+  return lines.join("\n");
+}
+
+/** What a chat approval message is edited to once decided: "Allowed by you on Telegram · 14:02". */
+export function approvalResolvedText(req: Pick<ApprovalRequest, "title">, agentName: string, ok: boolean, by: string, at: number, tz?: string): string {
+  const verdict = by === "timeout" ? `Skipped: nobody answered in time, so ${agentName} didn't do it` : `${ok ? "Allowed" : "Not allowed"} by ${by}`;
+  return `${agentName} wanted to: ${req.title}\n${ok ? "✓" : "✕"} ${verdict} · ${clock(at, tz)}`;
+}
+
+/** Human-readable decider for approval.resolved `by`. */
+export function approvalBy(via: ApprovalVia): string {
+  switch (via) {
+    case "app": case "stop": return "you in Beamhop";
+    case "timeout": return "timeout";
+    default: return `you on ${via.charAt(0).toUpperCase()}${via.slice(1)}`;
+  }
+}
 
 export const SCREEN = { w: 1280, h: 800 };
 
@@ -212,8 +334,11 @@ export interface Schedule {
 }
 
 /** Local date (as a UTC-midnight number) and minute of day of instant t in time zone tz. */
+const partsFmt = new Map<string, Intl.DateTimeFormat>();
 function localParts(t: number, tz: string): { day: number; mod: number } {
-  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(t).map((x) => [x.type, x.value]));
+  let fmt = partsFmt.get(tz);
+  if (!fmt) partsFmt.set(tz, (fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23" })));
+  const p = Object.fromEntries(fmt.formatToParts(t).map((x) => [x.type, x.value]));
   return { day: Date.UTC(+p.year, +p.month - 1, +p.day), mod: +p.hour * 60 + +p.minute };
 }
 
@@ -232,4 +357,40 @@ export function scheduleDue(s: Schedule, now = Date.now()): boolean {
   const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const at = today + (s.minuteOfDay ?? 0) * 60_000;
   return mod >= (s.minuteOfDay ?? 0) && (s.lastRun ?? s.createdAt ?? 0) < at;
+}
+
+/**
+ * When `scheduleDue` will next turn true for this schedule (ms epoch): `now` if it is due already, undefined if disabled.
+ * Follows scheduleDue exactly (UTC or the schedule's time zone, DST included) by searching forward, so the two never disagree.
+ */
+export function nextRunAt(s: Schedule, now = Date.now()): number | undefined {
+  if (!s.enabled) return undefined;
+  if (scheduleDue(s, now)) return now;
+  if (s.kind === "every") return (s.lastRun ?? now) + (s.minutes ?? 60) * 60_000;
+  // Daily: step forward in half hours (DST shifts are whole or half hours) for up to 3 days, then narrow down.
+  const STEP = 30 * 60_000;
+  let lo = now;
+  for (let t = now + STEP; t <= now + 3 * 86_400_000; t += STEP) {
+    if (scheduleDue(s, t)) {
+      let hi = t;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (scheduleDue(s, mid)) hi = mid;
+        else lo = mid;
+      }
+      return hi;
+    }
+    lo = t;
+  }
+  return undefined;
+}
+
+/** The soonest enabled schedule and when it runs. */
+export function nextScheduledRun(schedules: Schedule[], now = Date.now()): { id: string; prompt: string; at: number } | undefined {
+  let best: { id: string; prompt: string; at: number } | undefined;
+  for (const s of schedules) {
+    const at = nextRunAt(s, now);
+    if (at !== undefined && (!best || at < best.at)) best = { id: s.id, prompt: s.prompt, at };
+  }
+  return best;
 }

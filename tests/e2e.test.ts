@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { ServerMsg } from "@scut/protocol";
+import { assessApproval, approvalText, nextRunAt, nextScheduledRun, scheduleDue, type Schedule } from "@scut/protocol";
 import { startMockLlm } from "./mock-llm.ts";
 import { startMockTelegram } from "./mock-telegram.ts";
 import { startMockDiscord, startMockSlack } from "./mock-chat.ts";
@@ -172,7 +173,7 @@ describe("approvals", () => {
     const c = await client(rec.id);
     c.send({ t: "chat", text: "please open https://example.com" });
     const req = await c.waitFor<any>((m) => m.t === "approval.request");
-    expect(req.title).toContain("open_url");
+    expect(req.title).toMatch(/open.*example\.com/i); // "Open https://example.com" (was "open_url https://example.com")
     c.send({ t: "approval", id: req.id, ok: true });
     const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");
     expect(reply.text).toContain("message #1");
@@ -886,5 +887,120 @@ describe("v0.47: after a restart", () => {
     expect(JSON.stringify(h.chat)).toContain("before the restart");
     await until(() => c2.frames > 0 || undefined, 30_000, "its screen is back"); // X server and Chromium restarted cleanly
     c2.close();
+  }, 200_000);
+});
+
+describe("v0.60: transparency", () => {
+  test("nextRunAt agrees with scheduleDue (UTC, time zones, DST, every)", () => {
+    const now = Date.UTC(2026, 0, 10, 6, 0); // 07:00 in Amsterdam (winter)
+    const day = 86_400_000;
+    const s = (x: Partial<Schedule>): Schedule => ({ id: "s", prompt: "p", kind: "daily", enabled: true, ...x });
+    // Amsterdam 08:00 = 07:00Z in winter; ran yesterday, so next is today 07:00Z
+    expect(nextRunAt(s({ minuteOfDay: 480, tz: "Europe/Amsterdam", lastRun: now - day + 3_600_000 }), now)).toBe(Date.UTC(2026, 0, 10, 7, 0));
+    // UTC daily later today / already ran today -> tomorrow
+    expect(nextRunAt(s({ minuteOfDay: 480, createdAt: now - 1000 }), now)).toBe(Date.UTC(2026, 0, 10, 8, 0));
+    expect(nextRunAt(s({ minuteOfDay: 300, createdAt: now - 1000 }), now)).toBe(Date.UTC(2026, 0, 11, 5, 0));
+    // summer time: 08:00 Amsterdam = 06:00Z
+    const june = Date.UTC(2026, 5, 10, 12, 0);
+    expect(nextRunAt(s({ minuteOfDay: 480, tz: "Europe/Amsterdam", createdAt: june }), june)).toBe(Date.UTC(2026, 5, 11, 6, 0));
+    // 02:30 doesn't exist on 29 Mar 2026 in Amsterdam: it runs at 03:00 local (01:00Z), like scheduleDue says
+    const dst = Date.UTC(2026, 2, 28, 12, 0);
+    const d = s({ minuteOfDay: 150, tz: "Europe/Amsterdam", createdAt: dst });
+    const at = nextRunAt(d, dst)!;
+    expect(at).toBe(Date.UTC(2026, 2, 29, 1, 0));
+    expect(scheduleDue(d, at)).toBe(true);
+    expect(scheduleDue(d, at - 1)).toBe(false);
+    // every N minutes; due now; disabled
+    expect(nextRunAt({ id: "e", prompt: "p", kind: "every", minutes: 30, lastRun: now - 600_000, enabled: true }, now)).toBe(now + 20 * 60_000);
+    expect(nextRunAt({ id: "e", prompt: "p", kind: "every", minutes: 30, enabled: true }, now)).toBe(now);
+    expect(nextRunAt(s({ minuteOfDay: 480, enabled: false }), now)).toBeUndefined();
+    expect(nextScheduledRun([s({ id: "late", minuteOfDay: 600, createdAt: now }), s({ id: "soon", minuteOfDay: 420, createdAt: now })], now)).toEqual({ id: "soon", prompt: "p", at: Date.UTC(2026, 0, 10, 7, 0) });
+  });
+
+  test("risk is computed from what the action is, not the agent's say-so", () => {
+    expect(assessApproval("Pay the invoice")).toEqual({ kind: "payment", risk: "high" });
+    expect(assessApproval("Enter the card number on shop.example", undefined, "open")).toEqual({ kind: "payment", risk: "high" });
+    expect(assessApproval("Send an email to jan@example.nl", "Hi Jan", "message")).toEqual({ kind: "message", risk: "high" });
+    expect(assessApproval("Email Jan about Friday")).toEqual({ kind: "message", risk: "medium" });
+    expect(assessApproval("Open https://example.com")).toEqual({ kind: "open", risk: "medium" });
+    expect(assessApproval("Delete 3 old photos", undefined, "other")).toEqual({ kind: "delete", risk: "high" });
+    expect(assessApproval("Please log in to Telegram on my screen")).toEqual({ kind: "login", risk: "high" });
+    expect(assessApproval("Click at 3,4")).toEqual({ kind: "other", risk: "low" });
+    expect(assessApproval("Click at 3,4", undefined, "payment")).toEqual({ kind: "payment", risk: "high" }); // a hint can only raise it
+    const text = approvalText({ id: "x", title: "Pay the invoice", detail: "€42 to ACME", ts: 0, kind: "payment", risk: "high", expiresAt: 25 * 60_000, origin: "your Telegram message" }, "Atlas", 0);
+    expect(text).toBe("Atlas wants to: Pay the invoice\nHigh risk · payment\n\n€42 to ACME\n\nCame from: your Telegram message\nDecide within 25 min, then Atlas skips it.");
+  });
+
+  test("structured approvals and the bench status: Free → working → Waiting for you → Free with a result", async () => {
+    const rec = await scut.create({
+      name: "Atlas",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    const s0 = await c.waitFor<any>((m) => m.t === "status");
+    expect(s0).toMatchObject({ state: "running", headline: "Free", pending: 0 });
+    expect(s0.since).toBeLessThanOrEqual(Date.now());
+    expect(s0.lastResult).toBeUndefined();
+    c.send({ t: "chat", text: 'CALL request_approval {"title":"Pay the invoice"}\n' });
+    const working = await c.waitFor<any>((m) => m.t === "status" && (m as any).state === "busy", 60_000);
+    expect(working.headline).not.toBe("Free");
+    expect(working.task).toMatchObject({ origin: "app chat" });
+    const req = await c.waitFor<any>((m) => m.t === "approval.request", 120_000);
+    // the agent passed no kind and no risk: agentd works both out
+    expect(req).toMatchObject({ title: "Pay the invoice", kind: "payment", risk: "high", origin: "app chat" });
+    expect(req.expiresAt - req.ts).toBe(25 * 60_000);
+    const waiting = await c.waitFor<any>((m) => m.t === "status" && (m as any).headline === "Waiting for you: Pay the invoice");
+    expect(waiting).toMatchObject({ state: "stuck", pending: 1 });
+    // a client that connects now gets the same status straight away
+    const late = await client(rec.id);
+    expect((await late.waitFor<any>((m) => m.t === "status")).headline).toBe("Waiting for you: Pay the invoice");
+    late.close();
+    c.send({ t: "approval", id: req.id, ok: true });
+    const res = await c.waitFor<any>((m) => m.t === "approval.resolved" && (m as any).id === req.id);
+    expect(res).toMatchObject({ ok: true, by: "you in Beamhop", via: "app" });
+    expect(typeof res.at).toBe("number");
+    const free = await c.waitFor<any>((m) => m.t === "status" && (m as any).headline === "Free" && !!(m as any).lastResult, 120_000);
+    expect(free.lastResult.text).toContain("MOCK_DONE");
+    expect(free.lastResult.text.length).toBeLessThanOrEqual(120);
+    expect(free.since).toBeGreaterThanOrEqual(res.at);
+    expect(free.dayTokens).toBeGreaterThan(0);
+    const stats = await c.waitFor<any>((m) => m.t === "stats" && ((m as any).dayTokens ?? 0) > 0, 10_000);
+    expect(stats.tokens.input).toBeGreaterThan(0);
+    // next run: a schedule set from the app shows up as nextRun
+    c.send({ t: "schedules", schedules: [{ id: "hn", prompt: "HN digest", kind: "every", minutes: 60, lastRun: Date.now(), enabled: true }] });
+    const sched = await c.waitFor<any>((m) => m.t === "status" && (m as any).nextRun?.id === "hn");
+    expect(sched.nextRun.prompt).toBe("HN digest");
+    expect(sched.nextRun.at).toBeGreaterThan(Date.now() + 55 * 60_000);
+    c.close();
+  }, 300_000);
+
+  test("chat app approvals are text first, and the Telegram message is edited once decided", async () => {
+    const rec = await scut.create({ name: "Echo", harness: "mock", autonomy: "ask", telegramToken: "TEST:TOKEN" });
+    const c = await client(rec.id);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!(m as any).telegram?.code);
+    const from = tg.sent.length;
+    tg.message(42, `/pair ${p.telegram.code}`);
+    await until(() => tg.sent.slice(from).find((m) => m.chat_id === "42" && m.text.startsWith("Paired")), 30_000, "paired");
+    tg.message(42, "please open https://example.com");
+    const ask = await until(() => tg.sent.slice(from).find((m) => m.chat_id === "42" && !!m.reply_markup), 30_000, "approval message");
+    expect(ask.text).toContain("Echo wants to: Open https://example.com");
+    expect(ask.text).toContain("Check this · open");
+    expect(ask.text).toContain("Came from: your Telegram message");
+    expect(ask.text).toMatch(/Decide within 25 min, then Echo skips it\./);
+    expect(ask.reply_markup.inline_keyboard[0].map((b: any) => b.text)).toEqual(["Allow", "Don't"]);
+    const req = await c.waitFor<any>((m) => m.t === "approval.request");
+    expect(req).toMatchObject({ kind: "open", risk: "medium", origin: "your Telegram message" });
+    const messageId = tg.sent.indexOf(ask) + 1; // the mock numbers messages in order
+    const edits = tg.edited.length;
+    tg.callback(42, ask.reply_markup.inline_keyboard[0][0].callback_data);
+    const res = await c.waitFor<any>((m) => m.t === "approval.resolved" && (m as any).id === req.id);
+    expect(res).toMatchObject({ ok: true, by: "you on Telegram", via: "telegram" });
+    const edit = await until(() => tg.edited.slice(edits).find((e) => e.message_id === messageId), 15_000, "edited approval");
+    expect(edit.chat_id).toBe("42");
+    expect(edit.text).toMatch(/^Echo wanted to: Open https:\/\/example\.com\n✓ Allowed by you on Telegram · \d\d:\d\d$/);
+    expect(edit.reply_markup).toBeUndefined(); // buttons removed
+    await until(() => tg.sent.slice(from).find((m) => m.chat_id === "42" && m.text.startsWith("mock:")), 30_000, "reply");
+    c.close();
   }, 200_000);
 });

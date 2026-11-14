@@ -3,7 +3,8 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  type CrewMember, type MemoryItem, type Schedule, type TaskRun, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg,
+  SCREEN, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -84,10 +85,13 @@ function holdsLease() {
   if (!spec || !lease) return false;
   return readLease(lease, spec.agentPubkey)?.holder === hostPubkey;
 }
+let stateSince = Date.now();
 function setState(s: AgentState) {
+  if (s !== state) stateSince = Date.now();
   state = s;
-  broadcast({ t: "state", state: s });
+  broadcast({ t: "state", state: s, since: stateSince });
   log("state", s);
+  pushStatus();
 }
 
 // ---------- WebSocket clients ----------
@@ -96,19 +100,81 @@ const clients = new Set<ServerWebSocket<WsData>>();
 function broadcast(m: ServerMsg, except?: ServerWebSocket<WsData>) {
   const s = JSON.stringify(m);
   for (const c of clients) if (c !== except) c.send(s);
+  if (m.t === "schedules" || m.t === "paused" || m.t === "approval.request" || m.t === "approval.resolved") pushStatus();
 }
 function narrate(text: string) {
   const n = { text, ts: Date.now() };
   narrationLog.push(n);
   if (narrationLog.length > 200) narrationLog.shift();
   broadcast({ t: "narration", ...n });
+  if (currentTask && !/^(Ready|Resumed|Waiting for approval:)/.test(text)) lastStep = n;
+  pushStatus();
 }
 function recordChat(line: ChatLine) {
   chatLog.push(line);
   if (chatLog.length > 500) chatLog.shift();
   broadcast({ t: "chat", ...line });
   appendFile(`${DATA}/chat.jsonl`, JSON.stringify(line) + "\n").catch(() => {});
+  if (line.from === "agent") {
+    lastResult = { text: firstLine(line.text), ts: line.ts };
+    pushStatus();
+  }
 }
+const firstLine = (t: string) => {
+  const l = t.trim().split("\n").find((x) => x.trim())?.trim() ?? "";
+  return l.length > 120 ? `${l.slice(0, 119)}…` : l;
+};
+
+// ---------- bench status (headline, since, last result, next run) ----------
+type TaskInfo = { prompt: string; origin?: string; startedAt: number };
+let currentTask: TaskInfo | null = null;
+let lastStep: { text: string; ts: number } | null = null;
+let lastResult: { text: string; ts: number } | undefined;
+function todayTokens() {
+  return usageDay === new Date().toISOString().slice(0, 10) ? dayTokens : 0;
+}
+function headline(): string {
+  const waiting = [...pendingApprovals.values()][0];
+  if (waiting) return `Waiting for you: ${waiting.title}`;
+  switch (state) {
+    case "awaiting": return "Waiting to arrive";
+    case "starting": return "Starting up";
+    case "quiescing": return "Packing up to move";
+    case "retired": return "Moved to another place";
+    case "running": return "Free";
+  }
+  if (paused && currentTask) return "Paused while you have control";
+  if (state === "stuck" && !currentTask) {
+    const last = narrationLog.at(-1)?.text;
+    return last?.startsWith("Stuck") ? firstLine(last.replace(/ — reply or take over to help$/, "")) : "Stuck: reply or take over to help";
+  }
+  if (lastStep) {
+    const t = lastStep.text.replace(/^Now:\s*/, "");
+    return firstLine(t.charAt(0).toUpperCase() + t.slice(1));
+  }
+  return currentTask ? `Working on: ${firstLine(currentTask.prompt.replace(/^\[crew room\] /, "")).slice(0, 100)}` : "Working";
+}
+function statusMsg(): StatusMsg {
+  return {
+    t: "status", state, headline: headline(), since: stateSince,
+    task: currentTask ? { ...currentTask, prompt: currentTask.prompt.slice(0, 300) } : undefined,
+    lastResult, nextRun: nextScheduledRun(schedules), pending: pendingApprovals.size, dayTokens: todayTokens(), paused,
+  };
+}
+let lastStatus = "";
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+/** Broadcast the status when it changed; coalesces bursts (narration, usage, state) into one message. */
+function pushStatus() {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = undefined;
+    const s = JSON.stringify(statusMsg());
+    if (s === lastStatus) return;
+    lastStatus = s;
+    for (const c of clients) c.send(s);
+  }, 50);
+}
+setInterval(pushStatus, 30_000); // "next run" and the day's tokens move with the clock too
 function settingsMsg(): ServerMsg {
   return { t: "settings", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr } };
 }
@@ -124,21 +190,29 @@ function pairingMsg(): ServerMsg {
 
 // ---------- approvals ----------
 const APPROVAL_TTL_MIN = Number(process.env.SCUT_APPROVAL_TTL_MIN ?? 25);
-const approvals = new Map<string, (ok: boolean, by: string) => void>();
-const pendingApprovals = new Map<string, Extract<ServerMsg, { t: "approval.request" }>>();
-function requestApproval(title: string, detail?: string): Promise<boolean> {
+type Decision = { ok: boolean; via: ApprovalVia };
+const approvals = new Map<string, (ok: boolean, via: ApprovalVia) => void>();
+const pendingApprovals = new Map<string, ApprovalRequest>();
+/** Chat messages that carry an approval's buttons, so they can be edited once it's decided. */
+type Posted = { channel: Channel; chatId: string; ref: Promise<string | undefined> };
+function requestApproval(title: string, detail?: string, suggestedKind?: string): Promise<Decision> {
   const id = bytesToHex(crypto.getRandomValues(new Uint8Array(6)));
   const shot = desktop?.latest ? `data:image/jpeg;base64,${Buffer.from(desktop.latest).toString("base64")}` : undefined;
-  const req = { t: "approval.request" as const, id, title, detail, ts: Date.now(), shot };
+  title = String(title).trim().slice(0, 300) || "Do something";
+  detail = detail ? String(detail).slice(0, 4000) : undefined;
+  const ts = Date.now();
+  // Risk comes from what the action is, never from the agent's own say-so.
+  const { kind, risk } = assessApproval(title, detail, suggestedKind);
+  const req: ApprovalRequest = { t: "approval.request", id, title, detail, ts, shot, kind, risk, expiresAt: ts + APPROVAL_TTL_MIN * 60_000, origin: currentTask?.origin };
   pendingApprovals.set(id, req);
   broadcast(req);
+  const name = spec?.name ?? "Your agent";
+  const text = approvalText(req, name);
+  const posted: Posted[] = [];
   for (const c of channels) {
-    const owner = owners[c.name];
-    if (owner && c.name !== "nostr") c.askApproval(owner.chatId, id, title).catch(() => {});
+    const chatId = c.name === "nostr" ? nostrOwner() : owners[c.name]?.chatId;
+    if (chatId) posted.push({ channel: c, chatId, ref: c.askApproval(chatId, id, text).catch(() => undefined) });
   }
-  const nc = channels.find((c) => c.name === "nostr");
-  const no = nostrOwner();
-  if (nc && no) nc.askApproval(no, id, title).catch(() => {});
   setState("stuck");
   narrate(`Waiting for approval: ${title}`);
   // Nobody answered in time: don't leave the agent hanging forever, and don't do the risky thing.
@@ -148,18 +222,23 @@ function requestApproval(title: string, detail?: string): Promise<boolean> {
     resolveApproval(id, false, "timeout");
   }, APPROVAL_TTL_MIN * 60_000);
   return new Promise((resolve) => {
-    approvals.set(id, (ok, by) => {
+    approvals.set(id, (ok, via) => {
       clearTimeout(expire);
       approvals.delete(id);
       pendingApprovals.delete(id);
-      broadcast({ t: "approval.resolved", id, ok, by });
+      const by = approvalBy(via);
+      const at = Date.now();
+      broadcast({ t: "approval.resolved", id, ok, by, via, at });
+      // Echo the decision in every chat that got the buttons, and take the buttons away so they can't fire twice.
+      const done = approvalResolvedText(req, name, ok, by, at, spec?.ownerTz);
+      for (const p of posted) p.ref.then((ref) => (ref ? p.channel.closeApproval?.(p.chatId, ref, done) : undefined)).catch(() => {});
       setState("busy");
-      resolve(ok);
+      resolve({ ok, via });
     });
   });
 }
-function resolveApproval(id: string, ok: boolean, by: string) {
-  approvals.get(id)?.(ok, by); // first answer wins
+function resolveApproval(id: string, ok: boolean, via: ApprovalVia) {
+  approvals.get(id)?.(ok, via); // first answer wins
 }
 
 // ---------- computer actions (used by MCP server, mock harness and the human) ----------
@@ -237,8 +316,8 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
   }
   if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
-    const ok = await requestApproval(String(a.title), a.detail);
-    return Response.json({ ok });
+    const d = await requestApproval(String(a.title ?? ""), a.detail, a.approval_kind);
+    return Response.json({ ok: d.ok, by: d.via === "timeout" ? "timeout" : "owner" });
   }
   if (who === "agent") {
     if (paused) {
@@ -247,14 +326,28 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
       narrate("Resumed");
     }
     if (spec?.autonomy === "ask") {
-      const ok = await requestApproval(`${a.kind}${a.url ? " " + a.url : ""}${a.x !== undefined ? ` at ${a.x},${a.y}` : ""}${a.text ? ` "${String(a.text).slice(0, 40)}"` : ""}`);
-      if (!ok) return new Response("denied by owner", { status: 403 });
+      const ask = askTitle(a);
+      const d = await requestApproval(ask.title, ask.detail, ask.kind);
+      if (!d.ok) return new Response(d.via === "timeout" ? "no answer from the owner in time: skip this step and tell them" : "denied by owner", { status: 403 });
     }
     narrate(`Now: ${describe(a)}`);
     if (a.x !== undefined) broadcast({ t: "cursor", x: a.x, y: a.y, who: "agent" });
   }
   await desktop.act(a as any);
   return Response.json({ ok: true });
+}
+/** A plain, verb-first approval title for one computer action (autonomy "ask"). */
+function askTitle(a: Record<string, any>): { title: string; detail?: string; kind?: string } {
+  const text = a.text !== undefined ? String(a.text) : "";
+  switch (a.kind) {
+    case "open_url": return { title: `Open ${a.url}`, kind: "open" };
+    case "type": return { title: `Type "${text.length > 40 ? `${text.slice(0, 40)}…` : text}"`, detail: text.length > 40 ? text.slice(0, 2000) : undefined };
+    case "key": return { title: `Press ${a.keys}` };
+    case "click": return { title: `Click at ${a.x},${a.y}` };
+    case "dblclick": return { title: `Double-click at ${a.x},${a.y}` };
+    case "scroll": return { title: "Scroll the page" };
+    default: return { title: String(a.kind) };
+  }
 }
 function describe(a: Record<string, any>) {
   switch (a.kind) {
@@ -269,7 +362,19 @@ function describe(a: Record<string, any>) {
 
 // ---------- prompts (serialized) ----------
 let queue: Promise<unknown> = Promise.resolve();
-function prompt(text: string, origin: { channel: string; chatId?: string; from: string; notify?: boolean; onDone?: (r: { ok: boolean; text: string; tokens: number }) => void }) {
+type PromptOrigin = { channel: string; chatId?: string; from: string; fromId?: string; notify?: boolean; label?: string; onDone?: (r: { ok: boolean; text: string; tokens: number }) => void };
+/** Where a task came from, in words, so the owner can spot a prompt that didn't come from them. */
+function originLabel(o: PromptOrigin): string {
+  if (o.label) return o.label;
+  const app = { telegram: "Telegram", slack: "Slack", discord: "Discord", nostr: "Nostr" }[o.channel];
+  if (o.channel === "app") return "app chat";
+  if (app) {
+    const mine = o.channel === "nostr" ? o.fromId === nostrOwner() : !!o.fromId && owners[o.channel]?.userId === o.fromId;
+    return mine ? `your ${app} message` : `a ${app} message from ${o.from}`;
+  }
+  return o.channel;
+}
+function prompt(text: string, origin: PromptOrigin) {
   recordChat({ from: origin.from, channel: origin.channel, text, ts: Date.now() });
   queue = queue.then(async () => {
     if (!harness || state === "retired" || state === "quiescing") return;
@@ -287,16 +392,19 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       narrate("Budget reached");
       return;
     }
+    currentTask = { prompt: text, origin: originLabel(origin), startedAt: Date.now() };
+    lastStep = null;
     setState("busy");
     const t0 = dayTokens;
     try {
       const reply = await harness.prompt(memoryPreamble() + text, (e) => {
-        if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${e.name}`);
+        if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${toolPhrase(e.name)}`);
         if (e.type === "usage") {
           tokens.input += e.input;
           tokens.output += e.output;
           dayTokens += e.input + e.output;
           Bun.write(`${DATA}/usage.json`, JSON.stringify({ tokens, usageDay, dayTokens })).catch(() => {});
+          pushStatus();
         }
         if (e.type === "error") narrate(`Problem: ${e.message.slice(0, 160)}`);
       });
@@ -313,14 +421,28 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
         await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, out).catch((e) => log(`${origin.channel} send failed`, e?.message));
       }
       if (origin.channel === "crew") await postCrew(out);
+      currentTask = null;
       setState("running");
       narrate("Ready");
     } catch (e: any) {
       origin.onDone?.({ ok: false, text: String(e?.message ?? e), tokens: dayTokens - t0 });
-      setState("stuck");
+      currentTask = null;
       narrate(`Stuck: ${String(e?.message ?? e).slice(0, 200)} — reply or take over to help`);
+      setState("stuck");
     }
   });
+}
+/** Tool names as words, for narration and the bench headline. */
+function toolPhrase(name: string) {
+  const n = name.replace(/^mcp__\w+__/, "");
+  const words: Record<string, string> = {
+    screenshot: "looking at the screen", remember: "saving a memory", forget: "forgetting a memory", list_memories: "checking its memory",
+    schedule_task: "setting up a routine", list_tasks: "checking its routines", cancel_task: "cancelling a routine",
+    request_approval: "asking you first", crew_post: "posting to the crew room", crew_list: "checking the crew",
+    connect_channel: "connecting a chat app", give_cloud_key: "handing you a cloud key", bash: "running a command",
+    read: "reading a file", write: "writing a file", edit: "editing a file",
+  };
+  return words[n] ?? n.replace(/_/g, " ");
 }
 
 // ---------- lifecycle ----------
@@ -370,11 +492,11 @@ async function startChannels() {
           await c.send(m.chatId, `Hi, I'm ${spec?.name}. ${owners[c.name] ? "Ask me anything." : "My owner can pair with /pair <code> from the Beamhop app."}`);
           return;
         }
-        prompt(m.text, { channel: c.name, chatId: m.chatId, from: m.from });
+        prompt(m.text, { channel: c.name, chatId: m.chatId, from: m.from, fromId: m.fromId });
       },
       (id, ok, byId) => {
         const owner = owners[c.name];
-        if (owner && byId === owner.userId) resolveApproval(id, ok, `${c.name}:${owner.name}`);
+        if (owner && byId === owner.userId) resolveApproval(id, ok, c.name as ApprovalVia);
       },
     );
     channels.push(c);
@@ -401,12 +523,12 @@ async function startChannels() {
         }
         crewAgentReplies.push(now);
       }
-      if ((who?.kind === "owner" && (!anyAgentMentioned || mentioned)) || (who?.kind !== "owner" && mentioned)) prompt(`[crew room] ${who?.name ?? m.from.slice(0, 8)}: ${m.text}`, { channel: "crew", from: who?.name ?? "crew" });
+      if ((who?.kind === "owner" && (!anyAgentMentioned || mentioned)) || (who?.kind !== "owner" && mentioned)) prompt(`[crew room] ${who?.name ?? m.from.slice(0, 8)}: ${m.text}`, { channel: "crew", from: who?.name ?? "crew", label: `crew room: ${who?.kind === "owner" ? "you" : (who?.name ?? m.from.slice(0, 8))}` });
     };
     n.start(
-      (m) => prompt(m.text, { channel: "nostr", chatId: m.chatId, from: m.from }),
+      (m) => prompt(m.text, { channel: "nostr", chatId: m.chatId, from: m.from, fromId: m.fromId }),
       (id, ok, byId) => {
-        if (byId === nostrOwner()) resolveApproval(id, ok, "nostr:owner");
+        if (byId === nostrOwner()) resolveApproval(id, ok, "nostr");
       },
     );
     channels.push(n);
@@ -449,6 +571,8 @@ async function run() {
     const lines = (await readFile(`${DATA}/chat.jsonl`, "utf8")).trim().split("\n").filter(Boolean).slice(-500);
     chatLog.splice(0, chatLog.length, ...lines.map((l) => JSON.parse(l)));
   } catch {}
+  const last = [...chatLog].reverse().find((l) => l.from === "agent");
+  if (last) lastResult = { text: firstLine(last.text), ts: last.ts };
   setState("starting");
   await mkdir(`${DATA}/workspace`, { recursive: true });
   desktop = new Desktop(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}&color=${encodeURIComponent(MASCOT_HEX[spec!.mascot ?? "cyan"] ?? "#38e1ff")}`);
@@ -575,7 +699,7 @@ async function stats() {
     memTotalMb = get("MemTotal");
     if (!memMb) memMb = memTotalMb - get("MemAvailable");
   }
-  broadcast({ t: "stats", cpu: Math.round(cpu * 100), memMb: Math.round(memMb), memTotalMb: Math.round(memTotalMb), tokens });
+  broadcast({ t: "stats", cpu: Math.round(cpu * 100), memMb: Math.round(memMb), memTotalMb: Math.round(memTotalMb), tokens, dayTokens: todayTokens() });
 }
 setInterval(() => clients.size && stats().catch(() => {}), 2000);
 
@@ -598,7 +722,7 @@ setInterval(async () => {
 function runSchedule(s: Schedule) {
   const startedAt = Date.now();
   prompt(s.prompt, {
-    channel: "schedule", from: "schedule", notify: true,
+    channel: "schedule", from: "schedule", notify: true, label: `routine: ${firstLine(s.prompt).slice(0, 60)}`,
     onDone: (r) => {
       const shot = desktop?.latest ? `data:image/jpeg;base64,${Buffer.from(desktop.latest).toString("base64")}` : undefined;
       runs.push({ id: bytesToHex(crypto.getRandomValues(new Uint8Array(6))), scheduleId: s.id, prompt: s.prompt, startedAt, endedAt: Date.now(), ok: r.ok, result: r.text.slice(0, 4000), tokens: r.tokens, shot });
@@ -724,6 +848,7 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify(pairingMsg()));
       ws.send(JSON.stringify(settingsMsg()));
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
+      ws.send(JSON.stringify(statusMsg()));
       ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "runs", items: runs } satisfies ServerMsg));
@@ -757,7 +882,7 @@ Bun.serve<WsData>({
       } else if (m.t === "chat") {
         prompt(m.text, { channel: "app", from: "owner" });
       } else if (m.t === "approval") {
-        resolveApproval(m.id, m.ok, "owner");
+        resolveApproval(m.id, m.ok, "app");
       } else if (m.t === "settings" && spec) {
         if (m.autonomy && ["ask", "risky", "auto"].includes(m.autonomy)) spec.autonomy = m.autonomy;
         if (typeof m.dailyTokenBudget === "number" && m.dailyTokenBudget >= 0) spec.dailyTokenBudget = Math.floor(m.dailyTokenBudget);
@@ -834,7 +959,7 @@ Bun.serve<WsData>({
         if (s) { s.lastRun = Date.now(); runSchedule(s); broadcast({ t: "schedules", schedules }); }
       } else if (m.t === "stop") {
         harness?.abort?.();
-        for (const [id] of approvals) resolveApproval(id, false, "owner");
+        for (const [id] of approvals) resolveApproval(id, false, "stop");
         narrate("Stopped by you");
       }
     },

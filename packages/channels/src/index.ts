@@ -14,7 +14,13 @@ export interface Channel {
   start(onMessage: (m: IncomingMessage) => void, onApproval: (id: string, ok: boolean, byId: string) => void): void;
   stop(): Promise<void>;
   send(chatId: string, text: string): Promise<void>;
-  askApproval(chatId: string, id: string, title: string): Promise<void>;
+  /**
+   * Ask the owner with Allow / Don't buttons. `text` is the full plain-text request (see approvalText in @scut/protocol).
+   * Resolves with a reference to the posted message when the channel can edit it later.
+   */
+  askApproval(chatId: string, id: string, text: string): Promise<string | undefined>;
+  /** Replace a posted approval with its outcome and remove its buttons, so stale buttons can't fire twice. */
+  closeApproval?(chatId: string, ref: string, text: string): Promise<void>;
 }
 
 export class TelegramChannel implements Channel {
@@ -90,12 +96,18 @@ export class TelegramChannel implements Channel {
     await this.call("sendMessage", { chat_id: chatId, text: text.slice(0, 4000) });
   }
 
-  async askApproval(chatId: string, id: string, title: string) {
-    await this.call("sendMessage", {
+  async askApproval(chatId: string, id: string, text: string) {
+    const r = await this.call("sendMessage", {
       chat_id: chatId,
-      text: `Approval needed: ${title}`,
-      reply_markup: { inline_keyboard: [[{ text: "Approve", callback_data: `ap:${id}:y` }, { text: "Deny", callback_data: `ap:${id}:n` }]] },
+      text: text.slice(0, 4000),
+      reply_markup: { inline_keyboard: [[{ text: "Allow", callback_data: `ap:${id}:y` }, { text: "Don't", callback_data: `ap:${id}:n` }]] },
     });
+    return r?.message_id !== undefined ? String(r.message_id) : undefined;
+  }
+
+  async closeApproval(chatId: string, ref: string, text: string) {
+    // No reply_markup: Telegram removes the inline keyboard.
+    await this.call("editMessageText", { chat_id: chatId, message_id: Number(ref), text: text.slice(0, 4000) });
   }
 }
 
@@ -193,8 +205,9 @@ export class NostrChannel implements Channel {
     await this.publish(nip17.wrapEvent(this.sk, { publicKey: to }, text));
   }
 
-  async askApproval(to: string, id: string, title: string) {
-    await this.send(to, `Approval needed: ${title}\nReply "yes ${id}" or "no ${id}".`);
+  async askApproval(to: string, id: string, text: string) {
+    await this.send(to, `${text}\nReply "yes ${id}" or "no ${id}".`);
+    return undefined; // DMs can't be edited
   }
 
   /** Crew room: a private NIP-17 group conversation between the owner and all their agents. */
@@ -281,21 +294,28 @@ export class SlackChannel implements Channel {
     await this.call("chat.postMessage", this.botToken, { channel: chatId, text: text.slice(0, 3900) });
   }
 
-  async askApproval(chatId: string, id: string, title: string) {
-    await this.call("chat.postMessage", this.botToken, {
+  async askApproval(chatId: string, id: string, text: string) {
+    const j = await this.call("chat.postMessage", this.botToken, {
       channel: chatId,
-      text: `Approval needed: ${title}`,
+      text: text.slice(0, 3900),
       blocks: [
-        { type: "section", text: { type: "mrkdwn", text: `*Approval needed:* ${title}` } },
+        { type: "section", text: { type: "plain_text", text: text.slice(0, 2900) } },
         {
           type: "actions",
           elements: [
-            { type: "button", style: "primary", text: { type: "plain_text", text: "Approve" }, action_id: "approve", value: `ap:${id}:y` },
-            { type: "button", style: "danger", text: { type: "plain_text", text: "Deny" }, action_id: "deny", value: `ap:${id}:n` },
+            { type: "button", style: "primary", text: { type: "plain_text", text: "Allow" }, action_id: "approve", value: `ap:${id}:y` },
+            { type: "button", style: "danger", text: { type: "plain_text", text: "Don't" }, action_id: "deny", value: `ap:${id}:n` },
           ],
         },
       ],
     });
+    // chat.update needs the channel id Slack answered with (a DM's "D…" id) and the message ts.
+    return j?.ts ? `${j.channel ?? chatId}|${j.ts}` : undefined;
+  }
+
+  async closeApproval(chatId: string, ref: string, text: string) {
+    const [channel, ts] = ref.includes("|") ? ref.split("|") : [chatId, ref];
+    await this.call("chat.update", this.botToken, { channel, ts, text: text.slice(0, 3900), blocks: [{ type: "section", text: { type: "plain_text", text: text.slice(0, 2900) } }] });
   }
 }
 
@@ -385,15 +405,20 @@ export class DiscordChannel implements Channel {
     await this.rest("POST", `/channels/${chatId}/messages`, { content: text.slice(0, 1990) });
   }
 
-  async askApproval(chatId: string, id: string, title: string) {
-    await this.rest("POST", `/channels/${chatId}/messages`, {
-      content: `Approval needed: ${title}`,
+  async askApproval(chatId: string, id: string, text: string) {
+    const m = await this.rest("POST", `/channels/${chatId}/messages`, {
+      content: text.slice(0, 1990),
       components: [
         { type: 1, components: [
-          { type: 2, style: 3, label: "Approve", custom_id: `ap:${id}:y` },
-          { type: 2, style: 4, label: "Deny", custom_id: `ap:${id}:n` },
+          { type: 2, style: 3, label: "Allow", custom_id: `ap:${id}:y` },
+          { type: 2, style: 4, label: "Don't", custom_id: `ap:${id}:n` },
         ] },
       ],
     });
+    return m?.id ? String(m.id) : undefined;
+  }
+
+  async closeApproval(chatId: string, ref: string, text: string) {
+    await this.rest("PATCH", `/channels/${chatId}/messages/${ref}`, { content: text.slice(0, 1990), components: [] });
   }
 }

@@ -78,12 +78,17 @@ server.tool("open_url", "Open a URL in your Chromium browser", { url: z.string()
 });
 server.tool(
   "request_approval",
-  "Ask your owner to approve a risky action (payment, new contact, delete, credentials). Blocks until answered.",
-  { title: z.string(), detail: z.string().optional() },
+  "Ask your owner to approve a risky action (payment, message to a new contact, delete, login/credentials, an unfamiliar site). Blocks until answered. Give a short verb-first title and put the exact payload (message text, amount and merchant, URL, files) in detail.",
+  {
+    title: z.string().describe('verb-first, plain words, e.g. "Pay the €42 invoice from ACME" or "Send an email to jan@example.nl"'),
+    detail: z.string().optional().describe("the exact payload: message text, amount + merchant, URL, item names"),
+    kind: z.enum(["payment", "message", "login", "delete", "open", "other"]).optional().describe("what sort of action this is"),
+  },
   async (a) => {
-    const r = await call({ kind: "approval", title: a.title, detail: a.detail });
-    const { ok: approved } = (await r.json()) as { ok: boolean };
-    return ok(approved ? "approved" : "denied — do not do it");
+    const r = await call({ kind: "approval", title: a.title, detail: a.detail, approval_kind: a.kind });
+    const { ok: approved, by } = (await r.json()) as { ok: boolean; by?: string };
+    if (approved) return ok("approved");
+    return ok(by === "timeout" ? "no answer from your owner in time — do not do it; skip this step and tell them you skipped it" : "denied — do not do it");
   },
 );
 
