@@ -202,6 +202,8 @@ export interface Schedule {
   minuteOfDay?: number;
   minutes?: number;
   lastRun?: number;
+  /** When the task was added; a daily task added after today's time first runs tomorrow. */
+  createdAt?: number;
   enabled: boolean;
 }
 
@@ -212,5 +214,5 @@ export function scheduleDue(s: Schedule, now = Date.now()): boolean {
   const mod = d.getUTCHours() * 60 + d.getUTCMinutes();
   const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const at = today + (s.minuteOfDay ?? 0) * 60_000;
-  return mod >= (s.minuteOfDay ?? 0) && (!s.lastRun || s.lastRun < at);
+  return mod >= (s.minuteOfDay ?? 0) && (s.lastRun ?? s.createdAt ?? 0) < at;
 }

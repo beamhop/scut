@@ -22,7 +22,7 @@ ENV BUN_INSTALL_GLOBAL_DIR=/opt/harness BUN_INSTALL_BIN=/usr/local/bin
 # Optional build secret "ca" lets builds behind a TLS-intercepting proxy reach npm.
 RUN --mount=type=secret,id=ca,required=false \
     if [ -f /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi; \
-    bun add -g $HARNESSES || bun add -g @earendil-works/pi-coding-agent
+    (bun add -g $HARNESSES || bun add -g @earendil-works/pi-coding-agent) && rm -rf /root/.bun/install/cache
 
 WORKDIR /opt/scut
 COPY package.json bun.lock ./
@@ -30,7 +30,7 @@ COPY packages ./packages
 COPY apps ./apps
 RUN --mount=type=secret,id=ca,required=false \
     if [ -f /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi; \
-    bun install --production --frozen-lockfile || bun install --production
+    (bun install --production --frozen-lockfile || bun install --production) && rm -rf /root/.bun/install/cache
 COPY packages/ui/dist /opt/scut/ui
 
 ENV SCUT_DATA=/data PORT=8080 SCUT_UI_DIR=/opt/scut/ui SCUT_BROWSER=chromium \

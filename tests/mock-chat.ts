@@ -39,6 +39,8 @@ export function startMockSlack() {
     server,
     posts,
     connected: () => sockets.size,
+    /** Kill every socket from the server side, as a network drop during laptop sleep would. */
+    dropAll: () => { for (const s of [...sockets]) s.close(1006 as any); },
     dm: (user: string, text: string, channel = `D${user}`) => push({ type: "events_api", payload: { event: { type: "message", channel_type: "im", user, text, channel } } }),
     channelMessage: (user: string, text: string, channel = "CGEN") => push({ type: "events_api", payload: { event: { type: "message", channel_type: "channel", user, text, channel } } }),
     mention: (user: string, text: string, channel = "CGEN") => push({ type: "events_api", payload: { event: { type: "app_mention", user, text: `<@UBOT> ${text}`, channel } } }),

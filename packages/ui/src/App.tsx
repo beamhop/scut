@@ -925,7 +925,7 @@ function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
     const local = new Date();
     local.setHours(h, m, 0, 0);
     const minuteOfDay = local.getUTCHours() * 60 + local.getUTCMinutes();
-    save([...a.schedules, { id: Math.random().toString(36).slice(2, 8), prompt, kind, minuteOfDay, minutes: Number(minutes) || 60, enabled: true }]);
+    save([...a.schedules, { id: Math.random().toString(36).slice(2, 8), prompt, kind, minuteOfDay, minutes: Number(minutes) || 60, enabled: true, createdAt: Date.now() }]);
     setPrompt("");
   };
   const label = (s: Schedule) => {

@@ -749,7 +749,8 @@ Bun.serve<WsData>({
         narrate(paused ? "You have control — agent paused" : "Control handed back");
         broadcast({ t: "paused", paused });
       } else if (m.t === "schedules" && Array.isArray(m.schedules)) {
-        schedules = m.schedules.slice(0, 50).map((s) => ({ ...s, prompt: String(s.prompt).slice(0, 2000) }));
+        const known = new Map(schedules.map((s) => [s.id, s]));
+        schedules = m.schedules.slice(0, 50).map((s) => ({ ...s, prompt: String(s.prompt).slice(0, 2000), createdAt: s.createdAt ?? known.get(s.id)?.createdAt ?? Date.now() }));
         await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
         broadcast({ t: "schedules", schedules });
       } else if (m.t === "run_schedule") {

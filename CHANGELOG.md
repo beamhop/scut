@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.24.0 — Laptop sleep
+
+- Fixed: a daily task added after today's time (say "daily at 8:00" added at 10:00) ran straight away. Tasks now remember when they were added and first run at the next 8:00.
+- A daily task that was due while the laptop slept runs once on wake, then keeps its normal time.
+- New test: pause an agent's computer (as laptop sleep does), drop its network connections, wake it — Telegram and Slack reconnect and answer, and the agent is still running.
+- The image build drops bun's download cache in the same step.
+
 ## v0.23.0 — 75 MB lighter
 
 - The UI build now starts clean and ships without inline source maps. Stale chunks had piled up to 55 MB and were embedded in every app binary and in the agent image; the UI is now 432 KB.

@@ -565,3 +565,37 @@ describe("v0.21: the brain is remembered", () => {
     void a;
   });
 });
+
+describe("v0.24: laptop sleep", () => {
+  test("a daily task added after today's time waits until tomorrow; one missed while asleep runs on wake", async () => {
+    const { scheduleDue } = await import("@scut/protocol");
+    const day = Date.UTC(2026, 10, 14);
+    const at8 = { id: "d", prompt: "x", kind: "daily" as const, minuteOfDay: 8 * 60, enabled: true };
+    expect(scheduleDue({ ...at8, createdAt: day + 10 * 3600_000 }, day + 10 * 3600_000 + 60_000)).toBe(false); // added 10:00
+    expect(scheduleDue({ ...at8, createdAt: day + 10 * 3600_000 }, day + 86_400_000 + 8 * 3600_000)).toBe(true); // tomorrow 08:00
+    expect(scheduleDue({ ...at8, createdAt: day + 7 * 3600_000 }, day + 9 * 3600_000)).toBe(true); // asleep at 08:00, wakes 09:00
+    expect(scheduleDue({ ...at8, createdAt: day, lastRun: day + 9 * 3600_000 }, day + 12 * 3600_000)).toBe(false); // already ran today
+  });
+
+  test("after the host sleeps and the network drops, chat apps reconnect and answer", async () => {
+    const rec = await scut.create({ name: "Sleepy", harness: "mock", autonomy: "auto", telegramToken: "TEST:TOKEN", slack: { appToken: "xapp-test", botToken: "xoxb-test" } });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "pairing" && !!(m as any).channels?.slack);
+    c.close();
+    await until(() => slack.connected() > 0, 15_000, "slack socket");
+    tg.message(7001, "before sleep");
+    await tg.waitSent((m) => m.chat_id === "7001" && m.text.startsWith("mock:"));
+    const name = rec.current.meta!.name;
+    Bun.spawnSync(["docker", "pause", name]);
+    slack.dropAll(); // the network goes away while asleep
+    await Bun.sleep(25_000);
+    Bun.spawnSync(["docker", "unpause", name]);
+    tg.message(7001, "after sleep");
+    await until(() => tg.sent.filter((x) => x.chat_id === "7001" && x.text.startsWith("mock:")).length >= 2 || undefined, 60_000, "telegram reply after sleep");
+    await until(() => slack.connected() > 0, 60_000, "slack reconnect");
+    slack.dm("UWAKE", "hello after sleep");
+    await until(() => slack.posts.find((m) => m.channel === "DUWAKE" && String(m.text).startsWith("mock:")), 30_000, "slack reply after sleep");
+    const health = await (await fetch(`${scut.get(rec.id).current.endpoint}/health`)).json();
+    expect(health.state).toBe("running");
+  }, 180_000);
+});
