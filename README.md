@@ -18,6 +18,7 @@ AI agents that each have their own computer, live in your chat apps, and move be
 3. Pick a brain (paste an OpenRouter key, or choose a local Ollama model — it's checked before you continue), describe your agent, press **Create agent**.
 4. Optional: **+ Add a cloud** to connect Fly.io, Render or Railway, then drag your agent onto it.
 5. Moving to a new computer? **Beam to… → A file**, then **Open an agent file** on the other side.
+6. Tick **Open Beamhop when I log in** (in the dock) so agents on this computer come back by themselves after a restart.
 
 Agents use the public image `ghcr.io/beamhop/scut-agent:latest`. On Linux with KVM and on Apple Silicon they run as smolvm microVMs; elsewhere in Docker.
 
