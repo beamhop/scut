@@ -608,7 +608,7 @@ Bun.serve<WsData>({
         if (server.upgrade(req, { data: { frames: false, fps: 8, lastSent: 0, id: bytesToHex(crypto.getRandomValues(new Uint8Array(4))) } })) return;
         return new Response("upgrade failed", { status: 400 });
       }
-      if (p === "/status") return Response.json({ state, hostPubkey, spec: spec && { ...spec, model: spec.model && { ...spec.model, apiKey: undefined }, channels: Object.keys(spec.channels) }, holdsLease: holdsLease(), tokens });
+      if (p === "/status") return Response.json({ state, hostPubkey, spec: spec && { ...spec, model: spec.model && { ...spec.model, apiKey: undefined }, channels: Object.keys(spec.channels) }, holdsLease: holdsLease(), lease, tokens });
       if (p === "/screenshot") {
         if (!desktop?.latest) return new Response("no frame", { status: 404 });
         return new Response(desktop.latest as Uint8Array<ArrayBuffer>, { headers: { "content-type": "image/jpeg" } });

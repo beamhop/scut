@@ -24,7 +24,7 @@ export interface AgentRecord {
   nostr?: boolean;
   current: Instance;
   history: Instance[];
-  beam?: { to: string; from?: string; stage: BeamStage; error?: string; startedAt: number; doneAt?: number; summary?: BeamSummary };
+  beam?: { to: string; from?: string; stage: BeamStage; error?: string; startedAt: number; doneAt?: number; summary?: BeamSummary; target?: Instance };
 }
 export type BeamSummary = { bytes: number; carried: { chat?: number; memory?: number; schedules?: number; skills?: number; channels?: number } };
 export type BeamStage = "packing" | "provisioning" | "transferring" | "restoring" | "online" | "failed";
@@ -56,7 +56,36 @@ export class Scut {
     s.ownerPubkey = getPublicKey(s.ownerSk);
     s.agents = await loadJson<AgentRecord[]>("agents.json", []);
     await s.loadDrivers();
+    await s.recoverInterruptedBeams();
     return s;
+  }
+
+  /**
+   * If the app was closed or crashed mid-beam, the source is still holding the agent (paused, with its lease).
+   * Tell it to carry on and record the beam as failed; a half-made target, if any, never got the handoff and stays inert.
+   */
+  async recoverInterruptedBeams() {
+    const stuck = this.agents.filter((a) => a.beam && !["online", "failed"].includes(a.beam.stage));
+    for (const a of stuck) {
+      const t = a.beam!.target;
+      // If the new host already took over (it holds the lease and runs), finish the move instead of rolling back:
+      // resuming the old copy then would mean two copies of one agent.
+      const arrived = t && (await fetch(`${t.endpoint}/health`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json()).catch(() => null)) as { state?: string } | null;
+      if (t && arrived?.state === "running") {
+        const st = (await this.req(t.endpoint, "/status").then((r) => r.json()).catch(() => null)) as { holdsLease?: boolean; lease?: Event } | null;
+        if (st?.holdsLease && st.lease) {
+          await this.req(a.current.endpoint, "/beam/commit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lease: st.lease }) }).catch(() => {});
+          a.history.push(a.current);
+          a.current = t;
+          a.beam = { ...a.beam!, stage: "online", target: undefined, doneAt: Date.now() };
+          continue;
+        }
+      }
+      await this.req(a.current.endpoint, "/beam/abort", { method: "POST" }).catch(() => {});
+      if (t) await this.drivers.get(t.driver)?.destroy(t).catch(() => {});
+      a.beam = { ...a.beam!, stage: "failed", target: undefined, error: `The app closed during the move. ${a.name} stayed where it was.`, doneAt: Date.now() };
+    }
+    if (stuck.length) await this.save();
   }
 
   async loadDrivers() {
@@ -253,7 +282,7 @@ export class Scut {
     const startedAt = Date.now();
     const stage = async (s: BeamStage, error?: string) => {
       const end = s === "online" || s === "failed";
-      rec.beam = { to, from: src.driver, stage: s, error, startedAt, doneAt: end ? Date.now() : undefined, summary: end ? summary : undefined };
+      rec.beam = { to, from: src.driver, stage: s, error, startedAt, doneAt: end ? Date.now() : undefined, summary: end ? summary : undefined, target: end ? undefined : target ?? undefined };
       opts.onStage?.(s);
       await this.save();
     };
@@ -271,6 +300,8 @@ export class Scut {
       const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: rec.agentPubkey, bundleHash: prep.hash, issuedAt: Date.now() };
       const suffix = bytesToHex(crypto.getRandomValues(new Uint8Array(2)));
       target = await driver.create({ name: `${rec.id}-${suffix}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
+      rec.beam!.target = target; // remembered so a crash from here on can be cleaned up or completed
+      await this.save();
       await waitHealthy(target.endpoint);
       const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
 

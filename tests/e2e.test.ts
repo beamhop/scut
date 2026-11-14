@@ -381,10 +381,10 @@ describe("v0.9: rollback, frame budget, channels from settings", () => {
   });
 });
 
-async function until<T>(f: () => T | undefined, ms = 30_000, what = "condition"): Promise<T> {
+async function until<T>(f: () => T | undefined | Promise<T | undefined>, ms = 30_000, what = "condition"): Promise<T> {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    const v = f();
+    const v = await f();
     if (v) return v;
     await Bun.sleep(100);
   }
@@ -625,5 +625,45 @@ describe("v0.26: agentd hardening", () => {
     expect(ui.headers.get("x-frame-options")).toBe("DENY");
     const internal = await fetch(`${ep}/internal/computer`, { method: "POST", headers: { "x-internal-token": "nope" }, body: "{}" });
     expect(internal.status).toBe(403);
+  });
+});
+
+describe("v0.28: interrupted beams", () => {
+  test("if the app dies mid-beam, the agent carries on where it was after a restart", async () => {
+    const rec = await scut.create({ name: "Halfway", harness: "mock" });
+    // simulate a crash right after packing: the source has quiesced for the move
+    const prep = await fetch(`${rec.current.endpoint}/beam/prepare`, { method: "POST", headers: { authorization: `Scut ${scut.auth(rec.current.endpoint)}` } });
+    expect(prep.status).toBe(200);
+    scut.get(rec.id).beam = { to: "sim-cloud", stage: "transferring", startedAt: Date.now() };
+    await scut.save();
+    const again = await Scut.open(); // the app starts again
+    const b = again.get(rec.id).beam!;
+    expect(b.stage).toBe("failed");
+    expect(b.error).toContain("stayed where it was");
+    await until(async () => (await (await fetch(`${rec.current.endpoint}/health`)).json()).state === "running" || undefined, 30_000, "source resumes");
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "still here?" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    c.close();
+    scut.get(rec.id).beam = again.get(rec.id).beam;
+  });
+
+  test("if the app dies after the new host took over, the move is completed on restart (never two copies)", async () => {
+    const rec = await scut.create({ name: "Landed", harness: "mock" });
+    const src = rec.current;
+    // the app "dies" right before telling the old host to retire: that call simply never returns
+    const realReq = (scut as any).req.bind(scut);
+    (scut as any).req = (ep: string, path: string, init?: RequestInit) => (path === "/beam/commit" ? new Promise(() => {}) : realReq(ep, path, init));
+    void scut.beam(rec.id, "sim-cloud");
+    await until(() => (scut.get(rec.id).beam?.stage === "restoring" && scut.get(rec.id).beam?.target) || undefined, 120_000, "handoff");
+    const target = scut.get(rec.id).beam!.target!;
+    await until(async () => (await (await fetch(`${target.endpoint}/health`)).json()).state === "running" || undefined, 60_000, "target running");
+    (scut as any).req = realReq;
+    const again = await Scut.open(); // restart
+    const a = again.get(rec.id);
+    expect(a.beam!.stage).toBe("online");
+    expect(a.current.endpoint).toBe(target.endpoint);
+    expect((await (await fetch(`${src.endpoint}/health`)).json()).state).toBe("retired"); // only one copy
+    Object.assign(scut.get(rec.id), { current: a.current, history: a.history, beam: a.beam });
   });
 });

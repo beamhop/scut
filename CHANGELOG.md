@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.28.0 — Beams survive the app closing
+
+- If the app is closed or crashes in the middle of a beam, it sorts things out on the next start instead of showing "Beaming…" forever with the agent paused:
+  - the new host hadn't taken over yet → the agent carries on where it was, the half-made host is removed, and the tile says so;
+  - the new host had already taken over → the move is completed and the old host retires, so there are never two copies of one agent.
+- The new host is recorded as soon as it's created so this works at every step. Agent hosts now include their signed lease in `/status`.
+- Tests for both cases with real containers.
+
 ## v0.27.0 — Daily tasks keep local time
 
 - "Daily at 8:00" now means 8:00 where you are, every day: tasks store your time zone and wall-clock time instead of a UTC offset taken on the day you added them, so they no longer drift an hour after a daylight-saving change, wherever the agent is beamed.
