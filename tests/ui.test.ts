@@ -276,3 +276,21 @@ test("move an agent to a file and open it again, all from the UI", async () => {
   expect(scut.agents.find((a) => a.id === rec.id)).toBeTruthy();
   await page.close();
 });
+
+test("remove an agent from Settings (two steps)", async () => {
+  const rec = await scut.create({ name: "Byebye", harness: "mock" });
+  const page = await open(`/#/agent/${rec.id}`);
+  await page.waitForSelector('input[aria-label^="Message"]', { timeout: 20_000 });
+  const click = (t: string) => page.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t)!.click(), t);
+  await click("Settings");
+  await page.waitForFunction(() => document.body.textContent!.includes("Remove Byebye…"), { timeout: 5000 });
+  await click("Remove Byebye…");
+  await page.waitForSelector('[role="alertdialog"]');
+  await click("Keep Byebye");
+  expect(scut.agents.find((a) => a.id === rec.id)).toBeTruthy();
+  await click("Remove Byebye…");
+  await click("Remove for good");
+  await page.waitForFunction(() => location.hash === "" && !document.body.innerText.includes("Byebye"), { timeout: 30_000 });
+  expect(scut.agents.find((a) => a.id === rec.id)).toBeUndefined();
+  await page.close();
+});

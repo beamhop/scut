@@ -836,6 +836,25 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
         <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
       </div>
+      <RemoveAgent agent={agent} />
+    </div>
+  );
+}
+
+/** Deleting is final, so it takes two clicks and offers the file as the gentler alternative. */
+function RemoveAgent({ agent }: { agent: Agent }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!asking) return <button onClick={() => setAsking(true)} className="pt-2 text-sm text-red-300/80 hover:text-red-300">Remove {agent.name}…</button>;
+  return (
+    <div role="alertdialog" aria-label={`Remove ${agent.name}`} className="space-y-2 rounded-xl border border-red-400/30 bg-red-500/10 p-3">
+      <div className="font-medium">Remove {agent.name} for good?</div>
+      <div className="text-slate-300">This deletes {agent.name}'s computer, files, browser logins, memory and chats, everywhere it has lived. It can't be undone.</div>
+      <div className="text-slate-400">Just moving computers? <button onClick={() => dispatchEvent(new CustomEvent("beamhop:export", { detail: agent.id }))} className="text-beam hover:underline">Move it to a file</button> instead.</div>
+      <div className="flex justify-end gap-2">
+        <button onClick={() => setAsking(false)} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Keep {agent.name}</button>
+        <button disabled={busy} onClick={async () => { setBusy(true); await api.remove(agent.id); location.hash = ""; }} className="rounded-full bg-red-500 px-3 py-1 font-semibold text-white disabled:opacity-50">{busy ? "Removing…" : "Remove for good"}</button>
+      </div>
     </div>
   );
 }

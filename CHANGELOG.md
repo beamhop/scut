@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.37.0 — Remove an agent
+
+- There was no way to delete an agent from the app. Settings now ends with **Remove {name}…**: a second step spells out what goes (its computer, files, logins, memory and chats, everywhere it has lived), offers **Move it to a file** instead, and only then removes it for good.
+- UI test: Keep cancels; Remove for good deletes the agent and returns to the crew.
+
 ## v0.36.0 — No leftover hosts
 
 - Fixed a cost leak: beaming from the app left the old host behind as a retired shell — a container on your laptop, or a machine still billing by the hour on a cloud. The old host is now removed as soon as the agent is running on the new one (failed beams still roll back first).
