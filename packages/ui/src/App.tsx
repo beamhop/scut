@@ -837,6 +837,14 @@ function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
   );
 }
 
+/** What a connected chat app is doing right now: signed in as @bot, still connecting, or token rejected. */
+function ChannelStatus({ a, name }: { a: ReturnType<typeof useAgent>; name: string }) {
+  const c = a.pairing?.channels?.[name];
+  if (c?.error) return <span role="alert" className="min-w-0 flex-1 text-red-300">{c.error}</span>;
+  if (c?.bot) return <span className="min-w-0 flex-1 truncate text-emerald-300">connected as @{c.bot}</span>;
+  return <span className="min-w-0 flex-1 text-slate-400">connecting…</span>;
+}
+
 function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const [tg, setTg] = useState("");
   const ch = a.settings?.channels;
@@ -846,17 +854,17 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
       <div className="flex items-center gap-2">
         <span className="w-20">Telegram</span>
         {ch?.telegram ? (
-          <><span className="text-emerald-300">connected</span><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto text-slate-400 hover:text-red-300">Disconnect</button></>
+          <><ChannelStatus a={a} name="telegram" /><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto shrink-0 text-slate-400 hover:text-red-300">Disconnect</button></>
         ) : (
           <><button onClick={() => a.send({ t: "chat", text: TELEGRAM_SETUP })} className="rounded-full bg-beam/90 px-3 py-1 text-sm font-semibold text-black hover:bg-beam" title="Your agent opens Telegram on its screen and creates its own bot">Set it up for me</button>
           <input value={tg} onChange={(e) => setTg(e.target.value)} placeholder="or paste a token from @BotFather" aria-label="Telegram bot token" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
           <button onClick={() => { if (tg.trim()) a.send({ t: "settings", channels: { telegram: { token: tg.trim() } } }); setTg(""); }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button></>
         )}
       </div>
-      <SecretRow label="Slack" connected={!!ch?.slack} fields={["App token (xapp-…)", "Bot token (xoxb-…)"]}
+      <SecretRow a={a} name="slack" label="Slack" connected={!!ch?.slack} fields={["App token (xapp-…)", "Bot token (xoxb-…)"]}
         onConnect={([appToken, botToken]) => a.send({ t: "settings", channels: { slack: { appToken, botToken } } })}
         onDisconnect={() => a.send({ t: "settings", channels: { slack: null } })} />
-      <SecretRow label="Discord" connected={!!ch?.discord} fields={["Bot token"]}
+      <SecretRow a={a} name="discord" label="Discord" connected={!!ch?.discord} fields={["Bot token"]}
         onConnect={([token]) => a.send({ t: "settings", channels: { discord: { token } } })}
         onDisconnect={() => a.send({ t: "settings", channels: { discord: null } })} />
       <div className="flex items-center gap-2">
@@ -868,9 +876,9 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
   );
 }
 
-function SecretRow({ label, connected, fields, onConnect, onDisconnect }: { label: string; connected: boolean; fields: string[]; onConnect: (v: string[]) => void; onDisconnect: () => void }) {
+function SecretRow({ a, name, label, connected, fields, onConnect, onDisconnect }: { a: ReturnType<typeof useAgent>; name: string; label: string; connected: boolean; fields: string[]; onConnect: (v: string[]) => void; onDisconnect: () => void }) {
   const [vals, setVals] = useState(fields.map(() => ""));
-  if (connected) return <div className="flex items-center gap-2"><span className="w-20">{label}</span><span className="text-emerald-300">connected</span><button onClick={onDisconnect} className="ml-auto text-slate-400 hover:text-red-300">Disconnect</button></div>;
+  if (connected) return <div className="flex items-center gap-2"><span className="w-20 shrink-0">{label}</span><ChannelStatus a={a} name={name} /><button onClick={onDisconnect} className="ml-auto shrink-0 text-slate-400 hover:text-red-300">Disconnect</button></div>;
   return (
     <div className="flex items-start gap-2">
       <span className="w-20 pt-1">{label}</span>

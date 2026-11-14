@@ -44,6 +44,8 @@ type ChannelOwner = { userId: string; chatId: string; name: string };
 let owners: Record<string, ChannelOwner> = {};
 let pairCode = "";
 const bots: Record<string, string | undefined> = {};
+/** Chat apps whose token didn't work (yet): shown to the owner, retried in the background. */
+const channelErrors: Record<string, string | undefined> = {};
 type ChatLine = { from: string; channel: string; text: string; ts: number };
 const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
@@ -115,7 +117,7 @@ function pairingMsg(): ServerMsg {
   return {
     t: "pairing",
     code: chans.some((n) => !owners[n]) ? pairCode : undefined,
-    channels: Object.fromEntries(chans.map((n) => [n, { bot: bots[n], owner: owners[n]?.name }])),
+    channels: Object.fromEntries(chans.map((n) => [n, { bot: bots[n], owner: owners[n]?.name, error: channelErrors[n] }])),
     telegram: spec?.channels.telegram ? { bot: bots.telegram, code: owners.telegram ? undefined : pairCode, owner: owners.telegram?.name } : undefined,
   };
 }
@@ -306,6 +308,19 @@ async function startChannels() {
   if (spec.channels.discord?.token) chatChannels.push(new DiscordChannel(spec.channels.discord.token));
   for (const c of chatChannels) {
     bots[c.name] = await c.botName().catch(() => undefined);
+    channelErrors[c.name] = bots[c.name] ? undefined : "Couldn't sign in with this token. Check it, or disconnect and paste a new one.";
+    if (!bots[c.name]) {
+      // Maybe just offline (laptop waking up): keep trying quietly, and clear the warning once it works.
+      const retry = setInterval(async () => {
+        if (!channels.includes(c)) return clearInterval(retry);
+        const name = await c.botName().catch(() => undefined);
+        if (!name) return;
+        bots[c.name] = name;
+        channelErrors[c.name] = undefined;
+        clearInterval(retry);
+        broadcast(pairingMsg());
+      }, Number(process.env.SCUT_CHANNEL_RETRY_MS ?? 30_000));
+    }
     c.start(
       async (m) => {
         if (c.name === "telegram") lastTelegramChat = m.chatId;

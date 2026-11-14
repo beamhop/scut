@@ -8,6 +8,7 @@ export function startMockTelegram() {
     hostname: "0.0.0.0",
     async fetch(req) {
       const method = new URL(req.url).pathname.split("/").pop();
+      if (new URL(req.url).pathname.includes("BAD")) return Response.json({ ok: false, error_code: 401, description: "Unauthorized" }, { status: 401 });
       const body = (await req.json().catch(() => ({}))) as any;
       if (method === "getMe") return Response.json({ ok: true, result: { id: 1, username: "mock_bot" } });
       if (method === "getUpdates") {

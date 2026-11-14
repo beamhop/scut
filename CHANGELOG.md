@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.29.0 — Chat app health
+
+- Settings now shows what each chat app is actually doing: "connected as @your_bot", "connecting…", or, if the token doesn't work, "Couldn't sign in with this token. Check it, or disconnect and paste a new one." Before, a wrong token still said "connected".
+- If signing in fails (wrong token, or just offline after waking up), the agent keeps retrying quietly and clears the warning as soon as it works.
+- Test with a rejected and then a good Telegram token.
+
 ## v0.28.0 — Beams survive the app closing
 
 - If the app is closed or crashes in the middle of a beam, it sorts things out on the next start instead of showing "Beaming…" forever with the agent paused:

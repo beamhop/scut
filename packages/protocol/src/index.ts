@@ -162,7 +162,7 @@ export type ServerMsg =
   | { t: "cloud.key"; provider: "fly" | "render" | "railway"; token: string; ts: number }
   | { t: "runs"; items: TaskRun[] }
   | { t: "schedules"; schedules: Schedule[] }
-  | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
+  | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string; error?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 
 export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" | "quiescing" | "retired";
 

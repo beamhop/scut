@@ -667,3 +667,18 @@ describe("v0.28: interrupted beams", () => {
     Object.assign(scut.get(rec.id), { current: a.current, history: a.history, beam: a.beam });
   });
 });
+
+describe("v0.29: chat app health", () => {
+  test("a rejected token is reported in plain words; a good one shows the bot's name", async () => {
+    const rec = await scut.create({ name: "Healthy", harness: "mock" });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "settings");
+    c.send({ t: "settings", channels: { telegram: { token: "BAD:TOKEN" } } });
+    const bad = await c.waitFor<any>((m) => m.t === "pairing" && !!m.channels?.telegram?.error, 30_000);
+    expect(bad.channels.telegram.error).toContain("Couldn't sign in");
+    c.send({ t: "settings", channels: { telegram: { token: "GOOD:TOKEN" } } });
+    const good = await c.waitFor<any>((m) => m.t === "pairing" && m.channels?.telegram?.bot === "mock_bot", 30_000);
+    expect(good.channels.telegram.error).toBeUndefined();
+    c.close();
+  });
+});
