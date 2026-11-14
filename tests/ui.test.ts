@@ -317,3 +317,19 @@ test("memories can be added and corrected in Settings", async () => {
   await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Likes green tea, no sugar"), { timeout: 10_000 });
   await page.close();
 });
+
+test("the crew room opens beside the grid and closes again", async () => {
+  const page = await open("/");
+  await page.waitForFunction(() => document.body.innerText.includes("Talk to all agents"), { timeout: 10_000 });
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Talk to all agents")!.click());
+  await page.waitForSelector('aside[aria-label="Crew room"]', { timeout: 5000 });
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Talk to all agents")!.click());
+  await page.waitForFunction(() => !document.querySelector('aside[aria-label="Crew room"]'), { timeout: 5000 });
+  await page.close();
+});
+
+test("still no console errors after every flow above", () => {
+  // Agents moved to a file or removed above vanish from the grid on the next refresh; until then a tile may try
+  // to reconnect to their stopped host once. That's expected; anything else is not.
+  expect(errors.filter((e) => !/^WebSocket connection to /.test(e))).toEqual([]);
+});

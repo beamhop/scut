@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.49.2 — More UI coverage
+
+- UI tests: the crew room opens beside the grid and closes; a final check that no page logged an error across every flow (agent connections to hosts that were just removed are the one expected exception).
+
 ## v0.49.1 — The daily limit in money
 
 - Under the daily token limit, Settings now says roughly what it means in money for the agent's model (e.g. "≈ $0.18 a day at most with anthropic/claude-haiku-5.5"), using live OpenRouter prices.
