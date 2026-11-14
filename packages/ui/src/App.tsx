@@ -55,6 +55,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = fa
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [memory, setMemory] = useState<MemoryItem[]>([]);
   const [runs, setRuns] = useState<TaskRun[]>([]);
+  const lastRun = useRef<string | undefined>(undefined);
   const [skills, setSkills] = useState<{ items: { name: string; description: string }[]; error?: string }>({ items: [] });
   const ws = useRef<WebSocket | null>(null);
   const outbox = useRef<string[]>([]);
@@ -97,7 +98,14 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8, small = fa
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "memory") setMemory(m.items);
-        else if (m.t === "runs") setRuns(m.items);
+        else if (m.t === "runs") {
+          // A scheduled task finished while you were elsewhere: say so (first message on connect is history, not news).
+          const latest = m.items.at(-1);
+          if (latest && lastRun.current !== undefined && latest.id !== lastRun.current && document.hidden && "Notification" in window && Notification.permission === "granted")
+            new Notification(`${agent?.name}: ${latest.ok ? "done" : "couldn't finish"} — ${latest.prompt.slice(0, 60)}`, { body: latest.result.slice(0, 160) });
+          lastRun.current = latest?.id ?? "";
+          setRuns(m.items);
+        }
         else if (m.t === "skills") setSkills({ items: m.items, error: m.error });
         else if (m.t === "cloud.key") {
           fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: m.provider, token: m.token }) })

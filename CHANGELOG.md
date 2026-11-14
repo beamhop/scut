@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.46.1 — Hear about finished tasks
+
+- When a scheduled task finishes while Beamhop is in the background, you get a desktop notification with what the agent found (or that it couldn't finish). Chat apps you've paired still get the full result.
+
 ## v0.46.0 — Agents set up their own routines
 
 - "Every morning at 8, send me the top 3 Hacker News stories" now actually gets scheduled: agents have `schedule_task`, `list_tasks` and `cancel_task` tools, and their instructions tell them to use them instead of just promising. The task shows up in Settings → Scheduled tasks with its run history, where you can change or delete it.
