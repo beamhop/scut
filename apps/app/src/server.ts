@@ -92,6 +92,12 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
               return json({ error: String(e?.message ?? e) }, 400);
             }
           }
+          if (action === "model" && req.method === "POST") {
+            // keeps the price shown on the tile in step with the brain changed in the agent's Settings (no key here)
+            const { baseUrl, model } = (await req.json()) as { baseUrl?: string; model: string };
+            if (typeof model === "string" && model) { rec.model = { baseUrl, model }; await scut.save(); }
+            return json({ ok: true });
+          }
           if (action === "token") return json({ endpoint: rec.current.endpoint, token: scut.auth(rec.current.endpoint) });
           if (action === "phone") {
             const ep = rec.current.endpoint;

@@ -821,7 +821,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
       </div>
       <SafetyCheck a={a} agent={agent} />
       <PersonaSettings a={a} name={agent.name} />
-      <BrainSettings a={a} name={agent.name} />
+      <BrainSettings a={a} name={agent.name} id={agent.id} />
       <MemorySettings a={a} />
       <SkillSettings a={a} />
       <ChannelSettings a={a} />
@@ -844,7 +844,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
 }
 
 /** Change the model or key an agent thinks with (an expired key shouldn't strand an agent). */
-function BrainSettings({ a, name }: { a: ReturnType<typeof useAgent>; name: string }) {
+function BrainSettings({ a, name, id }: { a: ReturnType<typeof useAgent>; name: string; id: string }) {
   const m = a.settings?.model;
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState("openrouter");
@@ -867,6 +867,7 @@ function BrainSettings({ a, name }: { a: ReturnType<typeof useAgent>; name: stri
     if (!r.ok && (key || !sameEndpoint)) return setCheck({ error: r.error });
     if (r.ok && r.modelFound === false) return setCheck({ error: `"${model}" isn't offered there.` });
     a.send({ t: "settings", model: { api: PRESETS[kind].api as any, baseUrl, model, apiKey: key || undefined } });
+    fetch(`/api/agents/${id}/model`, { method: "POST", body: JSON.stringify({ baseUrl, model }) }).catch(() => {});
     setOpen(false);
   }
   const input = "w-full rounded-lg border border-white/10 bg-panel2 px-2 py-1";
