@@ -15,6 +15,12 @@ export type LocalState = {
   probes: { engine: string; available: boolean; reason?: string; action?: "enable-wsl" }[];
   hostAllowed: boolean; unsupported?: string; label?: string; isolation?: Destination["isolation"]; clouds?: string[];
 };
+/** Every way this computer can run an agent (GET /api/local/sandboxes), each checked, offered per agent on create. */
+export type SandboxOption = {
+  engine: NonNullable<LocalState["engine"]>; available: boolean; reason?: string; action?: "enable-wsl";
+  name: string; isolation: Destination["isolation"]; blurb: string; default: boolean;
+};
+export type Sandboxes = { default: LocalState["engine"]; unsupported?: string; options: SandboxOption[] };
 /** Runs directly on its computer, without a sandbox (said wherever the agent's place is shown). */
 export const unsandboxed = (i?: Instance) => i?.meta?.engine === "host" || i?.meta?.isolation === "none";
 
@@ -26,6 +32,7 @@ export const api = {
   remove: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }).then((r) => r.json()),
   local: (): Promise<LocalState> => fetch("/api/local").then((r) => r.json()),
   allowHost: (allow: boolean): Promise<LocalState> => fetch("/api/local", { method: "POST", body: JSON.stringify({ allowHost: allow }) }).then((r) => r.json()),
+  sandboxes: (fresh = false): Promise<Sandboxes> => fetch(`/api/local/sandboxes${fresh ? "?fresh" : ""}`).then((r) => r.json()),
   enableWsl: (): Promise<{ started: boolean; error?: string }> => fetch("/api/local/enable-wsl", { method: "POST" }).then((r) => r.json()),
   brain: (): Promise<{ api: string; baseUrl: string; model: string; hasKey: boolean } | null> => fetch("/api/brain").then((r) => r.json()).catch(() => null),
   verifyBrain: (m: unknown): Promise<{ ok: boolean; error?: string; modelFound?: boolean; models?: string[] }> =>

@@ -68,4 +68,4 @@ export { freePort } from "./util.ts";
 export { WslDriver } from "./wsl.ts";
 export { HostProcessDriver, serviceFiles, detectService, type HostRuntime, type ServiceKind } from "./host.ts";
 export { ensureBrowser, installedBrowsers } from "./browser.ts";
-export { chooseLocal, localDriver, ladder, loadSaved, saveLocal, markBroken, ENGINE_LABEL, type Engine, type Probe, type LocalChoice } from "./local.ts";
+export { chooseLocal, probeAll, localDriver, ladder, ENGINE_INFO, loadSaved, saveLocal, markBroken, ENGINE_LABEL, type Engine, type Probe, type LocalChoice } from "./local.ts";

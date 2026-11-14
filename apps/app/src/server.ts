@@ -135,6 +135,7 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           const d = scut.drivers.get("local");
           return json({ ...scut.local, label: d?.label, isolation: d?.isolation });
         }
+        if (p === "/api/local/sandboxes" && req.method === "GET") return json(await scut.sandboxes(url.searchParams.has("fresh")));
         if (p === "/api/local/enable-wsl" && req.method === "POST") return json(scut.enableWsl());
         if (p === "/api/autostart") {
           if (req.method === "POST") await setAutostart(!!((await req.json()) as { on: boolean }).on);

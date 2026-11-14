@@ -28,6 +28,16 @@ export const ENGINE_LABEL: Record<Engine, string> = {
   host: "This computer (no sandbox)",
 };
 
+/** What each engine is, in the words the create screen uses to offer it. */
+export const ENGINE_INFO: Record<Engine, { name: string; isolation: "vm" | "container" | "sandbox" | "none"; blurb: string }> = {
+  smolvm: { name: "MicroVM", isolation: "vm", blurb: "Its own tiny virtual machine with its own kernel. The strongest wall, built in." },
+  wsl: { name: "WSL2 virtual machine", isolation: "vm", blurb: "A Linux virtual machine built into Windows." },
+  gvisor: { name: "gVisor sandbox", isolation: "sandbox", blurb: "A user-space kernel between the agent and this computer. Built in." },
+  docker: { name: "Docker container", isolation: "container", blurb: "A container in the Docker you already have. Shares this computer's kernel." },
+  podman: { name: "Podman container", isolation: "container", blurb: "A container in the Podman you already have. Shares this computer's kernel." },
+  host: { name: "No sandbox", isolation: "none", blurb: "A normal program on this computer with a browser of its own. Nothing walls it off." },
+};
+
 /** The rungs for this platform, in order. */
 export function ladder(platform: string = process.platform, arch: string = process.arch): Engine[] {
   if (platform === "darwin") return arch === "arm64" ? ["smolvm", "docker", "podman", "host"] : [];
@@ -131,6 +141,25 @@ export async function chooseLocal(home: string, opts: { probes?: Probes; platfor
     }
   }
   return { engine: null, probes: results, hostAllowed };
+}
+
+/**
+ * Every rung of this computer's ladder, each checked, so the person can pick one per agent. Engines that failed their
+ * real test lately stay listed as unavailable, with the reason. "host" is always available here: picking it is the
+ * person's own choice (the create screen asks first).
+ */
+export async function probeAll(home: string, opts: { probes?: Probes; platform?: string; arch?: string } = {}): Promise<Probe[]> {
+  const order = ladder(opts.platform, opts.arch);
+  const probes = { ...realProbes(home), ...(opts.probes ?? {}) };
+  const saved = await loadSaved(home);
+  const forced = process.env.SCUT_LOCAL_DRIVER;
+  return Promise.all(order.map(async (e): Promise<Probe> => {
+    if (forced === "none" && e !== "host") return { engine: e, available: false, reason: `${e}: not on this computer (SCUT_LOCAL_DRIVER=none)` };
+    if (forced && forced !== "none" && e !== "host" && e !== forced) return { engine: e, available: false, reason: `Not used: SCUT_LOCAL_DRIVER=${forced}` };
+    const b = saved.broken?.[e];
+    if (b && Date.now() - b.at < BROKEN_FOR) return { engine: e, available: false, reason: b.reason };
+    return probes[e]!().catch((err: any) => ({ engine: e, available: false, reason: String(err?.message ?? err) }));
+  }));
 }
 
 /** The driver for an engine, registered as "local". */

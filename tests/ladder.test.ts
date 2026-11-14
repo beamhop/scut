@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chooseLocal, ladder, loadSaved, saveLocal, serviceFiles, type Engine, type Probe } from "@scut/drivers";
+import { chooseLocal, probeAll, ENGINE_INFO, ladder, loadSaved, saveLocal, serviceFiles, type Engine, type Probe } from "@scut/drivers";
 
 delete process.env.SCUT_LOCAL_DRIVER;
 const home = () => mkdtempSync(`${tmpdir()}/scut-ladder-`);
@@ -129,4 +129,15 @@ test("saved choices live in engine.json", async () => {
   expect(j.engine).toBe("gvisor");
   expect(j.hostAllowed).toBe(true);
   expect(typeof j.at).toBe("number");
+});
+
+test("probeAll lists every rung with its reason, for picking a sandbox per agent", async () => {
+  const h = home();
+  await saveLocal(h, { broken: { gvisor: { at: Date.now(), reason: "gVisor failed its test" } } });
+  const all = await probeAll(h, { platform: "linux", arch: "x64", probes: fake({ smolvm: true, gvisor: true, docker: true, host: true }) });
+  expect(all.map((p) => p.engine)).toEqual(["smolvm", "gvisor", "docker", "podman", "host"]);
+  expect(all.find((p) => p.engine === "gvisor")).toMatchObject({ available: false, reason: "gVisor failed its test" });
+  expect(all.find((p) => p.engine === "docker")?.available).toBe(true);
+  expect(all.find((p) => p.engine === "podman")).toMatchObject({ available: false, reason: "podman not here" });
+  for (const p of all) expect(ENGINE_INFO[p.engine].name).toBeTruthy();
 });

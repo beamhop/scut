@@ -2,6 +2,8 @@
 //   scut                      open the app (local UI)
 //   scut create <name> [--harness pi|codex|copilot|opencode|mock] [--to local] [--telegram TOKEN]
 //                      [--model-api openai-completions --model-url URL --model-key KEY --model NAME]
+//                      [--sandbox smolvm|wsl|gvisor|docker|podman|host]
+//   scut sandboxes             the ways this computer can run agents
 //   scut ls
 //   scut beam <agent> --to <destination>
 //   scut rm <agent>
@@ -19,6 +21,7 @@ const { values, positionals } = parseArgs({
   options: {
     harness: { type: "string" },
     to: { type: "string" },
+    sandbox: { type: "string" },
     telegram: { type: "string" },
     template: { type: "string" },
     autonomy: { type: "string" },
@@ -66,12 +69,19 @@ switch (cmd) {
       template: values.template as any,
       autonomy: values.autonomy as any,
       driver: values.to,
+      sandbox: values.sandbox as any,
       telegramToken: values.telegram,
       model: values.model
         ? { provider: "scut", api: (values["model-api"] as any) ?? "openai-completions", baseUrl: values["model-url"], apiKey: values["model-key"], model: values.model }
         : undefined,
     });
     console.log(`created ${rec.name} (${rec.id}) on ${rec.current.driver} at ${rec.current.endpoint}`);
+    break;
+  }
+  case "sandboxes": {
+    const s = await scut.sandboxes(true);
+    if (s.unsupported) console.log(s.unsupported);
+    for (const o of s.options) console.log(`${o.default ? "*" : " "} ${o.engine.padEnd(7)} ${o.available ? "available" : "no       "}  ${o.name}${o.reason ? ` (${o.reason})` : ""}`);
     break;
   }
   case "ls":

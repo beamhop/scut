@@ -4,8 +4,8 @@ import {
   bytesToHex, encodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, signAuth, signLease, unseal,
 } from "@scut/protocol";
 import {
-  DockerDriver, EngineUnavailable, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, localDriver, markBroken, saveLocal, waitHealthy,
-  type Engine, type HostDriver, type HostRuntime, type Instance, type LocalChoice,
+  DockerDriver, EngineUnavailable, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, probeAll, localDriver, markBroken, ENGINE_INFO, saveLocal, waitHealthy,
+  type Engine, type Probe, type HostDriver, type HostRuntime, type Instance, type LocalChoice,
 } from "@scut/drivers";
 import type { Event } from "nostr-tools";
 import { chmod, mkdir } from "node:fs/promises";
@@ -82,15 +82,38 @@ export class Scut {
    */
   driverOf(inst: Instance): HostDriver | undefined {
     const engine = inst.meta?.engine as Engine | undefined;
-    if (inst.driver !== "local" || !engine || engine === this.local.engine) return this.drivers.get(inst.driver);
+    if (inst.driver !== "local" || !engine) return this.drivers.get(inst.driver);
+    return this.engineDriver(engine);
+  }
+
+  /** The local driver for one engine: the default one, or another this computer also has (picked per agent). */
+  engineDriver(engine: Engine): HostDriver {
+    if (engine === this.local.engine && this.drivers.has("local")) return this.drivers.get("local")!;
     if (!this.otherLocal.has(engine)) this.otherLocal.set(engine, localDriver(engine, this.home, hostRuntime(this.home)));
-    return this.otherLocal.get(engine);
+    return this.otherLocal.get(engine)!;
   }
 
   /** Remember which engine made a local instance (see driverOf). */
-  private stamp(inst: Instance, driverId: string): Instance {
-    if (driverId === "local" && this.local.engine) inst.meta = { ...inst.meta, engine: this.local.engine };
+  private stamp(inst: Instance, driverId: string, engine = this.local.engine): Instance {
+    if (driverId === "local" && engine) inst.meta = { ...inst.meta, engine };
     return inst;
+  }
+
+  private sandboxCache?: { at: number; probes: Promise<Probe[]> };
+  /**
+   * Every way this computer can run an agent (microVM, WSL2, gVisor, Docker, Podman, no sandbox), each checked, for
+   * the create screen to offer. Checked again after a minute (say Docker was started meanwhile).
+   */
+  async sandboxes(fresh = false) {
+    if (fresh || !this.sandboxCache || Date.now() - this.sandboxCache.at > 60_000) {
+      this.sandboxCache = { at: Date.now(), probes: probeAll(this.home) };
+    }
+    const probes = await this.sandboxCache.probes;
+    return {
+      default: this.local.engine,
+      unsupported: this.local.unsupported,
+      options: probes.map((p) => ({ ...p, ...ENGINE_INFO[p.engine], default: p.engine === this.local.engine })),
+    };
   }
 
   /** Agents whose computer is being rebuilt from a newer image right now (shown as "updating"). */
@@ -277,6 +300,7 @@ export class Scut {
   async loadDrivers() {
     const p = await loadJson<any>(this.home, "providers.json", {});
     this.local = await chooseLocal(this.home);
+    this.sandboxCache = undefined;
     this.drivers.delete("local");
     this.otherLocal.clear();
     if (this.local.engine) this.drivers.set("local", localDriver(this.local.engine, this.home, hostRuntime(this.home)));
@@ -404,15 +428,26 @@ export class Scut {
     discordToken?: string;
     nostr?: boolean | { relays?: string[]; ownerPubkey?: string };
     driver?: string;
+    /** On this computer: run it in this engine instead of the default one (see sandboxes()). */
+    sandbox?: Engine;
     dailyTokenBudget?: number;
     /** Internal: already moved down the ladder once for this create. */
     _retried?: boolean;
   }): Promise<AgentRecord> {
     // Don't start a second download of the same image; and if setup found the engine can't run here, the ladder
     // has moved on by the time it settles (so look the driver up after).
-    if ((o.driver ?? "local") === "local") for (let p = this.prefetching; p; p = p === this.prefetching ? undefined : this.prefetching) await p;
-    const driver = this.drivers.get(o.driver ?? "local");
-    if (!driver) throw new Error((o.driver ?? "local") === "local" ? noLocal(this.local) : `unknown destination ${o.driver}`);
+    const onHere = (o.driver ?? "local") === "local";
+    // A sandbox picked for this agent that isn't the default: check it's really there (it never falls back silently).
+    const picked = onHere && o.sandbox && o.sandbox !== this.local.engine ? o.sandbox : undefined;
+    if (o.sandbox && !onHere) throw new Error("A sandbox can only be picked for agents on this computer");
+    if (picked) {
+      const opt = (await this.sandboxes()).options.find((x) => x.engine === picked);
+      if (!opt) throw new Error(`${ENGINE_INFO[picked]?.name ?? picked} isn't a way to run agents on this computer`);
+      if (!opt.available) throw new Error(`${opt.name} isn't available here: ${opt.reason ?? "not found"}`);
+    }
+    if (onHere && !picked) for (let p = this.prefetching; p; p = p === this.prefetching ? undefined : this.prefetching) await p;
+    const driver = picked ? this.engineDriver(picked) : this.drivers.get(o.driver ?? "local");
+    if (!driver) throw new Error(onHere ? noLocal(this.local) : `unknown destination ${o.driver}`);
     // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
     const saved = await this.brain();
     if (o.model && !o.model.apiKey && saved?.apiKey && saved.baseUrl === o.model.baseUrl) o.model = { ...o.model, apiKey: saved.apiKey };
@@ -441,8 +476,13 @@ export class Scut {
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
     let inst: Instance;
     try {
-      inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
+      inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id, picked ?? this.local.engine);
     } catch (e) {
+      if (picked && e instanceof EngineUnavailable) {
+        await markBroken(this.home, e.engine as Engine, e.message);
+        this.sandboxCache = undefined;
+        throw new Error(`${ENGINE_INFO[picked].name} can't run here after all: ${e.message}`);
+      }
       // The engine can't run anything on this computer after all (found only now): move down the ladder, try once more.
       if (!(e instanceof EngineUnavailable) || (o.driver ?? "local") !== "local" || o._retried) throw e;
       console.error(`${e.engine} can't run here (${e.message}); trying the next way`);

@@ -3,7 +3,7 @@
 // same flow as a section, for a bench that shows it in place on first run.
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckIcon, CodeIcon, CreditCardIcon, EnvelopeIcon, FileArrowUpIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { api, PRESETS, TEMPLATES, npubToHex, type Destination, type LocalState } from "./lib.tsx";
+import { api, PRESETS, TEMPLATES, npubToHex, type Destination, type LocalState, type Sandboxes } from "./lib.tsx";
 import { Button, Dialog, Field, Input, PlateGlyph, Progress, Segmented, Select, Switch, Textarea, announce, callsign, cx, money, usdToEur } from "./ui/index.ts";
 import { ChoiceTile, KEY_URL, modelName, Notice, PROVIDER_NOTE, SUBSCRIPTIONS } from "./settings-parts.tsx";
 
@@ -66,6 +66,10 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
   const jobRef = useRef<HTMLTextAreaElement>(null);
 
   const [local, setLocal] = useState<LocalState>();
+  const [boxes, setBoxes] = useState<Sandboxes>();
+  const [sandbox, setSandbox] = useState<string>();
+  const loadBoxes = (fresh = false) => api.sandboxes(fresh).then((b) => { setBoxes(b); setSandbox((cur) => (cur && b.options.some((o) => o.engine === cur && o.available) ? cur : b.default ?? undefined)); }).catch(() => {});
+  useEffect(() => { loadBoxes(); }, []);
   const [pfRun, setPfRun] = useState(0);
   useEffect(() => { api.destinations().then(setDests).catch(() => {}); api.local().then(setLocal).catch(() => {}); }, []);
   // This computer can't run agents (no engine): start the agent on a connected cloud instead.
@@ -151,6 +155,7 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
       model: harness === "mock" || harness === "codex" || harness === "copilot" ? undefined
         : { provider: "scut", api: api_, baseUrl: model.baseUrl, apiKey: model.apiKey || undefined, model: model.model },
       driver: where,
+      sandbox: where === "local" && sandbox && sandbox !== local?.engine ? sandbox : undefined,
     }).catch((e) => ({ error: String(e) }));
     if (r.error) { setBusy(false); setError(r.error); return; }
     announce(`${agentName} is ready`);
@@ -251,13 +256,16 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
     ? (usesSavedKey ? `${modelName(model.model)} (${PRESETS[kind ?? "openrouter"]?.label ?? "saved"})` : "None yet")
     : kind === "subscription" ? `${SUBSCRIPTIONS.find((s) => s.harness === sub)!.label} subscription, sign in on its screen`
     : kind ? `${modelName(model.model)} (${PRESETS[kind].label})` : "None yet";
-  const pulling = pf?.state === "pulling";
+  // The first-time download is for the default sandbox; another one picked here gets ready while the agent starts.
+  const otherBox = where === "local" && !!sandbox && sandbox !== local?.engine;
+  const pulling = pf?.state === "pulling" && !otherBox;
   // Skipped the brain and there's no saved one: say plainly what that means before creating (not after a silent no-op).
   const noBrain = skipped && !usesSavedKey && harness !== "mock" && harness !== "codex" && harness !== "copilot";
   // This computer has no engine for agents (and no cloud is picked): the choice, instead of a create that would fail.
   const noHere = !!local && !local.engine && where === "local";
   async function runHere() {
     setLocal(await api.allowHost(true));
+    loadBoxes(true);
     setDests(await api.destinations());
     setWhere("local");
     setPfRun((n) => n + 1);
@@ -296,7 +304,10 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
       )}
 
       {noHere && <HereChoice local={local!} agentName={agentName} onAddCloud={onAddCloud} onRunHere={runHere} />}
-      {local?.engine === "host" && where === "local" && (
+      {where === "local" && !!local?.engine && boxes && boxes.options.length > 1 && (
+        <SandboxPicker boxes={boxes} value={sandbox ?? local.engine} onChange={setSandbox} name={`${ids}-box`} onRecheck={() => loadBoxes(true)} />
+      )}
+      {(sandbox ?? local?.engine) === "host" && where === "local" && (
         <Notice tone="info">
           <span className="font-medium">No sandbox.</span> {agentName} runs as a normal program on this computer, with a browser of its own (it never uses your screen or mouse). It asks before touching anything outside its own folder.
         </Notice>
@@ -396,6 +407,35 @@ export function CreateAgent({ firstRun, onDone, inline = false, onAddCloud }: { 
     <Dialog open onClose={firstRun || busy ? () => {} : onDone} title={title} description={description} size="lg" hideClose={firstRun} footer={footer} initialFocus={jobRef}>
       {body}
     </Dialog>
+  );
+}
+
+const ISOLATION_WORD: Record<string, string> = { vm: "Virtual machine", sandbox: "Sandbox", container: "Container", none: "No isolation" };
+
+/**
+ * How this agent is walled off from this computer: every engine the computer has (microVM, WSL2, gVisor, Docker,
+ * Podman, no sandbox), best first. The one Beamhop picked is preselected; ones that aren't here say why.
+ */
+function SandboxPicker({ boxes, value, onChange, name, onRecheck }: { boxes: Sandboxes; value: string; onChange: (v: string) => void; name: string; onRecheck: () => void }) {
+  const [rechecking, setRechecking] = useState(false);
+  return (
+    <fieldset>
+      <legend className="mb-2 flex w-full items-baseline justify-between gap-2 text-small font-medium text-ink">
+        <span>Sandbox</span>
+        <button type="button" className="rounded-control text-small font-normal text-ink-2 underline-offset-2 hover:text-ink hover:underline" disabled={rechecking}
+          onClick={async () => { setRechecking(true); await onRecheck(); setRechecking(false); announce("Checked this computer again"); }}>
+          {rechecking ? "Checking…" : "Check again"}
+        </button>
+      </legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {boxes.options.map((o) => (
+          <ChoiceTile key={o.engine} size="sm" name={name} value={o.engine} checked={value === o.engine} onChange={onChange} disabled={!o.available}
+            title={o.name}
+            badge={<span className="text-small text-ink-3">{o.default ? "Recommended" : ISOLATION_WORD[o.isolation]}</span>}
+            note={o.available ? o.blurb : (o.reason ?? "Not on this computer")} />
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
