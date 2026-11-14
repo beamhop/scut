@@ -4,7 +4,7 @@
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
   type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg,
-  SCREEN, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  SCREEN, callsign, glyphCells, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -575,7 +575,7 @@ async function run() {
   if (last) lastResult = { text: firstLine(last.text), ts: last.ts };
   setState("starting");
   await mkdir(`${DATA}/workspace`, { recursive: true });
-  desktop = new Desktop(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}&color=${encodeURIComponent(MASCOT_HEX[spec!.mascot ?? "cyan"] ?? "#38e1ff")}`);
+  desktop = new Desktop(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}`);
   await desktop.start();
   harness = makeHarness();
   await harness.start();
@@ -752,7 +752,7 @@ Bun.serve<WsData>({
     try {
       if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null });
       if (p === "/beam/hello") return Response.json({ hostPubkey, state, ticket });
-      if (p === "/start") return new Response(START_PAGE, { headers: { "content-type": "text/html; charset=utf-8", ...UI_HEADERS } });
+      if (p === "/start") return new Response(startPage(spec?.name ?? "", spec?.agentPubkey ?? ""), { headers: { "content-type": "text/html; charset=utf-8", ...UI_HEADERS } });
 
       if (p === "/internal/computer" && req.method === "POST") {
         if (!sameToken(req.headers.get("x-internal-token"), INTERNAL_TOKEN)) return new Response("forbidden", { status: 403 });
@@ -999,25 +999,30 @@ setInterval(() => {
   if (!desktop) frameHooked = false;
 }, 200);
 
-const MASCOT_HEX: Record<string, string> = { cyan: "#38e1ff", magenta: "#ff4fd8", lime: "#a8ff4f", amber: "#ffb03b", violet: "#b06bff", coral: "#ff6b6b" };
-/** The agent's browser home page: what you see on its screen while it waits for a task. Self-contained, no network,
- * and deliberately still: an animated idle screen would turn every tile into a constant video stream. */
-const START_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ready</title><style>
-html,body{margin:0;height:100%;background:#070a14;color:#e2e8f0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-body{display:grid;place-items:center;background:radial-gradient(60% 60% at 50% 40%,#0f1a33 0%,#070a14 70%)}
-.c{text-align:center}.n{font-size:40px;font-weight:700;letter-spacing:-.02em;margin:18px 0 4px}.s{color:#94a3b8}
-.h{margin-top:28px;font:12px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#64748b}
-</style></head><body><div class="c">
-<svg width="120" height="120" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke-width="3" id="m">
-<line x1="32" y1="6" x2="32" y2="14"/><circle cx="32" cy="5" r="3" stroke="none" id="d"/>
-<rect x="12" y="14" width="40" height="30" rx="12"/><line x1="22" y1="44" x2="18" y2="56"/><line x1="42" y1="44" x2="46" y2="56"/></g>
-<g class="e" style="transform-origin:32px 29px"><circle cx="25" cy="29" r="3.5" id="l"/><circle cx="39" cy="29" r="3.5" id="r"/></g></svg>
-<div class="n" id="name"></div><div class="s">Ready for a task. Message me from Beamhop or a chat app.</div>
-<div class="h">Beamhop agent computer</div></div>
-<script>const q=new URLSearchParams(location.search),c=/^#[0-9a-f]{6}$/i.test(q.get("color")||"")?q.get("color"):"#38e1ff";
-document.getElementById("name").textContent=q.get("name")||"Your agent";document.title=(q.get("name")||"Agent")+" is ready";
-document.getElementById("m").setAttribute("stroke",c);for(const i of["d","l","r"])document.getElementById(i).setAttribute("fill",c);</script>
-</body></html>`;
+/** The agent's browser home page: what you see on its screen while it waits for a task. Self-contained (fonts come
+ * from this same server), same Instrument look as the app, and deliberately still: an animated idle screen would turn
+ * every preview into a constant video stream. Shows the agent's plate (key-derived glyph + callsign) and its name. */
+function startPage(name: string, pubkey: string): string {
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const dots = glyphCells(pubkey || name)
+    .map((on, i) => `<circle cx="${1.5 + (i % 5)}" cy="${1.5 + Math.floor(i / 5)}" r="${on ? 0.4 : 0.13}" fill="${on ? "#2b2924" : "#d6d3cc"}"/>`)
+    .join("");
+  const n = esc(name || "Your agent");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${n} is ready</title><style>
+@font-face{font-family:Mona;src:url(/fonts/mona-sans-latin-wdth-normal.woff2) format("woff2-variations");font-weight:200 900;font-stretch:75% 125%}
+html,body{margin:0;height:100%;background:#ebe9e4;color:#2b2924;font:16px/1.5 Mona,system-ui,sans-serif}
+body{display:grid;place-items:center}
+.c{display:flex;flex-direction:column;align-items:center;gap:20px;text-align:center}
+.p{display:flex;align-items:center;gap:14px}.cs{font-weight:700;font-stretch:115%;letter-spacing:.05em;font-size:22px}
+.n{font-size:44px;font-weight:650;letter-spacing:-.02em;line-height:1.1;margin:0}
+.s{color:#68655e;max-width:30em;margin:0}
+.f{position:fixed;left:0;right:0;bottom:28px;text-align:center;color:#7a776f;font-size:13px}
+</style></head><body><main class="c">
+<div class="p" aria-hidden="true"><svg width="64" height="64" viewBox="0 0 7 7"><rect x=".25" y=".25" width="6.5" height="6.5" rx="1.1" fill="#f6f5f2" stroke="#d6d3cc" stroke-width=".08"/>${dots}</svg><span class="cs">${esc(callsign(name, pubkey))}</span></div>
+<h1 class="n">${n}</h1>
+<p class="s">Free for a task. Message ${n} in Beamhop or in a chat app.</p>
+</main><p class="f">This is ${n}'s own computer. Anything it does happens here, away from your files.</p></body></html>`;
+}
 const UI_HEADERS = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "referrer-policy": "no-referrer" };
 async function serveUi(p: string) {
   const f = Bun.file(`${UI_DIR}${p === "/" || p.includes("..") ? "/index.html" : p}`);

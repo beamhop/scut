@@ -5,48 +5,8 @@ import { cx } from "./cx.ts";
  * callsign from its name (Atlas → ATL, Nova → NOV, Scout → SCT). Monochrome ink. Replaces the robot mascots.
  */
 
-/** 3-letter callsign: first letter + following consonants; falls back to the first three letters. */
-export function callsign(name: string, fallbackHex = ""): string {
-  const words = name.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().match(/[A-Z0-9]+/g) ?? [];
-  if (!words.length) return (fallbackHex.slice(0, 3) || "AGT").toUpperCase();
-  if (words.length >= 3) return words.slice(0, 3).map((w) => w[0]).join("");
-  const w = words[0]!;
-  if (words.length === 2) return (w[0] + words[1][0] + (w.slice(1).replace(/[AEIOU]/g, "")[0] ?? words[1][1] ?? w[1] ?? "X")).slice(0, 3);
-  const cons = w.slice(1).replace(/[AEIOUY]/g, "");
-  if (cons.length >= 2) return w[0] + cons.slice(0, 2);
-  return (w + "XXX").slice(0, 3);
-}
-
-function bytesOf(key: string): number[] {
-  const hex = key.trim().toLowerCase();
-  if (/^[0-9a-f]{16,}$/.test(hex)) return hex.match(/../g)!.map((b) => parseInt(b, 16));
-  // Not a hex key (e.g. no key yet): FNV-1a over the string, stretched to 16 bytes.
-  const out: number[] = [];
-  let h = 0x811c9dc5;
-  for (let round = 0; round < 4; round++) {
-    for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0;
-    h = Math.imul(h ^ round, 0x01000193) >>> 0;
-    out.push(h & 255, (h >>> 8) & 255, (h >>> 16) & 255, h >>> 24);
-  }
-  return out;
-}
-
-/** 25 booleans (row-major, 5×5), left half mirrored onto the right. Deterministic for a given key. */
-export function glyphCells(key: string): boolean[] {
-  const b = bytesOf(key || "beamhop");
-  let best: number[] = [];
-  // Use the first 15-bit window with a balanced amount of ink (6–11 of 15 dots); otherwise the last tried.
-  for (let off = 0; off + 2 <= b.length; off += 2) {
-    const bits = ((b[off] << 8) | b[off + 1]) & 0x7fff;
-    const cells = Array.from({ length: 15 }, (_, i) => (bits >> i) & 1);
-    best = cells;
-    const on = cells.reduce((s, x) => s + x, 0);
-    if (on >= 6 && on <= 11) break;
-  }
-  const grid: boolean[] = [];
-  for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) grid.push(!!best[r * 3 + (c < 3 ? c : 4 - c)]);
-  return grid;
-}
+export { callsign, glyphCells } from "@scut/protocol";
+import { callsign, glyphCells } from "@scut/protocol";
 
 const GLYPH_PX = { sm: 18, md: 28, lg: 44 } as const;
 
