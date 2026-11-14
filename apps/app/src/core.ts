@@ -108,6 +108,19 @@ export class Scut {
     if (changed) await this.save();
   }
 
+  /** First run: the agent computer image (~1.5 GB) downloads in the background while you pick a brain. */
+  prefetch: { state: "idle" | "pulling" | "ready" | "error"; done: number; total: number; error?: string } = { state: "idle", done: 0, total: 0 };
+  private prefetching?: Promise<void>;
+  startPrefetch() {
+    const local = this.drivers.get("local");
+    if (!(local instanceof DockerDriver) || this.prefetching) return;
+    if (DockerDriver.imagePresent(IMAGE)) { this.prefetch = { state: "ready", done: 0, total: 0 }; return; }
+    this.prefetch = { state: "pulling", done: 0, total: 0 };
+    this.prefetching = DockerDriver.pull(IMAGE, (p) => { this.prefetch = { state: "pulling", ...p }; })
+      .then(() => { this.prefetch = { ...this.prefetch, state: "ready" }; })
+      .catch((e) => { this.prefetch = { ...this.prefetch, state: "error", error: String(e?.message ?? e) }; this.prefetching = undefined; });
+  }
+
   async loadDrivers() {
     const p = await loadJson<any>(this.home, "providers.json", {});
     const local = (process.env.SCUT_LOCAL_DRIVER ?? ((await SmolvmDriver.availability()).available ? "smolvm" : "docker")) as string;
@@ -240,6 +253,7 @@ export class Scut {
   }): Promise<AgentRecord> {
     const driver = this.drivers.get(o.driver ?? "local");
     if (!driver) throw new Error(`unknown destination ${o.driver}`);
+    await this.prefetching; // don't start a second download of the same image
     // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
     const saved = await this.brain();
     if (o.model && !o.model.apiKey && saved?.apiKey && saved.baseUrl === o.model.baseUrl) o.model = { ...o.model, apiKey: saved.apiKey };

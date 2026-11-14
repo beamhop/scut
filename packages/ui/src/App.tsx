@@ -460,6 +460,17 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [check, setCheck] = useState<{ busy?: boolean; error?: string; failed?: boolean }>({});
   const [models, setModels] = useState<string[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pf, setPf] = useState<{ state: string; done: number; total: number; error?: string }>();
+  useEffect(() => {
+    let t: any;
+    const poll = async () => {
+      const p = await fetch("/api/prefetch").then((r) => r.json()).catch(() => null);
+      setPf(p);
+      if (p?.state === "pulling") t = setTimeout(poll, 2000);
+    };
+    poll();
+    return () => clearTimeout(t);
+  }, []);
   const last = 1;
   useEffect(() => {
     api.brain().then((b) => {
@@ -582,6 +593,13 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
             </details>
           </div>
         )}
+        {pf?.state === "pulling" && (
+          <div className="mt-4 space-y-1 text-xs text-slate-400" role="status">
+            <div>Getting your agents' computer ready (first time only){pf.total ? `: ${pf.done} of ${pf.total} parts` : "…"}</div>
+            <div className="h-1 overflow-hidden rounded bg-white/10"><div className="h-full bg-beam transition-all" style={{ width: `${pf.total ? Math.round((100 * pf.done) / pf.total) : 5}%` }} /></div>
+          </div>
+        )}
+        {pf?.state === "error" && <div className="mt-4 rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{pf.error} Check your internet connection; it will retry when you create the agent.</div>}
         {error && <div className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">Couldn't start the agent: {error}</div>}
         <div className="mt-6 flex justify-between">
           {/* On the very first screen there's nothing to cancel back to */}
@@ -590,7 +608,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
             <button disabled={check.busy || (!model.apiKey && !usesSavedKey && kind !== "ollama")} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={next}>{check.busy ? "Checking…" : check.failed ? "Continue anyway" : "Next"}</button>
           ) : (
             <button disabled={busy || (!prompt.trim() && !name.trim())} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={go}>
-              {busy ? "Beaming in… (~10 s)" : "Create agent"}
+              {busy ? (pf?.state === "pulling" ? "Waiting for the download…" : "Beaming in… (~10 s)") : "Create agent"}
             </button>
           )}
         </div>

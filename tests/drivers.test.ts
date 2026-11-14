@@ -21,3 +21,16 @@ test.skipIf(!avail.available)("smolvm boots the agent image and serves /health",
     await d.destroy(inst);
   }
 });
+
+test("docker pull reports layer progress (used for the first-run download)", async () => {
+  const { DockerDriver } = await import("../packages/drivers/src/docker.ts");
+  const img = "mirror.gcr.io/library/alpine:3.20";
+  Bun.spawnSync(["docker", "rmi", "-f", img], { stdout: "ignore", stderr: "ignore" });
+  expect(DockerDriver.imagePresent(img)).toBe(false);
+  const seen: { done: number; total: number }[] = [];
+  await DockerDriver.pull(img, (p) => seen.push(p));
+  expect(DockerDriver.imagePresent(img)).toBe(true);
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.at(-1)!.done).toBe(seen.at(-1)!.total);
+  await expect(DockerDriver.pull("mirror.gcr.io/library/does-not-exist-beamhop:0")).rejects.toThrow("Couldn't download");
+}, 120_000);

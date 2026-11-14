@@ -111,6 +111,7 @@ switch (cmd) {
     const crew = process.env.SCUT_NO_CREW ? undefined : new CrewRoom(scut);
     await crew?.start();
     const srv = serve(scut, port, ui, crew);
+    scut.startPrefetch();
     const url = `http://127.0.0.1:${srv.port}`;
     console.log(`Beamhop running at ${url}`);
     if (!process.env.SCUT_NO_WINDOW && cmd === undefined) openWindow(url);

@@ -14,6 +14,36 @@ export class DockerDriver implements HostDriver {
   }
   private host: string;
 
+  static imagePresent(image: string): boolean {
+    return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  }
+
+  /** Download the agent image, reporting layers done/total as docker prints them. */
+  static async pull(image: string, onProgress?: (p: { done: number; total: number }) => void): Promise<void> {
+    const p = Bun.spawn(["docker", "pull", image], { stdout: "pipe", stderr: "pipe" });
+    const layers = new Map<string, string>();
+    let rest = "";
+    for await (const chunk of p.stdout as ReadableStream<Uint8Array>) {
+      rest += new TextDecoder().decode(chunk);
+      const lines = rest.split("\n");
+      rest = lines.pop() ?? "";
+      for (const line of lines) {
+        const m = line.match(/^([0-9a-f]{12}): (.+)$/);
+        if (!m) continue;
+        // Config blobs only ever say "Download complete"; real layers also say "Pulling fs layer", "Waiting", etc.
+        const prev = layers.get(m[1]);
+        let next: "done" | "blob" | "layer";
+        if (prev === "done" || /Pull complete|Already exists/.test(m[2])) next = "done";
+        else if (m[2] === "Download complete" && (!prev || prev === "blob")) next = "blob";
+        else next = "layer";
+        layers.set(m[1], next);
+        const real = [...layers.values()].filter((v) => v !== "blob");
+        onProgress?.({ done: real.filter((v) => v === "done").length, total: real.length });
+      }
+    }
+    if ((await p.exited) !== 0) throw new Error(`Couldn't download the agent computer: ${(await new Response(p.stderr).text()).trim().slice(-300)}`);
+  }
+
   async create(o: CreateOpts): Promise<Instance> {
     const name = `scut-${o.name}`;
     const envArgs = Object.entries(o.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);

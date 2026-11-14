@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.44.0 — The first download, in the open
+
+- On a fresh install, the agent computer (a multi-GB image) used to download silently inside "Create agent", while the button promised "~10 s" and the app's server sat blocked. Now the app starts the download in the background as soon as it opens, and the welcome screen shows a progress bar ("Getting your agents' computer ready (first time only): 3 of 7 parts") while you pick a brain. Creating waits for it instead of starting a second download; a failed download is explained and retried on create.
+- Test: pulling an image reports layer progress until every layer is done, and a missing image fails with a plain message.
+
 ## v0.43.1 — First-run polish
 
 - The very first screen no longer has a Cancel button that just reopened itself.

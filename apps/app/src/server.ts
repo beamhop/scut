@@ -121,6 +121,7 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             return json({ error: String(e?.message ?? e) }); // a wrong passphrase is an answer, not a server error
           }
         }
+        if (p === "/api/prefetch") return json(scut.prefetch);
         if (p === "/api/brain" && req.method === "GET") {
           const b = await scut.brain();
           return json(b ? { api: b.api, baseUrl: b.baseUrl, model: b.model, hasKey: !!b.apiKey } : null);
