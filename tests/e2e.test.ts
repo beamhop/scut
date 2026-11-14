@@ -547,3 +547,21 @@ describe("v0.16: skills", () => {
     c.close();
   });
 });
+
+describe("v0.21: the brain is remembered", () => {
+  test("a second agent reuses the saved key; bad keys are caught before creating", async () => {
+    const model = { provider: "scut", api: "openai-completions" as const, baseUrl: `http://host.docker.internal:${llm.port}/v1`, model: "mock-vision" };
+    expect((await Scut.verifyModel({ ...model, apiKey: "bad" })).ok).toBe(false);
+    expect(await Scut.verifyModel({ ...model, apiKey: "k-first" })).toMatchObject({ ok: true, modelFound: true });
+    const a = await scut.create({ name: "Firsty", harness: "pi", model: { ...model, apiKey: "k-first" } });
+    expect((await scut.brain())?.apiKey).toBe("k-first");
+    const b = await scut.create({ name: "Secondy", harness: "pi", model }); // no key given
+    const c = await client(b.id);
+    const before = llm.auths.length;
+    c.send({ t: "chat", text: "hello" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent", 120_000);
+    expect(llm.auths.slice(before)).toContain("Bearer k-first");
+    c.close();
+    void a;
+  });
+});

@@ -2,14 +2,19 @@
 // Turn 1: calls the first tool whose name contains "screenshot". Turn 2 (after the tool result): replies with a summary.
 export function startMockLlm(port = 0) {
   const requests: any[] = [];
+  const auths: string[] = [];
   const server = Bun.serve({
     port,
     hostname: "0.0.0.0",
     async fetch(req) {
       const url = new URL(req.url);
-      if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "mock-vision" }] });
+      if (url.pathname.endsWith("/models")) {
+        if (req.headers.get("authorization") === "Bearer bad") return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
+        return Response.json({ data: [{ id: "mock-vision" }] });
+      }
       if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 });
       const body = (await req.json()) as any;
+      auths.push(req.headers.get("authorization") ?? "");
       requests.push(body);
       const msgs: any[] = body.messages ?? [];
       const last = msgs.at(-1);
@@ -60,5 +65,5 @@ export function startMockLlm(port = 0) {
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });
     },
   });
-  return { server, requests, port: server.port };
+  return { server, requests, auths, port: server.port };
 }

@@ -19,6 +19,9 @@ const api = {
   create: (body: unknown) => fetch("/api/agents", { method: "POST", body: JSON.stringify(body) }).then((r) => r.json()),
   beam: (id: string, to: string) => fetch(`/api/agents/${id}/beam`, { method: "POST", body: JSON.stringify({ to }) }).then((r) => r.json()),
   remove: (id: string) => fetch(`/api/agents/${id}`, { method: "DELETE" }).then((r) => r.json()),
+  brain: (): Promise<{ api: string; baseUrl: string; model: string; hasKey: boolean } | null> => fetch("/api/brain").then((r) => r.json()).catch(() => null),
+  verifyBrain: (m: unknown): Promise<{ ok: boolean; error?: string; modelFound?: boolean }> =>
+    fetch("/api/brain/verify", { method: "POST", body: JSON.stringify(m) }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) })),
 };
 
 const SCREEN = { w: 1280, h: 800 };
@@ -376,7 +379,26 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [npub, setNpub] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [brain, setBrain] = useState<Awaited<ReturnType<typeof api.brain>>>();
+  const [check, setCheck] = useState<{ busy?: boolean; error?: string; failed?: boolean }>({});
   const last = 1;
+  useEffect(() => {
+    api.brain().then((b) => {
+      setBrain(b);
+      if (!b) { if (!firstRun) setStep(0); return; }
+      const k = Object.entries(PRESETS).find(([, p]) => p.baseUrl === b.baseUrl)?.[0];
+      if (k) setKind(k);
+      setModel({ baseUrl: b.baseUrl, model: b.model, apiKey: "" });
+    });
+  }, []);
+  const usesSavedKey = !!brain?.hasKey && brain.baseUrl === model.baseUrl && !model.apiKey;
+  async function next() {
+    if (check.failed) { setCheck({}); setStep(1); return; } // "Continue anyway"
+    setCheck({ busy: true });
+    const r = await api.verifyBrain({ provider: "scut", api: PRESETS[kind].api, baseUrl: model.baseUrl, apiKey: model.apiKey || undefined, model: model.model });
+    if (r.ok && r.modelFound !== false) { setCheck({}); setStep(1); return; }
+    setCheck({ failed: true, error: r.ok ? `The key works, but "${model.model}" isn't offered there. Pick another model under Advanced.` : r.error });
+  }
 
   async function go() {
     setBusy(true);
@@ -403,7 +425,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
           <Mascot variant="violet" size={48} state={busy ? "busy" : "running"} />
           <div>
             <div className="text-xl font-semibold">{firstRun ? "Welcome to Beamhop" : "New agent"}</div>
-            <div className="text-sm text-slate-400">{step === 0 ? "Step 1 of 2 · Pick a brain" : `${firstRun ? "Step 2 of 2 · " : ""}What should your agent do?`}</div>
+            <div className="text-sm text-slate-400">{step === 0 ? (firstRun ? "Step 1 of 2 · Pick a brain" : "Pick a brain") : `${firstRun ? "Step 2 of 2 · " : ""}What should your agent do?`}</div>
           </div>
         </div>
 
@@ -416,7 +438,8 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 </button>
               ))}
             </div>
-            <input className={input} aria-label="API key" placeholder={`API key (${PRESETS[kind].keyHint}) — stays inside your agent`} type="password" value={model.apiKey} onChange={(e) => setModel({ ...model, apiKey: e.target.value })} />
+            <input className={input} aria-label="API key" placeholder={usesSavedKey ? "Using your saved key — paste a new one to replace it" : `API key (${PRESETS[kind].keyHint}) — stays on this computer and inside your agents`} type="password" value={model.apiKey} onChange={(e) => { setModel({ ...model, apiKey: e.target.value }); setCheck({}); }} />
+            {check.error && <div role="alert" className="rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{check.error}</div>}
             <details className="text-sm text-slate-400">
               <summary className="cursor-pointer">Advanced: endpoint and model</summary>
               <div className="mt-2 grid grid-cols-2 gap-2">
@@ -424,11 +447,17 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 <input className={input} aria-label="Model" value={model.model} onChange={(e) => setModel({ ...model, model: e.target.value })} />
               </div>
             </details>
-            <p className="text-xs text-slate-400">Have a Claude or ChatGPT subscription? Choose Codex or Copilot CLI under More options next, then sign in on the agent's own screen.</p>
+            <p className="text-xs text-slate-400">Have a ChatGPT or GitHub Copilot subscription instead? <button onClick={() => { setCheck({}); setStep(1); }} className="text-beam hover:underline">Skip this</button>, choose Codex or Copilot CLI under More options, then sign in on the agent's own screen.</p>
           </div>
         )}
         {step === 1 && (
           <div className="space-y-4">
+            {!firstRun && brain && (
+              <div className="flex items-center gap-2 text-sm text-slate-400">
+                <span>Brain: <span className="text-slate-200">{Object.values(PRESETS).find((p) => p.baseUrl === model.baseUrl)?.label ?? model.baseUrl}</span> · <span className="font-mono text-[12px]">{model.model}</span></span>
+                <button onClick={() => setStep(0)} className="text-beam hover:underline">Change</button>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2">
               {TEMPLATES.map((t) => (
                 <button key={t.id} className={`${card} ${template === t.id ? "border-beam" : "border-white/10"}`} onClick={() => setTemplate(t.id)}>
@@ -461,9 +490,9 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
         )}
         {error && <div className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">Couldn't start the agent: {error}</div>}
         <div className="mt-6 flex justify-between">
-          <button className="text-slate-400 hover:text-white" onClick={() => (firstRun && step > 0 ? setStep(step - 1) : onDone())}>{firstRun && step > 0 ? "Back" : "Cancel"}</button>
+          <button className="text-slate-400 hover:text-white" onClick={() => (firstRun && step > 0 ? setStep(step - 1) : !firstRun && step === 0 && brain ? setStep(1) : onDone())}>{(firstRun && step > 0) || (!firstRun && step === 0 && brain) ? "Back" : "Cancel"}</button>
           {step < last ? (
-            <button className="rounded-full bg-beam px-6 py-2 font-semibold text-black" onClick={() => setStep(step + 1)}>Next</button>
+            <button disabled={check.busy || (!model.apiKey && !usesSavedKey && kind !== "ollama")} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={next}>{check.busy ? "Checking…" : check.failed ? "Continue anyway" : "Next"}</button>
           ) : (
             <button disabled={busy || (!prompt.trim() && !name.trim())} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={go}>
               {busy ? "Beaming in… (~10 s)" : "Create agent"}

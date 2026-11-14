@@ -1,5 +1,6 @@
 // Local app server: serves the UI and a small API. The desktop shell opens this in a webview.
-import type { Scut } from "./core.ts";
+import { Scut } from "./core.ts";
+import type { ModelConfig } from "@scut/protocol";
 import { FlyDriver, RailwayDriver, RenderDriver } from "@scut/drivers";
 import type { CrewRoom } from "./crew.ts";
 
@@ -64,6 +65,16 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             scut.beam(rec.id, to).catch((e) => console.error("beam failed", e));
             return json({ ok: true });
           }
+        }
+        if (p === "/api/brain" && req.method === "GET") {
+          const b = await scut.brain();
+          return json(b ? { api: b.api, baseUrl: b.baseUrl, model: b.model, hasKey: !!b.apiKey } : null);
+        }
+        if (p === "/api/brain/verify" && req.method === "POST") {
+          const m = (await req.json()) as ModelConfig;
+          const saved = await scut.brain();
+          if (!m.apiKey && saved?.baseUrl === m.baseUrl) m.apiKey = saved!.apiKey;
+          return json(await Scut.verifyModel(m));
         }
         if (p === "/api/providers" && req.method === "POST") {
           const { id, token } = (await req.json()) as { id: string; token: string };

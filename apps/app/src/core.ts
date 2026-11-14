@@ -5,7 +5,7 @@ import {
 } from "@scut/protocol";
 import { DockerDriver, FlyDriver, RailwayDriver, RenderDriver, SmolvmDriver, waitHealthy, type HostDriver, type Instance } from "@scut/drivers";
 import type { Event } from "nostr-tools";
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
 export const IMAGE = process.env.SCUT_IMAGE ?? "ghcr.io/beamhop/scut-agent:latest";
@@ -68,6 +68,42 @@ export class Scut {
     if (p.fly?.token) this.drivers.set("fly", new FlyDriver(p.fly.token, p.fly.org, p.fly.region));
     if (p.render?.token) this.drivers.set("render", new RenderDriver(p.render.token, p.render.ownerId));
     if (p.railway?.token) this.drivers.set("railway", new RailwayDriver(p.railway.token, p.railway.projectId, p.railway.environmentId));
+  }
+
+  /** The remembered brain (model endpoint + key). Stored only on this computer, readable only by you. */
+  async brain(): Promise<ModelConfig | undefined> {
+    return loadJson<ModelConfig | undefined>("brain.json", undefined);
+  }
+  async saveBrain(m: ModelConfig) {
+    await saveJson("brain.json", m);
+    await chmod(`${HOME}/brain.json`, 0o600).catch(() => {});
+  }
+
+  /** Check a model endpoint + key before an agent depends on it. Never throws: returns a plain-language answer. */
+  static async verifyModel(m: ModelConfig): Promise<{ ok: boolean; error?: string; modelFound?: boolean }> {
+    // host.docker.internal is how agents reach this computer; from the app itself it is just localhost.
+    const base = (m.baseUrl ?? "").replace(/\/+$/, "").replace("host.docker.internal", "127.0.0.1");
+    if (!base) return { ok: false, error: "Missing endpoint URL" };
+    try {
+      let r: Response;
+      if (m.api === "anthropic-messages") {
+        r = await fetch(`${base}/v1/models`, { headers: { "x-api-key": m.apiKey ?? "", "anthropic-version": "2023-06-01" }, signal: AbortSignal.timeout(10_000) });
+      } else if (/openrouter\.ai/.test(base)) {
+        r = await fetch(`${base}/key`, { headers: { authorization: `Bearer ${m.apiKey ?? ""}` }, signal: AbortSignal.timeout(10_000) });
+        if (r.ok) {
+          const list = (await (await fetch(`${base}/models`, { signal: AbortSignal.timeout(10_000) })).json().catch(() => ({ data: [] }))) as { data?: { id: string }[] };
+          return { ok: true, modelFound: !!list.data?.some((x) => x.id === m.model) };
+        }
+      } else {
+        r = await fetch(`${base}/models`, { headers: m.apiKey ? { authorization: `Bearer ${m.apiKey}` } : {}, signal: AbortSignal.timeout(10_000) });
+      }
+      if (r.status === 401 || r.status === 403) return { ok: false, error: "That key was rejected — check it and paste it again" };
+      if (!r.ok) return { ok: false, error: `The endpoint answered ${r.status}` };
+      const list = (await r.json().catch(() => ({}))) as { data?: { id: string }[] };
+      return { ok: true, modelFound: list.data ? list.data.some((x) => x.id === m.model) : undefined };
+    } catch (e: any) {
+      return { ok: false, error: /timeout|abort/i.test(String(e?.name ?? e)) ? "No answer from that endpoint" : `Couldn't reach it: ${String(e?.message ?? e).slice(0, 120)}` };
+    }
   }
 
   async saveProvider(id: string, cfg: Record<string, string>) {
@@ -154,6 +190,9 @@ export class Scut {
   }): Promise<AgentRecord> {
     const driver = this.drivers.get(o.driver ?? "local");
     if (!driver) throw new Error(`unknown destination ${o.driver}`);
+    // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
+    const saved = await this.brain();
+    if (o.model && !o.model.apiKey && saved?.apiKey && saved.baseUrl === o.model.baseUrl) o.model = { ...o.model, apiKey: saved.apiKey };
     const agentSk = generateSecretKey();
     const id = `${o.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${bytesToHex(crypto.getRandomValues(new Uint8Array(3)))}`;
     const spec: AgentSpec = {
@@ -197,6 +236,7 @@ export class Scut {
     }
     const rec: AgentRecord = { id, name: o.name, mascot: spec.mascot!, harness: spec.harness, agentPubkey: spec.agentPubkey, model: o.model && { baseUrl: o.model.baseUrl, model: o.model.model }, nostr: !!o.nostr, current: inst, history: [] };
     this.agents.push(rec);
+    if (o.model?.apiKey && o.model.apiKey !== saved?.apiKey) await this.saveBrain(o.model);
     await this.save();
     await this.syncCrew();
     return rec;

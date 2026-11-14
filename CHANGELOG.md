@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.21.0 — The brain is remembered and checked
+
+- Fixed: agents created after the first one got no API key. The app now remembers your brain (endpoint, model, key) in `~/.scut/brain.json` (readable only by you), and new agents reuse it. New agent shows "Brain: OpenRouter · model — Change".
+- "Pick a brain" checks the key before moving on (OpenRouter, OpenAI-compatible, Anthropic, Ollama): a rejected key, an unreachable endpoint, or a model the provider doesn't offer is explained in plain words, with "Continue anyway".
+- "Skip this" on the brain step for people using a Codex or Copilot subscription.
+- Tests: UI test for the key check, e2e test that a second agent uses the saved key.
+
 ## v0.20.0 — Clean typecheck
 
 - The whole repo now typechecks cleanly (`bun run typecheck`), and CI fails if it doesn't.

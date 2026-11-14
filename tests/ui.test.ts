@@ -11,6 +11,8 @@ process.env.SCUT_IMAGE ??= "ghcr.io/beamhop/scut-agent:dev";
 // Mock Fly Machines API for the add-a-cloud flow: token "good" is valid.
 const fly = Bun.serve({ port: 0, fetch: (req) => (req.headers.get("authorization") === "Bearer good" ? Response.json([]) : new Response("unauthorized", { status: 401 })) });
 process.env.SCUT_FLY_API = `http://127.0.0.1:${fly.port}/v1`;
+// Mock OpenAI-compatible endpoint for the brain check: key "good" works, anything else is rejected.
+const llm = Bun.serve({ port: 0, fetch: (req) => (req.headers.get("authorization") === "Bearer good" ? Response.json({ data: [{ id: "m1" }] }) : Response.json({ error: "bad key" }, { status: 401 })) });
 const { Scut } = await import("../apps/app/src/core.ts");
 const { serve } = await import("../apps/app/src/server.ts");
 
@@ -38,6 +40,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   fly.stop(true);
+  llm.stop(true);
   for (const a of [...scut.agents]) await scut.remove(a.id).catch(() => {});
 });
 
@@ -47,6 +50,30 @@ test("first run shows the guided setup", async () => {
   const text = await page.$eval('[role="dialog"]', (el) => el.textContent ?? "");
   expect(text).toContain("Welcome to Beamhop");
   expect(text).toContain("Pick a brain");
+  await page.close();
+});
+
+test("the brain step checks the key before moving on", async () => {
+  const page = await open("/");
+  await page.waitForSelector('input[aria-label="API key"]', { timeout: 10_000 });
+  await page.evaluate(() => document.querySelector("details")!.setAttribute("open", ""));
+  const setVal = async (label: string, v: string) => {
+    await page.focus(`input[aria-label="${label}"]`);
+    await page.keyboard.down("Control"); await page.keyboard.press("a"); await page.keyboard.up("Control");
+    await page.keyboard.press("Backspace");
+    await page.type(`input[aria-label="${label}"]`, v);
+  };
+  await setVal("Base URL", `http://127.0.0.1:${llm.port}/v1`);
+  await setVal("Model", "m1");
+  await setVal("API key", "bad");
+  const clickBtn = (t: string) => page.evaluate((t) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === t)!.dispatchEvent(new MouseEvent("click", { bubbles: true })), t);
+  await clickBtn("Next");
+  await page.waitForSelector('[role="alert"]', { timeout: 15_000 });
+  expect(await page.$eval('[role="alert"]', (e) => e.textContent)).toContain("rejected");
+  expect(await page.evaluate(() => document.body.textContent!.includes("Continue anyway"))).toBe(true);
+  await setVal("API key", "good");
+  await clickBtn("Next");
+  await page.waitForFunction(() => document.body.textContent!.includes("What should your agent do?"), { timeout: 15_000 });
   await page.close();
 });
 
@@ -115,6 +142,10 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.waitForFunction(() => document.body.innerText.includes("New agent"), { timeout: 10_000 });
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "+ New agent")!.click());
   await page.waitForSelector('[role="dialog"]');
+  // no brain saved yet, so it starts at "Pick a brain"; the demo needs none
+  await page.waitForFunction(() => document.body.textContent!.includes("Pick a brain"), { timeout: 10_000 });
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Skip this")!.click());
+  await page.waitForSelector('[aria-label="Name"]');
   await page.type('[aria-label="Name"]', "Uiborn");
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Create agent"))!.click());
