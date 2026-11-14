@@ -1417,6 +1417,8 @@ function CrewApp() {
   }, [agents, status]);
   const open = useMemo(() => agents.find((x) => route === `#/agent/${x.id}`), [agents, route]);
   const needCount = Object.values(status).filter((s) => s === "stuck").length;
+  // The window title carries the count, so a waiting approval shows in the taskbar/dock while you're elsewhere.
+  useEffect(() => { document.title = needCount ? `(${needCount}) Beamhop — ${needCount === 1 ? "an agent needs" : "agents need"} you` : "Beamhop"; }, [needCount]);
 
   if (open) return <>{toasts.view}{fileDialogs}<AgentView agent={open} dests={dests} onBack={() => (location.hash = "")} onBeam={(to) => beam(open.id, to)} /></>;
 

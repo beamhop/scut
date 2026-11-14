@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.42.1 — Needs-you in the title
+
+- The window title shows how many agents need you ("(2) Beamhop — agents need you"), so a waiting approval is visible in the taskbar or dock while you're in another app.
+- Full live suite re-run on real services: 9/9 across runs; the Copilot CLI test occasionally fails fast on a provider error and passes on retry.
+
 ## v0.42.0 — Approvals can wait for you
 
 - **Fixed a real bug:** if you took more than a minute to answer an approval, the agent's tool call timed out ("MCP request timed out after 60000ms") and the model carried on without your answer. Now:
