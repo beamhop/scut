@@ -3,7 +3,7 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  type CrewMember, type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type CrewMember, type MemoryItem, type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -48,6 +48,15 @@ const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
 let paused = false;
 let crew: CrewMember[] = [];
+let memory: MemoryItem[] = [];
+async function saveMemory() {
+  await Bun.write(`${DATA}/memory.json`, JSON.stringify(memory, null, 2));
+  broadcast({ t: "memory", items: memory });
+}
+function memoryPreamble() {
+  if (!memory.length) return "";
+  return `[Things you remember — use them when relevant]\n${memory.map((m) => `- ${m.text}`).join("\n")}\n[End of memories]\n\n`;
+}
 // Loop guard: at most CREW_AGENT_LIMIT replies to other agents per window; the owner is never rate limited.
 const CREW_AGENT_LIMIT = Number(process.env.SCUT_CREW_AGENT_LIMIT ?? 4);
 const CREW_WINDOW_MS = 10 * 60_000;
@@ -114,7 +123,8 @@ const approvals = new Map<string, (ok: boolean, by: string) => void>();
 const pendingApprovals = new Map<string, Extract<ServerMsg, { t: "approval.request" }>>();
 function requestApproval(title: string, detail?: string): Promise<boolean> {
   const id = bytesToHex(crypto.getRandomValues(new Uint8Array(6)));
-  const req = { t: "approval.request" as const, id, title, detail, ts: Date.now() };
+  const shot = desktop?.latest ? `data:image/jpeg;base64,${Buffer.from(desktop.latest).toString("base64")}` : undefined;
+  const req = { t: "approval.request" as const, id, title, detail, ts: Date.now(), shot };
   pendingApprovals.set(id, req);
   broadcast(req);
   for (const c of channels) {
@@ -151,6 +161,22 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     const ok = await postCrew(String(a.text ?? ""));
     return Response.json({ ok });
   }
+  if (a.kind === "remember") {
+    const item: MemoryItem = { id: bytesToHex(crypto.getRandomValues(new Uint8Array(4))), text: String(a.text ?? "").slice(0, 500), ts: Date.now(), source: "agent" };
+    if (item.text) {
+      memory.push(item);
+      if (memory.length > 200) memory.shift();
+      await saveMemory();
+      narrate(`Remembered: ${item.text.slice(0, 60)}`);
+    }
+    return Response.json({ ok: true, id: item.id });
+  }
+  if (a.kind === "forget") {
+    memory = memory.filter((m) => m.id !== a.id);
+    await saveMemory();
+    return Response.json({ ok: true });
+  }
+  if (a.kind === "memories") return Response.json({ items: memory });
   if (a.kind === "crew_list") return Response.json({ members: crew.map((c) => ({ name: c.name, kind: c.kind })) });
   if (a.kind === "approval") {
     const ok = await requestApproval(String(a.title), a.detail);
@@ -204,7 +230,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
     }
     setState("busy");
     try {
-      const reply = await harness.prompt(text, (e) => {
+      const reply = await harness.prompt(memoryPreamble() + text, (e) => {
         if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${e.name}`);
         if (e.type === "usage") {
           tokens.input += e.input;
@@ -342,6 +368,7 @@ async function run() {
   }
   schedules = (await readJson<Schedule[]>(`${DATA}/schedules.json`)) ?? [];
   crew = (await readJson<CrewMember[]>(`${DATA}/crew.json`)) ?? [];
+  memory = (await readJson<MemoryItem[]>(`${DATA}/memory.json`)) ?? [];
   try {
     const lines = (await readFile(`${DATA}/chat.jsonl`, "utf8")).trim().split("\n").filter(Boolean).slice(-500);
     chatLog.splice(0, chatLog.length, ...lines.map((l) => JSON.parse(l)));
@@ -553,6 +580,7 @@ Bun.serve<WsData>({
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
       ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
+      ws.send(JSON.stringify({ t: "memory", items: memory } satisfies ServerMsg));
     },
     async message(ws, raw) {
       let m: ClientMsg;
@@ -600,6 +628,11 @@ Bun.serve<WsData>({
       } else if (m.t === "crew" && Array.isArray(m.members)) {
         crew = m.members.slice(0, 50);
         await Bun.write(`${DATA}/crew.json`, JSON.stringify(crew, null, 2));
+      } else if (m.t === "memory") {
+        if (m.op === "add" && m.text?.trim()) memory.push({ id: bytesToHex(crypto.getRandomValues(new Uint8Array(4))), text: m.text.trim().slice(0, 500), ts: Date.now(), source: "owner" });
+        if (m.op === "delete") memory = memory.filter((x) => x.id !== m.id);
+        if (m.op === "edit" && m.text?.trim()) memory = memory.map((x) => (x.id === m.id ? { ...x, text: m.text!.trim().slice(0, 500) } : x));
+        await saveMemory();
       } else if (m.t === "pause") {
         paused = !!m.paused;
         narrate(paused ? "You have control — agent paused" : "Control handed back");

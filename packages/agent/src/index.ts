@@ -40,6 +40,7 @@ export function systemPromptFor(spec: AgentSpec): string {
     role,
     spec.persona ? `Persona: ${spec.persona}` : "",
     "Use the `computer` MCP tools (screenshot, click, type_text, key, scroll, open_url) to operate your computer.",
+    "When you learn something durable about your owner or your work (preferences, names, decisions), save it with the remember tool.",
     "Take a screenshot before acting and after each important step.",
     "Before payments, sending messages to new contacts, deleting data, or entering credentials, call request_approval and wait.",
     "Your human may move their own cursor on your screen at the same time; do not fight it.",

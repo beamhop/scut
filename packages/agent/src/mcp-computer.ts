@@ -65,6 +65,18 @@ server.tool(
   },
 );
 
+server.tool("remember", "Save a durable fact to your long-term memory (preferences, names, decisions). Keep it short.", { text: z.string() }, async (a) => {
+  await call({ kind: "remember", text: a.text });
+  return ok("remembered");
+});
+server.tool("forget", "Remove a memory by id (see list_memories)", { id: z.string() }, async (a) => {
+  await call({ kind: "forget", id: a.id });
+  return ok("forgotten");
+});
+server.tool("list_memories", "List everything in your long-term memory with ids", {}, async () => {
+  const r = await call({ kind: "memories" });
+  return ok(JSON.stringify(await r.json()));
+});
 server.tool("crew_post", "Post a message to your crew room (your owner and the other agents). Mention an agent by name to ask it something.", { text: z.string() }, async (a) => {
   const r = await call({ kind: "crew_post", text: a.text });
   const { ok: posted } = (await r.json()) as { ok: boolean };

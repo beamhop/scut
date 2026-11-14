@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.14.0 — 2026-11-14 02:58
+
+- Memory: each agent keeps a long-term memory in `/data/memory.json` (so it beams along). The agent saves facts itself with new MCP tools `remember`, `forget`, `list_memories`; you can add and delete memories in Settings → Memory. Memories are given to the agent with every prompt.
+- Approval requests now include a screenshot of the agent's screen at the moment it asked, shown in the approval card, so you can see what you're approving.
+- Tests: Pi (via a mock model) saves a memory with the `remember` tool; owner memories reach the prompt and survive a beam; approvals carry a screenshot. 25/25 e2e, 8/8 UI.
+
 ## v0.13.0 — 2026-11-14 02:54
 
 A fresh-eyes design review (separate reviewer, screenshots of every screen) drove this release.

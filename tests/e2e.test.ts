@@ -436,3 +436,48 @@ describe("big workspaces", () => {
     expect(after).toBe(before);
   });
 });
+
+describe("v0.14: memory and approval screenshots", () => {
+  test("owner memories reach the agent on every prompt and survive a beam", async () => {
+    const rec = await scut.create({ name: "Memento", harness: "mock" });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "memory");
+    c.send({ t: "memory", op: "add", text: "Owner prefers Dutch" });
+    await c.waitFor<any>((m) => m.t === "memory" && m.items.length === 1);
+    c.close();
+    await scut.beam(rec.id, "sim-cloud", { destroySource: true });
+    const c2 = await client(rec.id);
+    const mem = await c2.waitFor<any>((m) => m.t === "memory");
+    expect(mem.items[0].text).toBe("Owner prefers Dutch");
+    c2.send({ t: "chat", text: "hi" });
+    await c2.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    const name = (scut.get(rec.id).current as any).meta.name;
+    const log = Bun.spawnSync(["docker", "exec", name, "cat", "/data/workspace/mock-log.txt"], { stdout: "pipe" }).stdout.toString();
+    expect(log).toContain("Owner prefers Dutch"); // the memory preamble was part of the prompt
+    c2.close();
+  });
+
+  test("the agent saves memories with the remember tool (Pi)", async () => {
+    const rec = await scut.create({
+      name: "Pi Memory",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "REMEMBER: owner's dog is called Bolt" });
+    const mem = await c.waitFor<any>((m) => m.t === "memory" && m.items.some((x: any) => x.text.includes("Bolt")), 120_000);
+    expect(mem.items.find((x: any) => x.text.includes("Bolt")).source).toBe("agent");
+    c.close();
+  });
+
+  test("approval requests carry a screenshot of the moment", async () => {
+    const rec = await scut.create({ name: "Shutter", harness: "mock", autonomy: "ask" });
+    const c = await client(rec.id);
+    await Bun.sleep(1500);
+    c.send({ t: "chat", text: "open https://example.com" });
+    const req = await c.waitFor<any>((m) => m.t === "approval.request");
+    expect(req.shot?.startsWith("data:image/jpeg;base64,")).toBe(true);
+    c.send({ t: "approval", id: req.id, ok: false });
+    c.close();
+  });
+});

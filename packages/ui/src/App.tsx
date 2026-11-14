@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule } from "@scut/protocol";
+import type { ServerMsg, AgentState, Schedule, MemoryItem } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
 import qrcode from "qrcode-generator";
 
@@ -34,7 +34,7 @@ const STAGE_LABEL: Record<string, string> = {
 
 // ---------------- agent socket ----------------
 type ChatLine = { from: string; channel: string; text: string; ts: number };
-type Approval = { id: string; title: string; detail?: string; ts: number };
+type Approval = { id: string; title: string; detail?: string; ts: number; shot?: string };
 type Settings = Extract<ServerMsg, { t: "settings" }>;
 type Pairing = Omit<Extract<ServerMsg, { t: "pairing" }>, "t">;
 function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
@@ -50,6 +50,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [connected, setConnected] = useState(false);
   const [paused, setPaused] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [memory, setMemory] = useState<MemoryItem[]>([]);
   const ws = useRef<WebSocket | null>(null);
   const outbox = useRef<string[]>([]);
   const endpoint = agent?.current.endpoint;
@@ -90,6 +91,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
         else if (m.t === "pairing") setPairing(m);
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
+        else if (m.t === "memory") setMemory(m.items);
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
         else if (m.t === "approval.request") {
           setApprovals((a) => [...a, m]);
@@ -111,7 +113,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
     if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
     else outbox.current.push(JSON.stringify(m));
   }, []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, send };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, send };
 }
 
 // ---------------- mascot: one base bot, silhouettes differ per variant, visor shows status ----------------
@@ -563,7 +565,8 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
         {a.approvals.map((ap) => (
           <div key={ap.id} role="alertdialog" aria-label="Approval needed" className="w-80 rounded-xl bg-amber-400 p-3 text-black shadow-xl">
             <div className="text-xs font-bold uppercase">{agent.name} wants to</div>
-            <div className="my-1 font-medium">{ap.title}</div>
+            <div className="my-1 font-medium">{humanize(ap.title)}</div>
+            {ap.shot && <img src={ap.shot} alt="What the screen looked like when it asked" className="my-2 w-full rounded-md ring-1 ring-black/20" />}
             {ap.detail && <div className="text-sm">{ap.detail}</div>}
             <div className="mt-2 flex gap-2">
               <button className="rounded-full bg-black px-3 py-1 text-sm text-amber-300" onClick={() => a.send({ t: "approval", id: ap.id, ok: true })}>Approve</button>
@@ -620,6 +623,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
           </label>
         ))}
       </div>
+      <MemorySettings a={a} />
       <ChannelSettings a={a} />
       <Schedules a={a} />
       {agent.agentPubkey && (
@@ -634,6 +638,29 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
         <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
       </div>
+    </div>
+  );
+}
+
+function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Memory · {a.memory.length}</div>
+      {a.memory.length === 0 && <div className="text-slate-400">Nothing yet. Your agent saves things it learns about you here, and you can add your own.</div>}
+      <div className="max-h-48 space-y-1 overflow-y-auto">
+        {a.memory.map((m) => (
+          <div key={m.id} className="group flex items-start gap-2 rounded-lg bg-panel2 px-2 py-1.5">
+            <span className="min-w-0 flex-1">{m.text}</span>
+            <span className="font-mono text-[11px] text-slate-400">{m.source === "owner" ? "you" : "agent"}</span>
+            <button aria-label="Forget" onClick={() => a.send({ t: "memory", op: "delete", id: m.id })} className="text-slate-400 hover:text-red-300">✕</button>
+          </div>
+        ))}
+      </div>
+      <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); if (text.trim()) { a.send({ t: "memory", op: "add", text }); setText(""); } }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. I prefer replies in Dutch" aria-label="Add a memory" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+        <button className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Add</button>
+      </form>
     </div>
   );
 }

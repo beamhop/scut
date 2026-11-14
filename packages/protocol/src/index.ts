@@ -138,14 +138,15 @@ export type ClientMsg =
   | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   | { t: "pause"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
-  | { t: "crew"; members: CrewMember[] };
+  | { t: "crew"; members: CrewMember[] }
+  | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
   | { t: "state"; state: AgentState }
   | { t: "chat"; from: "owner" | "agent" | string; channel: string; text: string; ts: number }
   | { t: "narration"; text: string; ts: number }
-  | { t: "approval.request"; id: string; title: string; detail?: string; ts: number }
+  | { t: "approval.request"; id: string; title: string; detail?: string; ts: number; /** small JPEG data URL of the screen when asked */ shot?: string }
   | { t: "approval.resolved"; id: string; ok: boolean; by: string }
   | { t: "stats"; cpu: number; memMb: number; memTotalMb: number; tokens: { input: number; output: number } }
   | { t: "cursor"; x: number; y: number; who: string }
@@ -153,6 +154,7 @@ export type ServerMsg =
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
   | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
   | { t: "paused"; paused: boolean }
+  | { t: "memory"; items: MemoryItem[] }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 
@@ -161,6 +163,13 @@ export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" 
 export const SCREEN = { w: 1280, h: 800 };
 
 /** A recurring task. `daily` runs at minuteOfDay (UTC); `every` runs every `minutes`. */
+export interface MemoryItem {
+  id: string;
+  text: string;
+  ts: number;
+  source: "agent" | "owner";
+}
+
 export interface CrewMember {
   pubkey: string;
   name: string;

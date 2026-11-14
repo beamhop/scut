@@ -15,6 +15,19 @@ export function startMockLlm(port = 0) {
       const last = msgs.at(-1);
       const tools: any[] = body.tools ?? [];
       const shotTool = tools.find((t) => /screenshot/.test(t.function?.name ?? ""));
+      const userText = JSON.stringify(msgs.filter((m) => m.role === "user").at(-1)?.content ?? "");
+      const rememberTool = tools.find((t) => /__remember$/.test(t.function?.name ?? ""));
+      const fact = userText.match(/REMEMBER: ([^"\\]+)/)?.[1];
+      if (fact && rememberTool && !msgs.some((m) => m.role === "tool")) {
+        requests.push(body);
+        const call = { id: `call_r${requests.length}`, type: "function", function: { name: rememberTool.function.name, arguments: JSON.stringify({ text: fact }) } };
+        const base = { id: "x", object: "chat.completion.chunk", model: body.model };
+        const sse = [
+          { ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, ...call }] }, finish_reason: null }] },
+          { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+        ].map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n";
+        return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+      }
       const sawImage = JSON.stringify(msgs).includes("image_url") || JSON.stringify(msgs).includes("data:image");
       const message =
         msgs.some((m) => m.role === "tool") || !shotTool
