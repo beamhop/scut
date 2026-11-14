@@ -38,16 +38,17 @@ export function wsl(args: string[], opts: { stdin?: string; timeout?: number } =
 
 /**
  * Apply one image layer (a tar.gz arriving on stdin) to the running distro's root, OCI whiteouts included.
+ * /run, /dev, /proc, /sys and /tmp are left out: in a running distro WSL owns them (and /run/shm is /dev/shm).
  * Kept to POSIX sh + find + tar + cp, all in the base image. Exported for tests.
  */
 export const APPLY_LAYER = `set -e
 L=/tmp/.beamhop-layer
 rm -rf "$L"; mkdir -p "$L"
-tar -xzf - -C "$L" --same-owner --numeric-owner
+tar -xzf - -C "$L" --same-owner --numeric-owner --anchored --exclude=run --exclude=./run --exclude=dev --exclude=./dev --exclude=proc --exclude=./proc --exclude=sys --exclude=./sys --exclude=tmp --exclude=./tmp
 cd "$L"
 find . -name '.wh..wh..opq' | while IFS= read -r f; do d=\${f%/.wh..wh..opq}; d=\${d#./}; [ -n "$d" ] && find "/$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true; rm -f "$f"; done
 find . -name '.wh.*' | while IFS= read -r f; do b=\${f##*/}; dir=\${f%/*}; dir=\${dir#.}; rm -rf "$dir/\${b#.wh.}"; rm -f "$f"; done
-cp -a "$L"/. /
+cp -a --remove-destination "$L"/. /
 cd /; rm -rf "$L"
 `;
 
