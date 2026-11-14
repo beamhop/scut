@@ -201,10 +201,11 @@ export class Scut {
       if (a.beam && !["online", "failed"].includes(a.beam.stage)) { out.waiting.push(a.name); continue; }
       const h = (await fetch(`${a.current.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { state?: string; code?: string } | null;
       if (!h || h.code === code.hash) continue; // unreachable for now (revive brings it back), or already current
-      if (h.state !== "running") { out.waiting.push(a.name); continue; }
+      // Free (or stuck after a failed task, which is idle too): update now. Busy, starting or moving: later.
+      if (h.state !== "running" && h.state !== "stuck") { out.waiting.push(a.name); continue; }
       const job = (async () => {
         a.current = await this.withCode(d, a.current);
-        await this.waitState(a.current.endpoint, ["running"], 180_000);
+        await this.waitState(a.current.endpoint, ["running", "stuck"], 180_000);
         this.tokenCache.clear();
         await this.save();
       })();
