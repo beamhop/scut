@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.43.1 — First-run polish
+
+- The very first screen no longer has a Cancel button that just reopened itself.
+- Picking local models hides the API-key field (Ollama doesn't need one).
+- The phone page no longer shows a location chip it can't know.
+- Rebuilt the single-file apps (Linux 110 MB, macOS 90–99 MB, Windows 116 MB) and smoke-tested the Linux one: agent-file import rejects garbage with a clear message, the local API refuses other websites.
+
 ## v0.43.0 — Phone view fixes
 
 - Fixed: on a phone, the agent page scrolled itself down as soon as it loaded, hiding the agent's name, state and Settings button. Chat updates now scroll only the chat list, never the page. A UI test checks the page stays at the top with the header visible.

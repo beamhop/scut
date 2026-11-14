@@ -529,7 +529,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 </button>
               ))}
             </div>
-            <input className={input} aria-label="API key" placeholder={usesSavedKey ? "Using your saved key — paste a new one to replace it" : `API key (${PRESETS[kind].keyHint}) — stays on this computer and inside your agents`} type="password" value={model.apiKey} onChange={(e) => { setModel({ ...model, apiKey: e.target.value }); setCheck({}); }} />
+            {kind !== "ollama" && <input className={input} aria-label="API key" placeholder={usesSavedKey ? "Using your saved key — paste a new one to replace it" : `API key (${PRESETS[kind].keyHint}) — stays on this computer and inside your agents`} type="password" value={model.apiKey} onChange={(e) => { setModel({ ...model, apiKey: e.target.value }); setCheck({}); }} />}
             {check.error && <div role="alert" className="rounded-lg bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{check.error}</div>}
             {kind === "ollama" && !check.error && models.length > 0 && <div className="text-sm text-slate-300">Found {models.length} local model{models.length > 1 ? "s" : ""}. Using <span className="font-mono">{model.model}</span>.</div>}
             <details className="text-sm text-slate-400" open={detailsOpen} onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}>
@@ -584,7 +584,8 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
         )}
         {error && <div className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">Couldn't start the agent: {error}</div>}
         <div className="mt-6 flex justify-between">
-          <button className="text-slate-400 hover:text-white" onClick={() => (firstRun && step > 0 ? setStep(step - 1) : !firstRun && step === 0 && brain ? setStep(1) : onDone())}>{(firstRun && step > 0) || (!firstRun && step === 0 && brain) ? "Back" : "Cancel"}</button>
+          {/* On the very first screen there's nothing to cancel back to */}
+          {firstRun && step === 0 ? <span /> : <button className="text-slate-400 hover:text-white" onClick={() => (firstRun && step > 0 ? setStep(step - 1) : !firstRun && step === 0 && brain ? setStep(1) : onDone())}>{(firstRun && step > 0) || (!firstRun && step === 0 && brain) ? "Back" : "Cancel"}</button>}
           {step < last ? (
             <button disabled={check.busy || (!model.apiKey && !usesSavedKey && kind !== "ollama")} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={next}>{check.busy ? "Checking…" : check.failed ? "Continue anyway" : "Next"}</button>
           ) : (
