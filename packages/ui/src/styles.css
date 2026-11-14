@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --color-space: #070912;
+  --color-panel: #0e1324;
+  --color-panel2: #141b33;
+  --color-beam: #38e1ff;
+  --color-beam2: #b06bff;
+  --font-sans: ui-sans-serif, system-ui, "Inter", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", monospace;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(176, 107, 255, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 0% 110%, rgba(56, 225, 255, 0.1), transparent 60%),
+    var(--color-space);
+  min-height: 100vh;
+}
+
+.stars::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, #fff8, transparent),
+    radial-gradient(1px 1px at 70% 80%, #fff6, transparent),
+    radial-gradient(1px 1px at 40% 60%, #fff5, transparent),
+    radial-gradient(1px 1px at 90% 20%, #fff7, transparent),
+    radial-gradient(1px 1px at 10% 90%, #fff4, transparent);
+  background-size: 400px 400px;
+  opacity: 0.6;
+}
+
+.glow { box-shadow: 0 0 0 1px rgba(56, 225, 255, 0.35), 0 0 24px rgba(56, 225, 255, 0.15); }
+.glow-stuck { box-shadow: 0 0 0 1px rgba(255, 176, 59, 0.6), 0 0 28px rgba(255, 176, 59, 0.35); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 1px rgba(255, 176, 59, 0.9), 0 0 40px rgba(255, 176, 59, 0.5); } }
+
+.beam-overlay { background: repeating-linear-gradient(0deg, rgba(56,225,255,0.18) 0 2px, transparent 2px 6px); animation: scan 1.2s linear infinite; }
+@keyframes scan { from { background-position-y: 0; } to { background-position-y: 60px; } }
+.teleport { animation: teleport 1.4s ease-in-out infinite; }
+@keyframes teleport { 0%,100% { opacity: 1; filter: none; transform: scaleY(1); } 50% { opacity: .35; filter: hue-rotate(60deg) blur(1px); transform: scaleY(.96); } }
+.drop-hot { box-shadow: 0 0 0 2px var(--color-beam), 0 0 40px rgba(56,225,255,.45); }

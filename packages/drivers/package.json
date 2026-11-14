@@ -1,0 +1,1 @@
+{ "name": "@scut/drivers", "version": "0.0.1", "type": "module", "main": "src/index.ts", "exports": { ".": "./src/index.ts", "./*": "./src/*.ts" } }
