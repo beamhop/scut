@@ -3,6 +3,7 @@ import { Scut } from "./core.ts";
 import type { ModelConfig } from "@scut/protocol";
 import { FlyDriver, RailwayDriver, RenderDriver } from "@scut/drivers";
 import type { CrewRoom } from "./crew.ts";
+import { autostartEnabled, setAutostart } from "./autostart.ts";
 
 let embedded: Record<string, { type: string; b64: string }> | null = null;
 try {
@@ -122,6 +123,10 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           }
         }
         if (p === "/api/prefetch") return json(scut.prefetch);
+        if (p === "/api/autostart") {
+          if (req.method === "POST") await setAutostart(!!((await req.json()) as { on: boolean }).on);
+          return json({ on: await autostartEnabled() });
+        }
         if (p === "/api/brain" && req.method === "GET") {
           const b = await scut.brain();
           return json(b ? { api: b.api, baseUrl: b.baseUrl, model: b.model, hasKey: !!b.apiKey } : null);

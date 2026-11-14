@@ -399,11 +399,27 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
 }
 
 // ---------------- destination dock ----------------
+/** Agents on this computer come back when Beamhop starts; starting it at login keeps them going after a reboot. */
+function AutostartToggle() {
+  const [on, setOn] = useState<boolean>();
+  useEffect(() => { fetch("/api/autostart").then((r) => r.json()).then((j) => setOn(j.on)).catch(() => {}); }, []);
+  if (on === undefined) return null;
+  return (
+    <label className="ml-auto flex cursor-pointer items-center gap-2 normal-case tracking-normal">
+      <input type="checkbox" checked={on} onChange={async (e) => { const j = await (await fetch("/api/autostart", { method: "POST", body: JSON.stringify({ on: e.target.checked }) })).json(); setOn(j.on); }} className="accent-cyan-400" />
+      Open Beamhop when I log in
+    </label>
+  );
+}
+
 function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; onDrop: (dest: string, agentId: string) => void; dragging: boolean; onAddCloud: () => void }) {
   const [hot, setHot] = useState<string>();
   return (
     <nav aria-label="Where your agents live" className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
-      <div className="mb-2 font-mono text-[11px] uppercase tracking-widest text-slate-400">Where your agents live · drag one here to move it</div>
+      <div className="mb-2 flex items-center font-mono text-[11px] uppercase tracking-widest text-slate-400">
+        <span>Where your agents live · drag one here to move it</span>
+        <AutostartToggle />
+      </div>
       <div className="flex gap-3 overflow-x-auto">
         {dests.map((d) => (
           <div key={d.id}

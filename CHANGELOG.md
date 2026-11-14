@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.48.0 — Open at login
+
+- New in the dock: **Open Beamhop when I log in**. Local agents come back when the app starts (v0.47), so with this on they're running again after a reboot without you doing anything. It's one per-user login item: a `.desktop` file on Linux, a LaunchAgent on macOS, a Startup-folder script on Windows. Off by default.
+- Also from the API (`/api/autostart`). Test: the Linux login item is written and removed.
+- Full live suite re-run on real services: 10/10. OpenRouter spend for all testing tonight: $0.24.
+
 ## v0.47.0 — Survives a reboot
 
 - **Fixed:** after the computer (or Docker) restarted, local agents stayed dead — and when started by hand they crashed, because the previous X server's lock file and Chromium's "profile in use" lock were still on disk. Now:

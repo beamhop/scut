@@ -34,3 +34,18 @@ test("docker pull reports layer progress (used for the first-run download)", asy
   expect(seen.at(-1)!.done).toBe(seen.at(-1)!.total);
   await expect(DockerDriver.pull("mirror.gcr.io/library/does-not-exist-beamhop:0")).rejects.toThrow("Couldn't download");
 }, 120_000);
+
+test("open at login writes one per-user login item and removes it again", async () => {
+  const { setAutostart, autostartEnabled } = await import("../apps/app/src/autostart.ts");
+  const home = (await import("node:fs")).mkdtempSync(`${(await import("node:os")).tmpdir()}/scut-auto-`);
+  process.env.XDG_CONFIG_HOME = `${home}/.config`;
+  expect(await autostartEnabled(home)).toBe(false);
+  await setAutostart(true, home);
+  expect(await autostartEnabled(home)).toBe(true);
+  const text = await Bun.file(`${home}/.config/autostart/beamhop.desktop`).text();
+  expect(text).toContain("Exec=");
+  expect(text).toContain("Name=Beamhop");
+  await setAutostart(false, home);
+  expect(await autostartEnabled(home)).toBe(false);
+  delete process.env.XDG_CONFIG_HOME;
+});
