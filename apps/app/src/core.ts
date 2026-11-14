@@ -24,8 +24,9 @@ export interface AgentRecord {
   nostr?: boolean;
   current: Instance;
   history: Instance[];
-  beam?: { to: string; stage: BeamStage; error?: string; startedAt: number };
+  beam?: { to: string; from?: string; stage: BeamStage; error?: string; startedAt: number; doneAt?: number; summary?: BeamSummary };
 }
+export type BeamSummary = { bytes: number; carried: { chat?: number; memory?: number; schedules?: number; skills?: number; channels?: number } };
 export type BeamStage = "packing" | "provisioning" | "transferring" | "restoring" | "online" | "failed";
 
 async function loadJson<T>(f: string, fallback: T): Promise<T> {
@@ -207,8 +208,11 @@ export class Scut {
     const driver = this.drivers.get(to);
     if (!driver) throw new Error(`unknown destination ${to}`);
     const src = rec.current;
+    let summary: BeamSummary | undefined;
+    const startedAt = Date.now();
     const stage = async (s: BeamStage, error?: string) => {
-      rec.beam = { to, stage: s, error, startedAt: rec.beam?.startedAt ?? Date.now() };
+      const end = s === "online" || s === "failed";
+      rec.beam = { to, from: src.driver, stage: s, error, startedAt, doneAt: end ? Date.now() : undefined, summary: end ? summary : undefined };
       opts.onStage?.(s);
       await this.save();
     };
@@ -216,10 +220,10 @@ export class Scut {
     try {
       await stage("packing");
       const prep = (await (await this.req(src.endpoint, "/beam/prepare", { method: "POST" })).json()) as {
-        bundleId: string; hash: string; size: number; sealed: string; hostPubkey: string; lease: Event;
+        bundleId: string; hash: string; size: number; sealed: string; hostPubkey: string; lease: Event; carried?: BeamSummary["carried"];
       };
+      summary = { bytes: prep.size, carried: prep.carried ?? {} };
       const secrets = unseal<{ bundleKey: string; agentSk: string }>(this.ownerSk, prep.hostPubkey, prep.sealed);
-      const cipher = new Uint8Array(await (await this.req(src.endpoint, `/beam/bundle/${prep.bundleId}`)).arrayBuffer());
 
       await stage("provisioning");
       const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
@@ -232,7 +236,8 @@ export class Scut {
       await stage("transferring");
       const cur = readLease(prep.lease, rec.agentPubkey);
       const lease = signLease(hexToBytes(secrets.agentSk), rec.id, { holder: hello.hostPubkey, seq: (cur?.seq ?? 0) + 1 });
-      await this.req(target.endpoint, "/beam/bundle", { method: "PUT", body: cipher });
+      const dl = await this.req(src.endpoint, `/beam/bundle/${prep.bundleId}`);
+      await this.req(target.endpoint, "/beam/bundle", { method: "PUT", body: dl.body, headers: { "content-length": String(prep.size) }, duplex: "half" } as RequestInit);
       const handoff: Handoff = { beamId, agentSk: secrets.agentSk, bundleKey: secrets.bundleKey, lease };
 
       await stage("restoring");

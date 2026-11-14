@@ -135,6 +135,10 @@ describe("mock harness agent", () => {
     const dst = scut.get(id).current;
     expect(dst.driver).toBe("sim-cloud");
     expect((await (await fetch(`${src.endpoint}/health`)).json()).state).toBe("retired");
+    const sum = scut.get(id).beam!.summary!;
+    expect(sum.bytes).toBeGreaterThan(1000);
+    expect(sum.carried.chat).toBeGreaterThan(0); // what came along is reported
+    expect(scut.get(id).beam!.from).toBe(src.driver);
     const c = await client(id);
     c.send({ t: "chat", text: "after beam" });
     const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");

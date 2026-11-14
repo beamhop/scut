@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.17.0 — Beam receipts, streamed beams
+
+- After a beam lands, the tile says where the agent arrived, where from, how long it took, how big the move was, and what came along (messages, memories, skills, scheduled tasks, browser logins, files, reconnected chat apps). Dismissible.
+- The beam overlay names both ends and says the agent stays put until it lands safely.
+- The app now streams the encrypted bundle straight from the old host to the new one instead of holding it in memory (300 MB beam: 16.5 s).
+
 ## v0.16.0 — Skills
 
 - Each agent can learn Agent Skills (SKILL.md). Add one in Settings → Skills by pasting it or linking it (GitHub blob/tree links work).

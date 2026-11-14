@@ -9,7 +9,7 @@ type Agent = {
   id: string; name: string; mascot: string; harness: string; agentPubkey: string;
   current: Instance; history: Instance[]; token: string;
   model?: { baseUrl?: string; model: string }; price?: { in: number; out: number };
-  beam?: { to: string; stage: string; error?: string; startedAt: number };
+  beam?: { to: string; from?: string; stage: string; error?: string; startedAt: number; doneAt?: number; summary?: { bytes: number; carried: Record<string, number | undefined> } };
 };
 type Destination = { id: string; label: string; isolation: "vm" | "container"; monthlyUsd: number };
 
@@ -213,13 +213,42 @@ function BeamMenu({ agent, dests, onBeam, onClose }: { agent: Agent; dests: Dest
   );
 }
 
+function plural(n: number, one: string, many = one + "s") { return `${n} ${n === 1 ? one : many}`; }
+function bytesLabel(n: number) { return n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`; }
+
+/** "What came along": shown on a tile once after a beam lands. */
+function BeamReceipt({ agent, where, from }: { agent: Agent; where: string; from: string }) {
+  const b = agent.beam;
+  const key = `receipt:${agent.id}:${b?.doneAt}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(key) === "1"; } catch { return false; } });
+  if (!b || b.stage !== "online" || !b.doneAt || !b.summary || hidden || Date.now() - b.doneAt > 30 * 60_000) return null;
+  const c = b.summary.carried;
+  const items = [
+    c.chat ? plural(c.chat, "message") : null, c.memory ? plural(c.memory, "memory", "memories") : null,
+    c.skills ? plural(c.skills, "skill") : null, c.schedules ? plural(c.schedules, "scheduled task") : null,
+    "browser logins", "files",
+  ].filter(Boolean);
+  const secs = Math.max(1, Math.round((b.doneAt - b.startedAt) / 1000));
+  return (
+    <div role="status" onClick={(e) => e.stopPropagation()} className="flex items-start gap-2 bg-beam/10 px-3 py-2 text-xs text-slate-200">
+      <span className="text-beam">✓</span>
+      <div className="min-w-0 flex-1">
+        <div><span className="font-semibold">Arrived on {where}</span> from {from} in {secs}s · {bytesLabel(b.summary.bytes)}</div>
+        <div className="text-slate-400">Came along: {items.join(", ")}.{c.channels ? ` ${plural(c.channels, "chat app")} reconnected.` : ""}</div>
+      </div>
+      <button aria-label="Dismiss" className="text-slate-400 hover:text-white" onClick={() => { try { localStorage.setItem(key, "1"); } catch {} setHidden(true); }}>✕</button>
+    </div>
+  );
+}
+
 function BeamProgress({ agent }: { agent: Agent }) {
   const b = agent.beam!;
   const idx = BEAM_STAGES.indexOf(b.stage as any);
   return (
     <div className="beam-overlay absolute inset-0 grid place-items-center">
       <div className="w-72 rounded-xl bg-black/80 p-4 font-mono text-[12px]">
-        <div className="mb-2 text-beam">Beaming to {b.to}</div>
+        <div className="mb-2 text-beam">Beaming {b.from ? `from ${b.from} ` : ""}to {b.to}</div>
+        <div className="mb-2 text-slate-400">Stays here until it lands safely</div>
         {BEAM_STAGES.map((s, i) => (
           <div key={s} className={i < idx ? "text-slate-400" : i === idx ? "text-white" : "text-slate-600"}>
             {i < idx ? "✓" : i === idx ? "›" : "·"} {STAGE_LABEL[s]}
@@ -274,6 +303,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
         </div>
         {a.stats && <div className="text-right font-mono text-[11px] leading-4 text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">{a.stats.cpu}% CPU · {(a.stats.memMb / 1024).toFixed(1)} GB<br />{cost(agent, a.stats.tokens)}</div>}
       </div>
+      <BeamReceipt agent={agent} where={where} from={dests.find((d) => d.id === agent.beam?.from)?.label ?? agent.beam?.from ?? "here"} />
       {agent.beam?.stage === "failed" && <div className="bg-red-500/15 px-3 py-1.5 text-xs text-red-300">Beam failed, {agent.name} stayed put: {agent.beam.error?.slice(0, 120)}</div>}
     </div>
   );

@@ -599,7 +599,11 @@ Bun.serve<WsData>({
         outgoing.set(bundleId, b.cipher);
         const sealed = seal(hostSk, spec.ownerPubkey, { bundleKey: b.key, agentSk: bytesToHex(agentSk) });
         log("bundle ready", bundleId, b.cipher.length, "bytes");
-        return Response.json({ bundleId, hash: b.hash, size: b.cipher.length, sealed, hostPubkey, lease });
+        const carried = {
+          chat: chatLog.length, memory: memory.length, schedules: schedules.length,
+          skills: (await listSkills()).length, channels: Object.keys(spec.channels ?? {}).filter((k) => (spec!.channels as any)[k]).length,
+        };
+        return Response.json({ bundleId, hash: b.hash, size: b.cipher.length, sealed, hostPubkey, lease, carried });
       }
       if (p.startsWith("/beam/bundle/") && req.method === "GET") {
         const c = outgoing.get(p.split("/").pop()!);
