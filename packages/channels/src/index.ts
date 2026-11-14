@@ -102,7 +102,7 @@ export class TelegramChannel implements Channel {
 // ---------------- Nostr (NIP-17 private DMs) ----------------
 import { SimplePool, finalizeEvent, getPublicKey, nip17, type Event } from "nostr-tools";
 
-export const DEFAULT_RELAYS = ["wss://nos.lol", "wss://relay.primal.net", "wss://relay.damus.io"];
+export const DEFAULT_RELAYS = ["wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"];
 
 /**
  * Private DMs over Nostr (NIP-17 gift wraps). The agent's own key is its identity; replies go back to the sender.
@@ -136,7 +136,7 @@ export class NostrChannel implements Channel {
       let since = await this.cursor();
       if (this.profile) {
         const ev = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(this.profile) }, this.sk);
-        await Promise.any(this.pool.publish(this.relays, ev)).catch(() => {});
+        await this.publish(ev, 2).catch(() => {});
       }
       // Gift wraps carry a randomised created_at (up to ~2 days back), so subscribe wide and filter on the rumor's time.
       this.sub = this.pool.subscribeMany(this.relays, { kinds: [1059], "#p": [this.pub], since: since - 3 * 86400 }, {
@@ -149,7 +149,9 @@ export class NostrChannel implements Channel {
           } catch {
             return;
           }
-          if (rumor.kind !== 14 || rumor.pubkey === this.pub || rumor.created_at <= since) return;
+          // "<" not "<=": several messages can share a second. Rumor ids dedupe the same message seen on several relays.
+          if (rumor.kind !== 14 || rumor.pubkey === this.pub || rumor.created_at < since || this.seen.has(`r:${rumor.id}`)) return;
+          this.seen.add(`r:${rumor.id}`);
           since = Math.max(since, rumor.created_at);
           if (this.cursorFile) await Bun.write(this.cursorFile, String(since));
           const text = String(rumor.content).trim();
@@ -172,9 +174,23 @@ export class NostrChannel implements Channel {
     this.pool.close(this.relays);
   }
 
+  /** Publish to all relays; succeed if any relay accepts. Retries with backoff (relays rate-limit bursts). */
+  private async publish(ev: Event, tries = 4) {
+    let last: unknown;
+    for (let i = 0; i < tries; i++) {
+      try {
+        await Promise.any(this.pool.publish(this.relays, ev, { maxWait: 6000 } as any));
+        return;
+      } catch (e) {
+        last = e;
+        await Bun.sleep(800 * (i + 1) + Math.random() * 400);
+      }
+    }
+    throw new Error(`nostr publish failed on all relays: ${String((last as any)?.errors?.map?.((x: any) => x?.message ?? x) ?? last)}`);
+  }
+
   async send(to: string, text: string) {
-    const wrap = nip17.wrapEvent(this.sk, { publicKey: to }, text);
-    await Promise.any(this.pool.publish(this.relays, wrap));
+    await this.publish(nip17.wrapEvent(this.sk, { publicKey: to }, text));
   }
 
   async askApproval(to: string, id: string, title: string) {
@@ -186,7 +202,9 @@ export class NostrChannel implements Channel {
   async sendCrew(members: string[], text: string) {
     const others = members.filter((p) => p !== this.pub);
     const wraps = nip17.wrapManyEvents(this.sk, others.map((publicKey) => ({ publicKey })), text, CREW_SUBJECT);
-    await Promise.all(wraps.map((w) => Promise.any(this.pool.publish(this.relays, w)).catch(() => {})));
+    const failures: string[] = [];
+    for (const w of wraps) await this.publish(w).catch((e) => failures.push(String(e?.message ?? e)));
+    if (failures.length === wraps.length) throw new Error(failures[0]);
   }
 }
 

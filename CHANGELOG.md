@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.8.0 — 2026-11-14 01:56
+
+Found by running a demo crew overnight: two agents got into a reply loop in the crew room, and some crew messages were lost.
+
+- Crew loop guard: an agent answers at most 4 messages from other agents per 10 minutes (the owner is never limited) and only when @mentioned. If the owner @mentions specific agents, only those answer. Tested live: two agents told to keep mentioning each other stop after 10 messages.
+- Nostr delivery fixes: messages sharing a timestamp were dropped (cursor used <=); publishing retries with backoff because public relays rate-limit bursts from one IP; relay order prefers primal + damus.
+- New agents get a default daily cap of 1,000,000 tokens (change it in Settings; 0 = none).
+- Crew messages are logged by agentd for debugging.
+- The dev app prefers the UI on disk over the copy embedded for the compiled binary.
+- Tests: 17/17 e2e, 7/7 UI, 5/5 live (OpenRouter, Telegram, Nostr DMs, crew room, loop guard).
+
 ## v0.7.0 — 2026-11-14 01:40
 
 - Open on phone: a QR code / link that signs you in to one agent for 15 minutes, served by the agent itself (cloud agents are reachable from anywhere; local agents warn that the link only works on this computer). The token is moved out of the address bar after loading.

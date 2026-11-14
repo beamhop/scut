@@ -52,12 +52,13 @@ describe.skipIf(!OR)("openrouter + pi", () => {
     const ep = () => scut.get(rec.id).current.endpoint;
     const r1 = await chat(ep(), scut.auth(ep()), "Open https://example.com in your browser, take a screenshot, and tell me the main heading on the page. Reply with just the heading.");
     console.log("reply 1:", r1.reply, "\nnarration:", r1.narration.join(" | "));
-    expect(r1.reply.toLowerCase()).toContain("example domain");
+    // Models sometimes quote the body instead of the heading; either proves it read the real page.
+    expect(r1.reply.toLowerCase()).toMatch(/example domain|documentation examples/);
 
     await scut.beam(rec.id, "sim-cloud", { destroySource: true });
     const r2 = await chat(ep(), scut.auth(ep()), "What heading did you report in your previous answer? Reply with just the heading.");
     console.log("reply 2 (after beam):", r2.reply);
-    expect(r2.reply.toLowerCase()).toContain("example domain"); // conversation survived the beam
+    expect(r2.reply.toLowerCase()).toMatch(/example domain|documentation examples/); // conversation survived the beam
   });
 });
 
@@ -84,7 +85,7 @@ describe("nostr (real public relays)", () => {
     const { generateSecretKey, getPublicKey, nip17, SimplePool } = await import("nostr-tools");
     const userSk = generateSecretKey();
     const userPk = getPublicKey(userSk);
-    const relays = ["wss://nos.lol", "wss://relay.primal.net"];
+    const relays = ["wss://relay.primal.net", "wss://relay.damus.io"];
     const rec = await scut.create({ name: "Nostro", harness: "mock", autonomy: "ask", nostr: { relays, ownerPubkey: userPk } });
     await Bun.sleep(3000); // let the agent subscribe
     const pool = new SimplePool();
@@ -121,7 +122,7 @@ describe("nostr (real public relays)", () => {
 describe("crew room (NIP-17 group over real relays)", () => {
   test("owner talks to the crew; mentioned agent answers; Pi agent posts with crew_post", async () => {
     const { CrewRoom } = await import("../apps/app/src/crew.ts");
-    const relays = ["wss://nos.lol", "wss://relay.primal.net"];
+    const relays = ["wss://relay.primal.net", "wss://relay.damus.io"];
     const a = await scut.create({ name: "Alpha", harness: "mock", nostr: { relays } });
     const b = OR
       ? await scut.create({ name: "Bravo", harness: "pi", nostr: { relays }, model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: OR, model: MODEL } })
@@ -147,5 +148,27 @@ describe("crew room (NIP-17 group over real relays)", () => {
       const fromBravo = await wait((l) => l.name === "Bravo" && l.text.includes("BRAVO_REPORTING"));
       console.log("Bravo in crew:", fromBravo.text);
     }
+  });
+});
+
+describe("crew loop guard (real relays)", () => {
+  test("two agents that keep mentioning each other stop after the limit", async () => {
+    const { CrewRoom } = await import("../apps/app/src/crew.ts");
+    const relays = ["wss://relay.primal.net", "wss://relay.damus.io"];
+    await scut.create({ name: "Ping", harness: "mock", nostr: { relays } });
+    await scut.create({ name: "Pong", harness: "mock", nostr: { relays } });
+    await scut.syncCrew();
+    const crew = new CrewRoom(scut, relays);
+    await crew.start();
+    await Bun.sleep(3000);
+    await crew.post("@Ping @Pong #loop");
+    await Bun.sleep(60_000);
+    const n1 = crew.lines.filter((l) => ["Ping", "Pong"].includes(l.name)).length;
+    await Bun.sleep(20_000);
+    const n2 = crew.lines.filter((l) => ["Ping", "Pong"].includes(l.name)).length;
+    console.log("agent crew messages after 60s:", n1, "after 80s:", n2);
+    expect(n1).toBeGreaterThan(1); // they did talk
+    expect(n2).toBe(n1); // and then stopped
+    expect(n2).toBeLessThanOrEqual(2 * 4 + 2);
   });
 });

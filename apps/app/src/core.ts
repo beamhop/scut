@@ -169,7 +169,7 @@ export class Scut {
         ...(o.nostr ? { nostr: o.nostr === true ? {} : o.nostr } : {}),
       },
       createdAt: Date.now(),
-      dailyTokenBudget: o.dailyTokenBudget,
+      dailyTokenBudget: o.dailyTokenBudget ?? 1_000_000, // default hard cap; 0 = none
     };
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
     const inst = await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });

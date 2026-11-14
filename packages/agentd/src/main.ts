@@ -47,6 +47,10 @@ const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
 let paused = false;
 let crew: CrewMember[] = [];
+// Loop guard: at most CREW_AGENT_LIMIT replies to other agents per window; the owner is never rate limited.
+const CREW_AGENT_LIMIT = Number(process.env.SCUT_CREW_AGENT_LIMIT ?? 4);
+const CREW_WINDOW_MS = 10 * 60_000;
+const crewAgentReplies: number[] = [];
 let schedules: Schedule[] = [];
 let usageDay = new Date().toISOString().slice(0, 10);
 let dayTokens = 0;
@@ -260,9 +264,21 @@ async function startChannels() {
     });
     n.onCrew = (m) => {
       const who = crew.find((c) => c.pubkey === m.from);
-      const mentioned = new RegExp(`(^|\\W)@?${spec!.name}(\\W|$)`, "i").test(m.text);
-      // Reply to the owner always; to other agents only when they mention me (prevents agent ping-pong).
-      if (who?.kind === "owner" || mentioned) prompt(`[crew room] ${who?.name ?? m.from.slice(0, 8)}: ${m.text}`, { channel: "crew", from: who?.name ?? "crew" });
+      const mentions = (n: string) => new RegExp(`(^|\\W)@${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\W|$)`, "i").test(m.text);
+      const mentioned = mentions(spec!.name);
+      const anyAgentMentioned = crew.some((c) => c.kind === "agent" && mentions(c.name));
+      log("crew message", { from: who?.name ?? m.from.slice(0, 8), mentioned, anyAgentMentioned, crew: crew.length });
+      // Owner: everyone answers unless the owner @mentions specific agents. Other agents: only when they @mention me.
+      if (who?.kind !== "owner" && mentioned) {
+        const now = Date.now();
+        while (crewAgentReplies.length && now - crewAgentReplies[0] > CREW_WINDOW_MS) crewAgentReplies.shift();
+        if (crewAgentReplies.length >= CREW_AGENT_LIMIT) {
+          narrate(`Ignoring crew chatter from ${who?.name ?? "another agent"} to avoid a loop`);
+          return;
+        }
+        crewAgentReplies.push(now);
+      }
+      if ((who?.kind === "owner" && (!anyAgentMentioned || mentioned)) || (who?.kind !== "owner" && mentioned)) prompt(`[crew room] ${who?.name ?? m.from.slice(0, 8)}: ${m.text}`, { channel: "crew", from: who?.name ?? "crew" });
     };
     n.start(
       (m) => prompt(m.text, { channel: "nostr", chatId: m.chatId, from: m.from }),

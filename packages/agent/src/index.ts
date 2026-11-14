@@ -259,7 +259,8 @@ export class MockHarness implements Harness {
     onEvent({ type: "tool", name: "screenshot", args: {} });
     const shot = await this.computer({ kind: "screenshot" });
     const n = prev.split("\n").filter(Boolean).length + 1;
-    const reply = `mock: message #${n} received ("${text.slice(0, 60)}"), screenshot ${shot?.bytes ?? 0} bytes`;
+    // "#loop" in a message makes the mock echo it whole (used to test the crew loop guard).
+    const reply = `mock: message #${n} received ("${text.includes("#loop") ? text : text.slice(0, 60)}"), screenshot ${shot?.bytes ?? 0} bytes`;
     onEvent({ type: "text", delta: reply });
     onEvent({ type: "usage", input: text.length, output: reply.length });
     return reply;

@@ -18,8 +18,8 @@ const say = (id: string, text: string, approve = true) =>
     };
     setTimeout(() => resolve("timeout"), 180_000);
   });
-const scout = await s.create({ name: "Scout", harness: model ? "pi" : "mock", template: "researcher", model });
-const nova = await s.create({ name: "Nova", harness: "mock" });
+const scout = await s.create({ name: "Scout", harness: model ? "pi" : "mock", template: "researcher", model, nostr: true });
+const nova = await s.create({ name: "Nova", harness: "mock", nostr: true });
 const atlas = await s.create({ name: "Atlas", harness: "mock", driver: process.env.SCUT_SIM_CLOUD ? "sim-cloud" : "local", autonomy: "ask" });
 console.log(await say(scout.id, "Open https://en.wikipedia.org/wiki/Teleportation and tell me in one sentence what it is about."));
 console.log(await say(nova.id, "open https://news.ycombinator.com"));

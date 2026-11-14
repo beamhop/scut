@@ -69,10 +69,11 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           await scut.saveProvider(id, cfg);
           return json({ ok: true });
         }
-        const e = asset(p === "/" ? "/index.html" : p);
-        if (e) return e;
+        // Prefer the UI on disk (development); fall back to the copy embedded in the compiled binary.
         const f = Bun.file(`${uiDir}${p === "/" ? "/index.html" : p}`);
         if (await f.exists()) return new Response(f);
+        const e = asset(p === "/" ? "/index.html" : p);
+        if (e) return e;
         return new Response(Bun.file(`${uiDir}/index.html`));
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
