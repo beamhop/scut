@@ -96,6 +96,22 @@ export class SmolvmDriver implements HostDriver {
     return { driver: this.id, instanceId: name, endpoint: `http://127.0.0.1:${port}`, meta: { name } };
   }
 
+  /**
+   * Bring a stopped agent VM back (it stops when the app quits or the computer restarts): connecting to a stopped
+   * local machine boots it again from its own disk. Picks up its published port, in case it changed.
+   */
+  async revive(inst: Instance): Promise<Instance> {
+    const M = await SmolvmDriver.load();
+    if (!M) return inst;
+    const name = inst.meta?.name ?? inst.instanceId;
+    const known = (await M.list().catch(() => [])) as { name: string }[];
+    if (!known.some((m) => m.name === name)) return inst; // gone; nothing to revive
+    const m = await M.connect(name, { waitForPorts: false });
+    if ((await m.state()) !== "running") await m.start({ waitUntilReady: true });
+    const port = ((await m.ports().catch(() => [])) as { host?: number; guest: number }[]).find((p) => p.guest === 8080)?.host;
+    return port ? { ...inst, endpoint: `http://127.0.0.1:${port}` } : inst;
+  }
+
   async destroy(inst: Instance) {
     const M = await SmolvmDriver.load();
     await M?.delete(inst.instanceId).catch(() => {});
