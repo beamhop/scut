@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.40.0 — Settings in a sensible order
+
+- Settings now reads top to bottom as: is it safe → what it does → its brain → how freely it acts → its daily limit → where to reach it → scheduled tasks → what it knows (memory, skills) → remove. The safety check is first instead of under the autonomy choices.
+- The Nostr address only shows when Nostr is on.
+- The tile's price follows brain changes made in Settings.
+
 ## v0.39.0 — Change an agent's brain
 
 - Settings has **Brain**: switch an agent to another provider or model, or paste a new key (an expired key no longer strands an agent). New keys and endpoints are checked first; leaving the key empty keeps the current one. The agent reloads its brain once it's free.

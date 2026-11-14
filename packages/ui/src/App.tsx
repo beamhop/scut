@@ -807,37 +807,43 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
     { id: "risky", label: "Risky only", note: "payments, messages, deletes, logins" },
     { id: "auto", label: "Never ask", note: "acts on its own — not recommended for email or payments" },
   ];
+  const heading = "font-mono text-[11px] uppercase tracking-widest text-slate-400";
+  // Order: is it safe → what it does and thinks with → how free it is → where to reach it → routines → what it knows → the end.
   return (
     <div className="flex-1 space-y-5 overflow-y-auto p-5 text-sm">
       <div className="flex items-center"><div className="text-base font-semibold">Settings</div><button onClick={onClose} className="ml-auto rounded-full bg-white px-3 py-1 text-sm font-semibold text-black">Done</button></div>
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Autonomy</div>
-      <div className="space-y-1">
-        {levels.map((l) => (
-          <label key={l.id} className="flex cursor-pointer items-start gap-2">
-            <input type="radio" name="autonomy" checked={s.autonomy === l.id} onChange={() => a.send({ t: "settings", autonomy: l.id })} className="mt-1 accent-cyan-400" />
-            <span><span className="font-medium">{l.label}</span> <span className="text-slate-400">— {l.note}</span></span>
-          </label>
-        ))}
-      </div>
       <SafetyCheck a={a} agent={agent} />
       <PersonaSettings a={a} name={agent.name} />
       <BrainSettings a={a} name={agent.name} id={agent.id} />
-      <MemorySettings a={a} />
-      <SkillSettings a={a} />
-      <ChannelSettings a={a} />
-      <Schedules a={a} />
-      {agent.agentPubkey && (
+      <div className="space-y-2">
+        <div className={heading}>Autonomy</div>
         <div className="space-y-1">
-          <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Nostr address</div>
+          {levels.map((l) => (
+            <label key={l.id} className="flex cursor-pointer items-start gap-2">
+              <input type="radio" name="autonomy" checked={s.autonomy === l.id} onChange={() => a.send({ t: "settings", autonomy: l.id })} className="mt-1 accent-cyan-400" />
+              <span><span className="font-medium">{l.label}</span> <span className="text-slate-400">— {l.note}</span></span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <div className={heading}>Daily token limit</div>
+        <div className="flex items-center gap-2">
+          <input value={budget} onChange={(e) => setBudget(e.target.value)} inputMode="numeric" className="w-32 rounded-lg border border-white/10 bg-panel2 px-2 py-1 font-mono" aria-label="Daily token budget, 0 for none" />
+          <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
+          <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
+        </div>
+      </div>
+      <ChannelSettings a={a} />
+      {s.channels.nostr && agent.agentPubkey && (
+        <div className="space-y-1">
+          <div className={heading}>Nostr address</div>
           <button className="truncate font-mono text-[12px] text-slate-200 hover:underline" title="Copy" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 30)}… (copy)</button>
         </div>
       )}
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Daily token limit</div>
-      <div className="flex items-center gap-2">
-        <input value={budget} onChange={(e) => setBudget(e.target.value)} inputMode="numeric" className="w-32 rounded-lg border border-white/10 bg-panel2 px-2 py-1 font-mono" aria-label="Daily token budget, 0 for none" />
-        <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
-        <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
-      </div>
+      <Schedules a={a} />
+      <MemorySettings a={a} />
+      <SkillSettings a={a} />
       <RemoveAgent agent={agent} />
     </div>
   );
