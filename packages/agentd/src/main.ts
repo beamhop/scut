@@ -2,7 +2,7 @@
 // agentd — PID 1 of the agent image. Supervises the desktop, the harness and channels,
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
-  type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
+  type AgentSpec, type AgentState, type HarnessKind, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
   type CrewMember, type MemoryItem, type Schedule, type TaskRun, type ApprovalRequest, type ApprovalVia, type StatusMsg, type AgentProblem,
   SCREEN, callsign, glyphCells, scheduleDue, nextScheduledRun, assessApproval, approvalBy, approvalText, approvalResolvedText, denialText, brainMissing, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
@@ -17,6 +17,8 @@ import { createScreen, type Screen } from "./screen.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
 const PORT = Number(process.env.PORT ?? 8080);
+const HARNESSES: HarnessKind[] = ["pi", "opencode", "codex", "copilot", "mock"];
+const HARNESS_NAME: Record<HarnessKind, string> = { pi: "Pi", opencode: "opencode", codex: "Codex", copilot: "Copilot CLI", mock: "the demo brain" };
 const UI_DIR = process.env.SCUT_UI_DIR ?? "/opt/scut/ui";
 /** Running directly on a computer (no sandbox): said everywhere the agent is shown, and in its instructions. */
 const UNSANDBOXED = process.env.SCUT_UNSANDBOXED === "1";
@@ -226,7 +228,7 @@ setInterval(async () => {
   }
 }, 1500);
 function settingsMsg(): ServerMsg {
-  return { t: "settings", unsandboxed: UNSANDBOXED, screen: desktop?.kind ?? (process.env.SCUT_SCREEN === "cdp" ? "cdp" : "x11"), autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
+  return { t: "settings", unsandboxed: UNSANDBOXED, screen: desktop?.kind ?? (process.env.SCUT_SCREEN === "cdp" ? "cdp" : "x11"), harness: spec?.harness ?? "mock", autonomy: spec?.autonomy ?? "risky", dailyTokenBudget: spec?.dailyTokenBudget ?? 0, persona: spec?.persona, model: spec?.model && { api: spec.model.api, baseUrl: spec.model.baseUrl, model: spec.model.model, hasKey: !!spec.model.apiKey }, dayTokens, channels: { telegram: !!spec?.channels.telegram, slack: !!spec?.channels.slack, discord: !!spec?.channels.discord, nostr: !!spec?.channels.nostr }, problem: problem() };
 }
 function pairingMsg(): ServerMsg {
   const chans = (["telegram", "slack", "discord"] as const).filter((n) => !!spec?.channels[n]);
@@ -998,13 +1000,26 @@ Bun.serve<WsData>({
           // the job description lives in the system prompt: reload the harness once it's free
           restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
         }
+        let rebrain = false;
+        if (m.harness && HARNESSES.includes(m.harness) && m.harness !== spec.harness) {
+          spec.harness = m.harness;
+          rebrain = true;
+        }
+        if (m.model === null && spec.model) {
+          delete spec.model;
+          rebrain = true;
+        }
         if (m.model?.model && m.model.baseUrl && ["openai-completions", "anthropic-messages", "openai-responses"].includes(m.model.api)) {
           // A new brain: keep the old key unless a new one is given for the same endpoint.
           const keep = m.model.baseUrl === spec.model?.baseUrl ? spec.model?.apiKey : undefined;
           spec.model = { provider: spec.model?.provider ?? "scut", api: m.model.api, baseUrl: m.model.baseUrl, model: m.model.model.slice(0, 200), apiKey: m.model.apiKey || keep };
-          keyRejected = false; // a new brain or key: give it a chance
+          rebrain = true;
+        }
+        if (rebrain) {
+          keyRejected = false; // a new brain, key or agent software: give it a chance
           pushStatus();
-          restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
+          // Mid-task the old one finishes first, then the new one takes over.
+          restartHarnessWhenIdle().then(() => narrate(`Now thinking with ${HARNESS_NAME[spec!.harness]}`)).catch((e) => log("harness restart failed", e?.message));
         }
         if (m.channels) {
           const ch = { ...spec.channels };

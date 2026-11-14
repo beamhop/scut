@@ -1,6 +1,6 @@
 // Local app server: serves the UI and a small API. The desktop shell opens this in a webview.
 import { Scut } from "./core.ts";
-import type { ModelConfig } from "@scut/protocol";
+import type { HarnessKind, ModelConfig } from "@scut/protocol";
 import { FlyDriver, RailwayDriver, RenderDriver } from "@scut/drivers";
 import type { CrewRoom } from "./crew.ts";
 import { autostartEnabled, setAutostart } from "./autostart.ts";
@@ -99,9 +99,10 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
             }
           }
           if (action === "model" && req.method === "POST") {
-            // keeps the price shown on the tile in step with the brain changed in the agent's Settings (no key here)
-            const { baseUrl, model } = (await req.json()) as { baseUrl?: string; model: string };
-            if (typeof model === "string" && model) { rec.model = { baseUrl, model }; await scut.save(); }
+            // The brain changed in the agent's Settings (no key here): get its agent software ready on this computer
+            // if it runs without a sandbox, and keep the tile's price and labels in step.
+            const b = (await req.json()) as { harness?: HarnessKind; baseUrl?: string; model?: string | null };
+            await scut.setBrain(rec, { harness: b.harness, model: b.model === null ? null : typeof b.model === "string" && b.model ? { baseUrl: b.baseUrl, model: b.model } : undefined });
             return json({ ok: true });
           }
           if (action === "token") return json({ endpoint: rec.current.endpoint, token: scut.auth(rec.current.endpoint) });

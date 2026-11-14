@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { ensureBrowser } from "./browser.ts";
-import { freePort, portInUse, run } from "./util.ts";
+import { freePort, portInUse, run, runAsync } from "./util.ts";
 
 export type ServiceKind = "systemd" | "launchd" | "schtasks" | "none";
 
@@ -102,7 +102,7 @@ export class HostProcessDriver implements HostDriver {
     if (existsSync(marker)) return;
     await mkdir(bin, { recursive: true });
     await this.writeShims();
-    const r = run([...this.rt.bun, "add", "-g", pkg], {
+    const r = await runAsync([...this.rt.bun, "add", "-g", pkg], {
       timeout: 15 * 60_000,
       env: { ...process.env, ...(this.rt.bunEnv ?? {}), BUN_INSTALL_GLOBAL_DIR: join(this.harnessDir, "lib"), BUN_INSTALL_BIN: bin },
     });

@@ -4,7 +4,7 @@ import {
   bytesToHex, encodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, signAuth, signLease, unseal,
 } from "@scut/protocol";
 import {
-  DockerDriver, EngineUnavailable, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, probeAll, localDriver, markBroken, ENGINE_INFO, saveLocal, waitHealthy,
+  DockerDriver, EngineUnavailable, HostProcessDriver, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, probeAll, localDriver, markBroken, ENGINE_INFO, saveLocal, waitHealthy,
   type Engine, type Probe, type HostDriver, type HostRuntime, type Instance, type LocalChoice,
 } from "@scut/drivers";
 import type { Event } from "nostr-tools";
@@ -14,6 +14,7 @@ import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openAgentFile, writeAgentFile } from "./agentfile.ts";
 
+const HARNESS_KINDS: HarnessKind[] = ["pi", "opencode", "codex", "copilot", "mock"];
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
 export const IMAGE = process.env.SCUT_IMAGE ?? "ghcr.io/beamhop/scut-agent:latest";
 /** Dev/test only: extra env for agent instances, e.g. SCUT_AGENT_ENV="SCUT_TELEGRAM_API=http://host.docker.internal:9999". */
@@ -355,6 +356,25 @@ export class Scut {
     await this.loadDrivers();
   }
 
+  /**
+   * Record a brain changed in the agent's own Settings. Agents without a sandbox get the new agent software installed
+   * on this computer first (inside a sandbox, the image already has every one). Throws when that install fails.
+   */
+  async setBrain(rec: AgentRecord, b: { harness?: HarnessKind; model?: { baseUrl?: string; model: string } | null }) {
+    if (b.harness && !HARNESS_KINDS.includes(b.harness)) throw new Error(`unknown agent software ${b.harness}`);
+    if (b.harness) await this.installHarnessFor(rec.current, b.harness);
+    if (b.harness) rec.harness = b.harness;
+    if (b.model === null) delete rec.model;
+    else if (b.model) rec.model = b.model;
+    await this.save();
+  }
+
+  /** Without a sandbox the agent uses software installed on this computer: make sure this harness is there. */
+  private async installHarnessFor(inst: Instance, harness: HarnessKind) {
+    const d = this.driverOf(inst);
+    if (d instanceof HostProcessDriver) await d.installHarness(harness);
+  }
+
   save() {
     return saveJson(this.home, "agents.json", this.agents);
   }
@@ -474,6 +494,8 @@ export class Scut {
       dailyTokenBudget: o.dailyTokenBudget ?? 1_000_000, // default hard cap; 0 = none
     };
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
+    // Without a sandbox, only Pi comes with setup: get any other agent software onto this computer first.
+    if (driver instanceof HostProcessDriver) await driver.installHarness(spec.harness);
     let inst: Instance;
     try {
       inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id, picked ?? this.local.engine);

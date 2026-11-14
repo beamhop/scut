@@ -200,12 +200,23 @@ export function PersonaSettings({ a, name }: { a: A; name: string }) {
 
 // ---------------- brain ----------------
 
-/** Change the model or key an agent thinks with (an expired key shouldn't strand an agent). */
-export function BrainSettings({ a, name, id, harness, problem, autoOpen }: { a: A; name: string; id: string; harness?: string; problem?: AgentProblem; autoOpen?: boolean }) {
+/** Brains offered in Settings: a provider's API (with Pi or opencode), a subscription (Codex, Copilot CLI), or the demo. */
+type BrainChoice = "openrouter" | "openai" | "anthropic" | "ollama" | "codex" | "copilot" | "mock";
+const API_KINDS = ["openrouter", "openai", "anthropic", "ollama"] as const;
+const SOFTWARE_NAME: Record<string, string> = { pi: "Pi", opencode: "opencode", codex: "Codex", copilot: "Copilot CLI", mock: "Demo" };
+
+/**
+ * Change what an agent thinks with, any time after it's made: the provider and model, the key, the agent software
+ * (Pi, opencode) or a subscription (ChatGPT through Codex, GitHub Copilot). An agent busy with a task finishes it
+ * first, then switches. An expired key shouldn't strand an agent, and neither should a brain you're unhappy with.
+ */
+export function BrainSettings({ a, name, id, harness: recHarness, problem, autoOpen }: { a: A; name: string; id: string; harness?: string; problem?: AgentProblem; autoOpen?: boolean }) {
   const m = a.settings?.model;
+  const harness = a.settings?.harness ?? recHarness;
   const [open, setOpen] = useState(false);
   const sectionRef = useRef<HTMLDivElement>(null);
-  const [kind, setKind] = useState("openrouter");
+  const [kind, setKind] = useState<BrainChoice>("openrouter");
+  const [software, setSoftware] = useState<"pi" | "opencode">("pi");
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
@@ -214,37 +225,54 @@ export function BrainSettings({ a, name, id, harness, problem, autoOpen }: { a: 
   const group = useId();
   const sub = SUBSCRIPTIONS.find((s) => s.harness === harness);
   const prov = providerOf(m?.baseUrl);
+  const isApi = (k: BrainChoice): k is (typeof API_KINDS)[number] => (API_KINDS as readonly string[]).includes(k);
+  const current: BrainChoice = harness === "mock" ? "mock" : sub && !m?.baseUrl ? sub.harness : ((prov ?? "openrouter") as BrainChoice);
   const start = () => {
-    const k = prov ?? "openrouter";
-    setKind(k); setBaseUrl(m?.baseUrl ?? PRESETS[k].baseUrl); setModel(m?.model ?? PRESETS[k].model); setKey(""); setCheck({}); setOpen(true);
+    const k = current;
+    const p = isApi(k) ? k : "openrouter";
+    setKind(k); setSoftware(harness === "opencode" ? "opencode" : "pi");
+    setBaseUrl(m?.baseUrl && isApi(k) ? m.baseUrl : PRESETS[p].baseUrl); setModel(m?.model && isApi(k) ? m.model : PRESETS[p].model);
+    setKey(""); setCheck({}); setOpen(true);
   };
-  const pick = (k: string) => {
-    setKind(k); setBaseUrl(PRESETS[k].baseUrl); setModel(k === prov ? m!.model : PRESETS[k].model); setCheck({}); setModels([]);
+  const pick = (v: string) => {
+    const k = v as BrainChoice;
+    setKind(k); setCheck({}); setModels([]);
+    if (isApi(k)) { setBaseUrl(PRESETS[k].baseUrl); setModel(k === prov && m ? m.model : PRESETS[k].model); }
   };
   const sameEndpoint = baseUrl === m?.baseUrl;
+  /** Tell the app first (it installs the agent software when there's no sandbox), then the agent. */
+  async function apply(msg: { harness: string; model: { api: string; baseUrl: string; model: string; apiKey?: string } | null | undefined }, words: string) {
+    const r = await fetch(`/api/agents/${id}/model`, {
+      method: "POST",
+      body: JSON.stringify({ harness: msg.harness, baseUrl: msg.model?.baseUrl, model: msg.model === null ? null : msg.model?.model }),
+    }).then((x) => x.json()).catch((e) => ({ error: String(e) }));
+    if (r?.error) return setCheck({ error: r.error });
+    a.send({ t: "settings", harness: msg.harness as "pi", ...(msg.model !== undefined ? { model: msg.model as { api: "openai-completions"; baseUrl: string; model: string } | null } : {}) });
+    announce(`${name} now thinks with ${words}`);
+    setOpen(false);
+    setCheck({});
+  }
   async function save() {
     setCheck({ busy: true });
+    if (kind === "mock") return apply({ harness: "mock", model: undefined }, "the demo brain");
+    if (kind === "codex" || kind === "copilot") return apply({ harness: kind, model: null }, `your ${SUBSCRIPTIONS.find((s) => s.harness === kind)!.label} subscription`);
     const r = await api.verifyBrain({ provider: "scut", api: PRESETS[kind].api, baseUrl, apiKey: key || undefined, model });
     if (r.models?.length) setModels(r.models);
     // A saved key for this endpoint lives in the agent, not here: only insist on a check when a new key or endpoint is given.
     if (!r.ok && (key || !sameEndpoint)) return setCheck({ error: r.error });
     if (r.ok && r.modelFound === false) return setCheck({ error: `The key works, but "${model}" isn't offered there. Pick another model.` });
-    a.send({ t: "settings", model: { api: PRESETS[kind].api as "openai-completions", baseUrl, model, apiKey: key || undefined } });
-    fetch(`/api/agents/${id}/model`, { method: "POST", body: JSON.stringify({ baseUrl, model }) }).catch(() => {});
-    announce(`${name} now thinks with ${modelName(model)}`);
-    setOpen(false);
-    setCheck({});
+    await apply({ harness: software, model: { api: PRESETS[kind].api, baseUrl, model, apiKey: key || undefined } }, `${modelName(model)} through ${SOFTWARE_NAME[software]}`);
   }
-  const fixed = harness === "mock" || (sub && !m?.baseUrl);
   // Opened from "Add a brain" / "Fix the key": go straight to the form.
-  useEffect(() => { if (autoOpen && !fixed) start(); }, [autoOpen]);
+  useEffect(() => { if (autoOpen) start(); }, [autoOpen]);
   useEffect(() => {
     const el = sectionRef.current?.closest("section");
-    if (!el || fixed) return;
+    if (!el) return;
     const on = () => { if (!open) start(); };
     el.addEventListener("beamhop:open-brain", on);
     return () => el.removeEventListener("beamhop:open-brain", on);
   });
+  const busyNow = a.status?.state === "busy";
   return (
     <Section id="brain" title="Brain">
       <div ref={sectionRef} hidden />
@@ -259,44 +287,60 @@ export function BrainSettings({ a, name, id, harness, problem, autoOpen }: { a: 
             <div className="font-medium">{harness === "mock" ? "Demo" : sub && !m?.baseUrl ? `${sub.label} subscription` : m ? modelName(m.model) : "None yet"}</div>
             <div className="mt-0.5 text-small text-ink-2">
               {harness === "mock" ? "No brain: it answers with practice replies."
-                : sub && !m?.baseUrl ? `Signed in on ${name}'s own screen. Sign in or switch accounts there.`
-                : m ? <>{prov ? PRESETS[prov].label : m.baseUrl} · {m.hasKey || prov === "ollama" ? "key saved" : "no key"} · <span className="font-mono text-[11.5px]">{m.model}</span></>
+                : sub && !m?.baseUrl ? `Through ${SOFTWARE_NAME[harness!]}, signed in on ${name}'s own screen. Sign in or switch accounts there.`
+                : m ? <>{SOFTWARE_NAME[harness ?? "pi"] ?? harness} · {prov ? PRESETS[prov].label : m.baseUrl} · {m.hasKey || prov === "ollama" ? "key saved" : "no key"} · <span className="font-mono text-[11.5px]">{m.model}</span></>
                 : `${name} can't think until it has one.`}
             </div>
           </div>
-          {!fixed && <Button size="sm" variant={problem ? "signal" : "secondary"} onClick={start}>{problem ? FIX_LABEL[problem.fix === "key" ? "key" : "brain"] : "Change"}</Button>}
+          <Button size="sm" variant={problem ? "signal" : "secondary"} onClick={start}>{problem ? FIX_LABEL[problem.fix === "key" ? "key" : "brain"] : "Change"}</Button>
         </div>
       ) : (
         <div className="space-y-3">
           <fieldset>
-            <legend className="mb-1.5 text-small font-medium">Provider</legend>
+            <legend className="mb-1.5 text-small font-medium">Thinks with</legend>
             <div className="grid grid-cols-2 gap-1.5">
-              {(["openrouter", "openai", "anthropic", "ollama"] as const).map((k) => (
+              {API_KINDS.map((k) => (
                 <ChoiceTile key={k} size="sm" name={group} value={k} checked={kind === k} onChange={pick} title={PRESETS[k].label} />
               ))}
+              {SUBSCRIPTIONS.map((s) => (
+                <ChoiceTile key={s.harness} size="sm" name={group} value={s.harness} checked={kind === s.harness} onChange={pick} title={`${s.label} subscription`} />
+              ))}
+              <ChoiceTile size="sm" name={group} value="mock" checked={kind === "mock"} onChange={pick} title="Demo" className="col-span-2" />
             </div>
-            <p className="mt-1.5 text-small text-ink-2">{PROVIDER_NOTE[kind]}</p>
+            <p className="mt-1.5 text-small text-ink-2">
+              {isApi(kind) ? PROVIDER_NOTE[kind]
+                : kind === "mock" ? "No brain and no cost: practice replies, to try things out."
+                : `${SUBSCRIPTIONS.find((s) => s.harness === kind)!.note}. No key: ${name} asks you to sign in once, on its own screen.`}
+            </p>
           </fieldset>
-          <Field label="Model" hint="As the provider names it.">
-            <Input mono aria-label={`${name}'s model`} list="brain-models" value={model} onChange={(e) => { setModel(e.target.value); setCheck({}); }} />
-          </Field>
-          <datalist id="brain-models">{models.map((x) => <option key={x} value={x} />)}</datalist>
-          {kind !== "ollama" && (
-            <Field label="API key" aside="Stays on this computer"
-              hint={KEY_URL[kind] && <>Get one at <a href={KEY_URL[kind]} target="_blank" rel="noreferrer" className="text-ink">{KEY_URL[kind].replace("https://", "")}</a></>}>
-              <Input mono type="password" autoComplete="off" spellCheck={false} aria-label={`${name}'s API key`} value={key}
-                onChange={(e) => { setKey(e.target.value); setCheck({}); }}
-                placeholder={sameEndpoint && m?.hasKey ? "Keep the current key, or paste a new one" : PRESETS[kind].keyHint} />
+          {isApi(kind) && (<>
+            <Field label="Model" hint="As the provider names it.">
+              <Input mono aria-label={`${name}'s model`} list="brain-models" value={model} onChange={(e) => { setModel(e.target.value); setCheck({}); }} />
             </Field>
-          )}
-          <details className="text-small text-ink-2">
-            <summary className="w-fit rounded-control">Endpoint</summary>
-            <div className="mt-2"><Input mono aria-label="Endpoint" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setCheck({}); }} /></div>
-          </details>
+            <datalist id="brain-models">{models.map((x) => <option key={x} value={x} />)}</datalist>
+            {kind !== "ollama" && (
+              <Field label="API key" aside="Stays on this computer"
+                hint={KEY_URL[kind] && <>Get one at <a href={KEY_URL[kind]} target="_blank" rel="noreferrer" className="text-ink">{KEY_URL[kind].replace("https://", "")}</a></>}>
+                <Input mono type="password" autoComplete="off" spellCheck={false} aria-label={`${name}'s API key`} value={key}
+                  onChange={(e) => { setKey(e.target.value); setCheck({}); }}
+                  placeholder={sameEndpoint && m?.hasKey ? "Keep the current key, or paste a new one" : PRESETS[kind].keyHint} />
+              </Field>
+            )}
+            <Segmented legend="Agent software" size="sm" value={software} onChange={setSoftware}
+              options={[
+                { value: "pi", label: "Pi", description: "The default. Works with any brain above." },
+                { value: "opencode", label: "opencode", description: "An open-source coding agent." },
+              ]} />
+            <details className="text-small text-ink-2">
+              <summary className="w-fit rounded-control">Endpoint</summary>
+              <div className="mt-2"><Input mono aria-label="Endpoint" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setCheck({}); }} /></div>
+            </details>
+          </>)}
+          {busyNow && <p className="text-small text-ink-2">{name} is working on something: it finishes that first, then switches.</p>}
           {check.error && <Notice alert>{check.error}</Notice>}
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button size="sm" variant="primary" loading={check.busy} disabled={!model || !baseUrl} onClick={save}>{check.busy ? "Checking…" : "Save"}</Button>
+            <Button size="sm" variant="quiet" onClick={() => { setOpen(false); setCheck({}); }}>Cancel</Button>
+            <Button size="sm" variant="primary" loading={check.busy} disabled={isApi(kind) && (!model || !baseUrl)} onClick={save}>{check.busy ? "Checking…" : "Save"}</Button>
           </div>
         </div>
       )}

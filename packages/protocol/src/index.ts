@@ -137,7 +137,11 @@ export type ClientMsg =
   | { t: "chat"; text: string }
   | { t: "approval"; id: string; ok: boolean; /** Optional reason with a "Don't" ("Wrong site"), passed to the agent and echoed in chat apps. */ reason?: string }
   | { t: "stop" }
-  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; model?: { api: ModelConfig["api"]; baseUrl: string; model: string; apiKey?: string }; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
+  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string;
+      /** The agent software that thinks (Pi, opencode, Codex, Copilot CLI, Demo). Restarts it once the current task is done. */
+      harness?: HarnessKind;
+      /** A new brain; null drops it (e.g. Codex or Copilot on a subscription signed in on the agent's screen). */
+      model?: { api: ModelConfig["api"]; baseUrl: string; model: string; apiKey?: string } | null; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   /**
    * Pause or resume. `control` (default true): Take over / Give back — the owner has the screen ("You have control").
    * control:false = a plain pause/resume ("Pause all", "Resume all"): it never takes the screen from the owner or hands it back.
@@ -171,7 +175,7 @@ export type ServerMsg =
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; /** Runs directly on its computer, without a sandbox. */ unsandboxed?: boolean; /** x11: a whole Linux desktop; cdp: a browser only (no sandbox). */ screen?: "x11" | "cdp"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
+  | { t: "settings"; /** Runs directly on its computer, without a sandbox. */ unsandboxed?: boolean; /** x11: a whole Linux desktop; cdp: a browser only (no sandbox). */ screen?: "x11" | "cdp"; harness: HarnessKind; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
   | { t: "paused"; paused: boolean; /** true when the owner has the screen (Take over), false for a plain pause */ control?: boolean }
   | { t: "memory"; items: MemoryItem[] }
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }
