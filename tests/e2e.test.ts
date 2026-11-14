@@ -721,3 +721,16 @@ describe("v0.31: move an agent by file", () => {
     await other.remove(back.id);
   }, 300_000);
 });
+
+describe("v0.34: one-tap Telegram pairing", () => {
+  test("the t.me deep link's /start <code> pairs the owner", async () => {
+    const rec = await scut.create({ name: "Linky", harness: "mock", telegramToken: "LINK:TOKEN" });
+    const c = await client(rec.id);
+    const p = await c.waitFor<any>((m) => m.t === "pairing" && !!m.channels?.telegram?.bot && !!m.code);
+    tg.message(4242, `/start ${p.code}`);
+    await tg.waitSent((m) => m.chat_id === "4242" && m.text.startsWith("Paired"));
+    const after = await c.waitFor<any>((m) => m.t === "pairing" && !!m.channels?.telegram?.owner);
+    expect(after.channels.telegram.owner).toBeTruthy();
+    c.close();
+  });
+});

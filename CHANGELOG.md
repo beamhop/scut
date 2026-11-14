@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.34.0 — One-tap Telegram pairing
+
+- The pairing card has **Pair in Telegram** (a t.me link that sends `/start <code>` to the agent's bot) and **Scan with phone** (the same link as a QR code). No more copying a six-digit code into a chat.
+- Test: the deep link's `/start <code>` pairs the owner.
+
 ## v0.33.1 — CI green again
 
 - Fixed: since v0.20 the CI typecheck failed on GitHub because the embedded-UI module is generated at build time and isn't in git, which also skipped the CI image build and test run. Added a type declaration for it; typecheck passes with and without the generated file.

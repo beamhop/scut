@@ -698,6 +698,7 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
                   <span key={k}>{i ? ", " : ""}{k === "telegram" && v.bot ? <a className="text-beam underline" target="_blank" href={`https://t.me/${v.bot}`}>Telegram @{v.bot}</a> : <span className="capitalize text-slate-200">{k}{v.bot ? ` (@${v.bot})` : ""}</span>}</span>
                 ))}{" "}so approvals reach you there. Only you can approve; anyone in a channel can chat.
               </div>
+              {a.pairing.channels?.telegram?.bot && !a.pairing.channels.telegram.owner && <TelegramPairQr bot={a.pairing.channels.telegram.bot} code={a.pairing.code} />}
             </div>
           )}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -747,6 +748,27 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** One tap (or one scan) pairs Telegram: t.me deep links deliver "/start <code>" to the bot. */
+function TelegramPairQr({ bot, code }: { bot: string; code: string }) {
+  const [show, setShow] = useState(false);
+  const link = `https://t.me/${bot}?start=${code}`;
+  const svg = useMemo(() => {
+    const q = qrcode(0, "M");
+    q.addData(link);
+    q.make();
+    return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }, [link]);
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex gap-2">
+        <a href={link} target="_blank" rel="noreferrer" className="rounded-full bg-beam px-3 py-1 text-sm font-semibold text-black">Pair in Telegram</a>
+        <button onClick={() => setShow(!show)} aria-expanded={show} className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">{show ? "Hide QR" : "Scan with phone"}</button>
+      </div>
+      {show && <div className="w-40 rounded-lg bg-white p-1.5" role="img" aria-label={`QR code to pair with @${bot} in Telegram`} dangerouslySetInnerHTML={{ __html: svg }} />}
     </div>
   );
 }
