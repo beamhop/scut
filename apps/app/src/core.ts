@@ -255,7 +255,7 @@ export class Scut {
   }): Promise<AgentRecord> {
     const driver = this.drivers.get(o.driver ?? "local");
     if (!driver) throw new Error(`unknown destination ${o.driver}`);
-    await this.prefetching; // don't start a second download of the same image
+    if ((o.driver ?? "local") === "local") await this.prefetching; // don't start a second download of the same image
     // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
     const saved = await this.brain();
     if (o.model && !o.model.apiKey && saved?.apiKey && saved.baseUrl === o.model.baseUrl) o.model = { ...o.model, apiKey: saved.apiKey };

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.45.0 — Start an agent straight in the cloud
+
+- New agent → More options → **Runs on**: this computer or any cloud you've connected. Before, every agent started on this computer and had to be beamed out.
+- If this computer can't run agents (no microVM engine or Docker) and a cloud is connected, new agents start there automatically.
+- Creating in a cloud no longer waits for the local first-run download.
+
 ## v0.44.1 — When this computer can't run agents
 
 - On a computer with neither the built-in microVM engine nor Docker, the app used to crash at start (or fail later with a raw error). It now opens normally and the welcome screen says plainly what's missing: Docker not installed, or installed but not running — and that you can add a cloud instead. Creating an agent there gives the same message.

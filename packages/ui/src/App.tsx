@@ -461,6 +461,14 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [models, setModels] = useState<string[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pf, setPf] = useState<{ state: string; done: number; total: number; error?: string }>();
+  const [dests, setDests] = useState<Destination[]>([]);
+  const [where, setWhere] = useState("local");
+  useEffect(() => { api.destinations().then(setDests).catch(() => {}); }, []);
+  // This computer can't run agents (no engine): start the agent on a connected cloud instead.
+  useEffect(() => {
+    const cloud = dests.find((d) => d.id !== "local");
+    if (pf?.state === "error" && where === "local" && cloud) setWhere(cloud.id);
+  }, [pf?.state, dests]);
   useEffect(() => {
     let t: any;
     const poll = async () => {
@@ -511,7 +519,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
       harness, template, persona: prompt || undefined, telegramToken: telegram || undefined,
       nostr: nostr ? { ownerPubkey: npubToHex(npub) } : undefined,
       model: harness === "mock" ? undefined : { provider: "scut", api: p.api, baseUrl: model.baseUrl, apiKey: model.apiKey || undefined, model: model.model },
-      driver: "local",
+      driver: where,
     }).catch((e) => ({ error: String(e) }));
     setBusy(false);
     if (r.error) setError(r.error);
@@ -584,6 +592,13 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                     ))}
                   </div>
                 </div>
+                {dests.length > 1 && (
+                  <label className="flex items-center gap-2">Runs on
+                    <select value={where} onChange={(e) => setWhere(e.target.value)} aria-label="Runs on" className="rounded-lg bg-panel2 px-2 py-1">
+                      {dests.map((d) => <option key={d.id} value={d.id}>{d.label}{d.monthlyUsd ? ` (~$${d.monthlyUsd}/mo)` : ""}</option>)}
+                    </select>
+                  </label>
+                )}
                 <input className={input} aria-label="Telegram bot token" placeholder="Telegram bot token (you can add this later in Settings)" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
                 <div className="flex items-center gap-2">
                   <label className="flex shrink-0 items-center gap-2"><input type="checkbox" checked={nostr} onChange={(e) => setNostr(e.target.checked)} className="accent-cyan-400" /> Nostr messages</label>

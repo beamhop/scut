@@ -159,6 +159,9 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Skip this")?.click());
   await page.waitForSelector('[aria-label="Name"]');
   await page.type('[aria-label="Name"]', "Uiborn");
+  // with a second destination connected, More options offers where it runs
+  await page.waitForSelector('select[aria-label="Runs on"]', { timeout: 10_000 });
+  expect(await page.$$eval('select[aria-label="Runs on"] option', (o) => o.map((x) => x.textContent))).toContain("Cloud (simulated)");
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Create agent"))!.click());
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
