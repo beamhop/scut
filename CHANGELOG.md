@@ -1,6 +1,12 @@
 # Changelog
 
-## v0.3.0 — 2026-11-14 01:45
+## v0.4.0 — 2026-11-14 01:35
+
+- Single-file desktop app: `scripts/build-app.sh` compiles `scut` for Linux, macOS and Windows (x64/arm64) with the UI embedded; no files or installs next to it. Verified the Linux binary end to end from an empty folder (create agent, serve UI, API, remove).
+- The app opens itself as an app window (Chrome/Edge/Chromium `--app` mode) or falls back to the default browser.
+- CI workflow: builds the multi-arch agent image to `ghcr.io/beamhop/scut-agent`, runs e2e + UI tests, and uploads the app binaries.
+
+## v0.3.0 — 2026-11-14 01:28
 
 - Owner tokens are bound to the agent's host (a token for one agent can't be replayed against another) and live 15 minutes; the app caches them so viewers no longer reconnect on every poll.
 - Take control / Hand back: pauses the agent's actions (it keeps observing) while you work on its screen, e.g. for logins and CAPTCHAs.
@@ -8,7 +14,7 @@
 - Cost shown per agent for OpenRouter models (live pricing), tokens otherwise.
 - Tests: 17/17 e2e, 5/5 UI.
 
-## v0.2.1 — 2026-11-14 01:30
+## v0.2.1 — 2026-11-14 01:23
 
 - Fix: agent view crashed in current Chrome (effect returned scrollIntoView's promise).
 - Pending approvals are replayed to clients that connect late (tiles now show "Approve?" banners reliably).
@@ -16,7 +22,7 @@
 - New UI test suite in real Chrome (puppeteer-core): first run, live tile, keyboard Beam menu, chat, settings, history replay, zero console errors.
 - Tests: 14/14 e2e, 5/5 UI.
 
-## v0.2.0 — 2026-11-14 01:20
+## v0.2.0 — 2026-11-14 01:15
 
 - Chat history persisted in /data and replayed on reconnect; survives beams.
 - Per-agent settings over the agent's socket: autonomy ladder (ask / risky / auto), daily token budget with hard stop, persona.

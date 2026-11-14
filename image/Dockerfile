@@ -1,5 +1,6 @@
 # scut agent image: one image for every host (smolvm locally, a container or Firecracker VM in the cloud).
 ARG REGISTRY=mirror.gcr.io/
+# CI passes REGISTRY= to pull from Docker Hub directly.
 FROM ${REGISTRY}library/node:22-bookworm-slim AS node
 FROM ${REGISTRY}oven/bun:1-debian AS bun
 

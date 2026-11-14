@@ -1,6 +1,17 @@
 // Local app server: serves the UI and a small API. The desktop shell opens this in a webview.
 import type { Scut } from "./core.ts";
 
+let embedded: Record<string, { type: string; b64: string }> | null = null;
+try {
+  embedded = (await import("./ui-assets.ts")).assets;
+} catch {
+  embedded = null; // dev: serve packages/ui/dist from disk
+}
+function asset(path: string): Response | null {
+  const a = embedded?.[path] ?? (path.includes(".") ? null : embedded?.["/index.html"]);
+  return a ? new Response(Buffer.from(a.b64, "base64"), { headers: { "content-type": a.type } }) : null;
+}
+
 export function serve(scut: Scut, port: number, uiDir: string) {
   const json = (v: unknown, status = 200) => Response.json(v, { status });
   return Bun.serve({
@@ -45,6 +56,8 @@ export function serve(scut: Scut, port: number, uiDir: string) {
           await scut.saveProvider(id, cfg);
           return json({ ok: true });
         }
+        const e = asset(p === "/" ? "/index.html" : p);
+        if (e) return e;
         const f = Bun.file(`${uiDir}${p === "/" ? "/index.html" : p}`);
         if (await f.exists()) return new Response(f);
         return new Response(Bun.file(`${uiDir}/index.html`));

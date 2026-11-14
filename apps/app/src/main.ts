@@ -6,7 +6,7 @@
 //   scut ls
 //   scut beam <agent> --to <destination>
 //   scut rm <agent>
-import { Scut } from "./core.ts";
+import { HOME, Scut } from "./core.ts";
 import { serve } from "./server.ts";
 import { parseArgs } from "node:util";
 
@@ -28,6 +28,28 @@ const { values, positionals } = parseArgs({
     "destroy-source": { type: "boolean" },
   },
 });
+
+/** Open the UI as an app window: Chrome/Edge/Chromium in --app mode if present, else the default browser. */
+function openWindow(url: string) {
+  const candidates =
+    process.platform === "darwin"
+      ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Chromium.app/Contents/MacOS/Chromium"]
+      : process.platform === "win32"
+        ? [`${process.env["ProgramFiles(x86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`, `${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`]
+        : ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/microsoft-edge"];
+  for (const c of candidates) {
+    try {
+      if (require("node:fs").existsSync(c)) {
+        Bun.spawn([c, `--app=${url}`, "--window-size=1440,900", `--user-data-dir=${HOME}/window`], { stdout: "ignore", stderr: "ignore" });
+        return;
+      }
+    } catch {}
+  }
+  const opener = process.platform === "darwin" ? ["open", url] : process.platform === "win32" ? ["cmd", "/c", "start", "", url] : ["xdg-open", url];
+  try {
+    Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" });
+  } catch {}
+}
 
 const scut = await Scut.open();
 const [cmd, ...rest] = positionals;
@@ -68,8 +90,10 @@ switch (cmd) {
   case "app": {
     const port = Number(values.port ?? 7777);
     const ui = values.ui ?? process.env.SCUT_UI_DIR ?? new URL("../../../packages/ui/dist", import.meta.url).pathname;
-    serve(scut, port, ui);
-    console.log(`Beamhop running at http://127.0.0.1:${port}`);
+    const srv = serve(scut, port, ui);
+    const url = `http://127.0.0.1:${srv.port}`;
+    console.log(`Beamhop running at ${url}`);
+    if (!process.env.SCUT_NO_WINDOW && cmd === undefined) openWindow(url);
     break;
   }
   default:

@@ -9,7 +9,7 @@
   "scripts": {
     "build:ui": "bun run --cwd packages/ui build",
     "build:image": "docker build -f image/Dockerfile -t ghcr.io/beamhop/scut-agent:dev .",
-    "build:app": "bun build apps/app/src/main.ts --compile --outfile dist/scut",
+    "build:app": "./scripts/build-app.sh",
     "test": "bun test tests/e2e.test.ts tests/ui.test.ts --timeout 600000",
     "typecheck": "tsc --noEmit -p .",
     "test:ui": "bun test tests/ui.test.ts --timeout 300000"
@@ -39,5 +39,5 @@
     "@scut/ui": "workspace:*",
     "@scut/app": "workspace:*"
   },
-  "version": "0.3.0"
+  "version": "0.4.0"
 }
