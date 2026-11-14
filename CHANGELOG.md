@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.33.0 — Copilot CLI on your brain too
+
+- Copilot CLI uses the brain you picked through its bring-your-own-key mode (`COPILOT_PROVIDER_*`, offline so it never calls GitHub), so all four harnesses now work with just an API key. Without a brain it still uses your GitHub sign-in.
+- Copilot runs with `--silent`, so chat replies are the answer, not a transcript of tool calls.
+- Live-tested on a real model: Pi, Codex, opencode and Copilot all open a page on the agent's screen and report its heading. Known limit: in BYOK mode Copilot doesn't pass screenshots to the model, so it reads pages as text.
+
 ## v0.32.0 — Codex and opencode on your brain, tested for real
 
 - Codex and opencode now use the brain you picked in Beamhop (endpoint, model, key) instead of requiring a sign-in. Without a brain they still use the subscription you sign in to on the agent's screen.

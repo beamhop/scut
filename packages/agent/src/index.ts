@@ -260,9 +260,20 @@ export class CliHarness implements Harness {
         ? // The agent's whole computer is the sandbox; Beamhop's own approvals (request_approval) guard risky actions.
           ["codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", text]
         : this.kind === "copilot"
-          ? ["copilot", "-p", text, "--allow-all-tools"]
+          ? ["copilot", "-p", text, "--allow-all-tools", "-s"]
           : ["opencode", "run", text];
-    const p = Bun.spawn(argv, { cwd: `${this.ctx.dataDir}/workspace`, env: harnessEnv(this.ctx), stdout: "pipe", stderr: "pipe" });
+    const m = this.ctx.spec.model;
+    // Copilot CLI's bring-your-own-key mode is configured by environment; offline keeps it from calling GitHub at all.
+    const copilotBrain: Record<string, string> = this.kind === "copilot" && m?.baseUrl
+      ? {
+          COPILOT_PROVIDER_BASE_URL: m.baseUrl,
+          COPILOT_MODEL: m.model,
+          COPILOT_OFFLINE: "true",
+          ...(m.apiKey ? { COPILOT_PROVIDER_API_KEY: m.apiKey } : {}),
+          ...(m.api === "anthropic-messages" ? { COPILOT_PROVIDER_TYPE: "anthropic" } : {}),
+        }
+      : {};
+    const p = Bun.spawn(argv, { cwd: `${this.ctx.dataDir}/workspace`, env: { ...harnessEnv(this.ctx), ...copilotBrain }, stdout: "pipe", stderr: "pipe" });
     const out = await new Response(p.stdout).text();
     const code = await p.exited;
     if (code !== 0) {

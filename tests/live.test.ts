@@ -63,16 +63,16 @@ describe.skipIf(!OR)("openrouter + pi", () => {
 });
 
 describe.skipIf(!OR)("CLI harnesses on the picked brain", () => {
-  for (const harness of ["opencode", "codex"] as const) {
+  for (const harness of ["opencode", "codex", "copilot"] as const) {
     test(`${harness} answers with the OpenRouter key from Beamhop (no sign-in) and can use the agent's screen`, async () => {
       const rec = await scut.create({
-        name: harness === "codex" ? "Codey" : "Openy",
+        name: { codex: "Codey", opencode: "Openy", copilot: "Pilot" }[harness],
         harness,
         model: { provider: "scut", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: OR, model: MODEL },
       });
       const ep = scut.get(rec.id).current.endpoint;
       const r = await chat(ep, scut.auth(ep), "Use your open_url tool to open https://example.com, then use screenshot, and tell me the main heading. Reply with just the heading.", 300_000);
-      console.log(`${harness} reply:`, r.reply.slice(-200), "\nnarration:", r.narration.slice(-6).join(" | "));
+      console.log(`${harness} reply:`, JSON.stringify(r.reply.slice(0, 300)), "\nnarration:", r.narration.slice(-6).join(" | "));
       expect(r.reply.toLowerCase()).toMatch(/example domain|documentation examples/);
       await scut.remove(rec.id);
     }, 400_000);
