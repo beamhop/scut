@@ -1,5 +1,6 @@
 // Local app server: serves the UI and a small API. The desktop shell opens this in a webview.
 import type { Scut } from "./core.ts";
+import { FlyDriver, RailwayDriver, RenderDriver } from "@scut/drivers";
 import type { CrewRoom } from "./crew.ts";
 
 let embedded: Record<string, { type: string; b64: string }> | null = null;
@@ -65,8 +66,17 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           }
         }
         if (p === "/api/providers" && req.method === "POST") {
-          const { id, ...cfg } = (await req.json()) as any;
-          await scut.saveProvider(id, cfg);
+          const { id, token } = (await req.json()) as { id: string; token: string };
+          if (!token?.trim()) return json({ ok: false, error: "Paste a token first" });
+          try {
+            const t = token.trim();
+            if (id === "fly") await scut.saveProvider("fly", { token: t, ...(await FlyDriver.verify(t)) });
+            else if (id === "render") await scut.saveProvider("render", { token: t, ownerId: (await RenderDriver.verify(t)).ownerId });
+            else if (id === "railway") await scut.saveProvider("railway", { token: t, ...(await RailwayDriver.verify(t)) });
+            else return json({ error: `unknown provider ${id}` }, 400);
+          } catch (e: any) {
+            return json({ ok: false, error: String(e?.message ?? e) }); // a rejected token is an answer, not a server error
+          }
           return json({ ok: true });
         }
         // Prefer the UI on disk (development); fall back to the copy embedded in the compiled binary.

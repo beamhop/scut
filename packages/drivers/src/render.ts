@@ -10,7 +10,17 @@ export class RenderDriver implements HostDriver {
   label = "Render";
   isolation = "container" as const;
   monthlyUsd = 85;
-  private api = "https://api.render.com/v1";
+  private api = process.env.SCUT_RENDER_API ?? "https://api.render.com/v1";
+
+  /** Check a key and find the workspace (owner) to create services in. */
+  static async verify(token: string): Promise<{ ownerId: string; name: string }> {
+    const api = process.env.SCUT_RENDER_API ?? "https://api.render.com/v1";
+    const r = await fetch(`${api}/owners?limit=20`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } });
+    if (!r.ok) throw new Error(r.status === 401 ? "Render rejected that API key" : `Render: ${r.status}`);
+    const list = (await r.json()) as { owner: { id: string; name: string } }[];
+    if (!list.length) throw new Error("Render: no workspace found for this key");
+    return { ownerId: list[0].owner.id, name: list[0].owner.name };
+  }
 
   constructor(private token: string, private ownerId: string, private plan = "standard", private region = "frankfurt") {}
 

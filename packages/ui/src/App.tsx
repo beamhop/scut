@@ -235,7 +235,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
 }
 
 // ---------------- destination dock ----------------
-function Dock({ dests, onDrop, dragging }: { dests: Destination[]; onDrop: (dest: string, agentId: string) => void; dragging: boolean }) {
+function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; onDrop: (dest: string, agentId: string) => void; dragging: boolean; onAddCloud: () => void }) {
   const [hot, setHot] = useState<string>();
   return (
     <div className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
@@ -251,7 +251,7 @@ function Dock({ dests, onDrop, dragging }: { dests: Destination[]; onDrop: (dest
             <div className="font-mono text-[11px] text-slate-400">{d.isolation === "vm" ? "microVM" : "container"} · {d.monthlyUsd ? `~$${d.monthlyUsd}/mo` : "free"}</div>
           </div>
         ))}
-        <a href="https://github.com/beamhop/scut#clouds" target="_blank" className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:text-white">+ Add a cloud</a>
+        <button onClick={onAddCloud} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">+ Add a cloud</button>
       </div>
     </div>
   );
@@ -706,6 +706,54 @@ function useToasts() {
   return { push, view };
 }
 
+// ---------------- add a cloud ----------------
+const PROVIDERS = [
+  { id: "fly", label: "Fly.io", price: "~$21/mo per agent", isolation: "microVM", tokenUrl: "https://fly.io/user/personal_access_tokens", hint: "Create a token, copy it, paste it here." },
+  { id: "render", label: "Render", price: "~$85/mo per agent", isolation: "container", tokenUrl: "https://dashboard.render.com/u/settings#api-keys", hint: "Account settings → API keys → Create." },
+  { id: "railway", label: "Railway", price: "~$80/mo per agent", isolation: "container", tokenUrl: "https://railway.com/account/tokens", hint: "Account → Tokens → Create (no team)." },
+];
+function AddCloud({ onClose, onAdded }: { onClose: () => void; onAdded: (label: string) => void }) {
+  const [pick, setPick] = useState("fly");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const p = PROVIDERS.find((x) => x.id === pick)!;
+  async function connect() {
+    setBusy(true);
+    setError(undefined);
+    const r = await fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: pick, token }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+    setBusy(false);
+    if (r.error) setError(r.error);
+    else onAdded(p.label);
+  }
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label="Add a cloud" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-3xl bg-panel p-7 ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
+        <div className="text-xl font-semibold">Add a cloud</div>
+        <p className="mb-4 text-sm text-slate-400">Agents beam into your own account. You pay the provider directly; Beamhop never sees your bills.</p>
+        <div className="grid grid-cols-3 gap-2">
+          {PROVIDERS.map((x) => (
+            <button key={x.id} onClick={() => setPick(x.id)} className={`rounded-xl border bg-panel2 p-3 text-left ${pick === x.id ? "border-beam" : "border-white/10 hover:border-beam/50"}`}>
+              <div className="font-medium">{x.label}</div>
+              <div className="font-mono text-[10px] text-slate-500">{x.isolation} · {x.price}</div>
+            </button>
+          ))}
+        </div>
+        <ol className="mt-4 space-y-2 text-sm">
+          <li>1. <a className="text-beam underline" href={p.tokenUrl} target="_blank">Open {p.label} tokens</a> — {p.hint}</li>
+          <li>2. Paste it:</li>
+        </ol>
+        <input value={token} onChange={(e) => setToken(e.target.value)} type="password" aria-label={`${p.label} token`} placeholder={`${p.label} token`} className="mt-2 w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam" />
+        {error && <div className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
+        <div className="mt-5 flex justify-between">
+          <button onClick={onClose} className="text-slate-400 hover:text-white">Cancel</button>
+          <button disabled={busy} onClick={connect} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-60">{busy ? "Checking…" : "Connect"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- crew room ----------------
 function CrewRoomPanel({ onClose }: { onClose: () => void }) {
   const [data, setData] = useState<{ enabled: boolean; lines: { name: string; text: string; ts: number }[]; members: { name: string; kind: string }[] }>();
@@ -781,6 +829,7 @@ function CrewApp() {
   const [status, setStatus] = useState<Record<string, string>>({});
   const [dragging, setDragging] = useState(false);
   const [crewOpen, setCrewOpen] = useState(false);
+  const [addCloud, setAddCloud] = useState(false);
   const toasts = useToasts();
   const prevStages = useRef<Record<string, string>>({});
 
@@ -849,7 +898,8 @@ function CrewApp() {
       </main>
       {loaded && agents.length === 0 && !creating && <CreateAgent firstRun onDone={refresh} />}
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
-      <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} />
+      <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} onAddCloud={() => setAddCloud(true)} />
+      {addCloud && <AddCloud onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
       {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} />}
       {toasts.view}
     </div>

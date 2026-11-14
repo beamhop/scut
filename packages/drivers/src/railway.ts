@@ -9,7 +9,24 @@ export class RailwayDriver implements HostDriver {
   label = "Railway";
   isolation = "container" as const;
   monthlyUsd = 80;
-  private api = "https://backboard.railway.com/graphql/v2";
+  private api = process.env.SCUT_RAILWAY_API ?? "https://backboard.railway.com/graphql/v2";
+
+  /** Check a token and create (or reuse) a "beamhop" project to hold agents. */
+  static async verify(token: string): Promise<{ projectId: string; environmentId: string }> {
+    const api = process.env.SCUT_RAILWAY_API ?? "https://backboard.railway.com/graphql/v2";
+    const gql = async (query: string, variables: Record<string, unknown> = {}) => {
+      const r = await fetch(api, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ query, variables }) });
+      const j = (await r.json()) as any;
+      if (j.errors?.length) throw new Error(`Railway: ${j.errors[0].message}`);
+      return j.data;
+    };
+    const me = await gql("query { projects { edges { node { id name environments { edges { node { id name } } } } } } }");
+    const existing = me.projects.edges.map((e: any) => e.node).find((p: any) => p.name === "beamhop");
+    const project = existing ?? (await gql("mutation($input: ProjectCreateInput!) { projectCreate(input: $input) { id name environments { edges { node { id name } } } } }", { input: { name: "beamhop" } })).projectCreate;
+    const env = project.environments.edges.map((e: any) => e.node).find((e: any) => e.name === "production") ?? project.environments.edges[0]?.node;
+    if (!env) throw new Error("Railway: project has no environment");
+    return { projectId: project.id, environmentId: env.id };
+  }
 
   constructor(private token: string, private projectId: string, private environmentId: string) {}
 

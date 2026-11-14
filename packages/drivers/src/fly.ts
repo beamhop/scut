@@ -9,7 +9,15 @@ export class FlyDriver implements HostDriver {
   label = "Fly.io";
   isolation = "vm" as const;
   monthlyUsd = 21.4;
-  private api = "https://api.machines.dev/v1";
+  private api = process.env.SCUT_FLY_API ?? "https://api.machines.dev/v1";
+
+  /** Check a token by listing apps; returns the org to use. */
+  static async verify(token: string, org = "personal"): Promise<{ org: string }> {
+    const api = process.env.SCUT_FLY_API ?? "https://api.machines.dev/v1";
+    const r = await fetch(`${api}/apps?org_slug=${org}`, { headers: { authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error(r.status === 401 ? "Fly.io rejected that token" : `Fly.io: ${r.status}`);
+    return { org };
+  }
 
   constructor(private token: string, private org = "personal", private region = "ams") {}
 

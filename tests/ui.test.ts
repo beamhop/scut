@@ -8,6 +8,9 @@ process.env.SCUT_HOME = mkdtempSync(`${tmpdir()}/scut-ui-`);
 process.env.SCUT_SIM_CLOUD = "1";
 process.env.SCUT_LOCAL_DRIVER = "docker";
 process.env.SCUT_IMAGE ??= "ghcr.io/beamhop/scut-agent:dev";
+// Mock Fly Machines API for the add-a-cloud flow: token "good" is valid.
+const fly = Bun.serve({ port: 0, fetch: (req) => (req.headers.get("authorization") === "Bearer good" ? Response.json([]) : new Response("unauthorized", { status: 401 })) });
+process.env.SCUT_FLY_API = `http://127.0.0.1:${fly.port}/v1`;
 const { Scut } = await import("../apps/app/src/core.ts");
 const { serve } = await import("../apps/app/src/server.ts");
 
@@ -34,6 +37,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await browser?.close();
+  fly.stop(true);
   for (const a of [...scut.agents]) await scut.remove(a.id).catch(() => {});
 });
 
@@ -115,6 +119,33 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
   await page.close();
   expect(scut.agents.find((a) => a.name === "Uiborn")).toBeTruthy();
+});
+
+test("add a cloud: wrong token shows an error, right token adds a destination", async () => {
+  const page = await open("/");
+  await page.waitForFunction(() => document.body.innerText.includes("Add a cloud"), { timeout: 10_000 }).catch(async (e) => {
+    await page.screenshot({ path: `${tmpdir()}/debug-addcloud.png` });
+    console.log("DEBUG body:", (await page.evaluate(() => document.body.innerText)).slice(0, 300));
+    throw e;
+  });
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Add a cloud"))!.click());
+  await page.waitForSelector('[aria-label="Fly.io token"]');
+  await page.type('[aria-label="Fly.io token"]', "bad");
+  await page.evaluate(() => [...document.querySelectorAll('[aria-label="Add a cloud"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.waitForFunction(() => document.body.innerText.includes("rejected that token"), { timeout: 10_000 }).catch(async (e) => {
+    console.log("DEBUG dialog text:", await page.$eval('[role="dialog"]', (d) => d.textContent));
+    throw e;
+  });
+  await page.focus('[aria-label="Fly.io token"]');
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Backspace");
+  await page.type('[aria-label="Fly.io token"]', "good");
+  await page.evaluate(() => [...document.querySelectorAll('[aria-label="Add a cloud"] button')].find((b) => b.textContent === "Connect")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Add a cloud"]') && [...document.querySelectorAll(".fixed div.font-semibold")].some((d) => d.textContent === "Fly.io"), { timeout: 10_000 }).catch(async (e) => {
+    console.log("DEBUG2:", (await page.evaluate(() => document.body.innerText)).slice(-900), "\nDESTS:", await (await fetch(`${base}/api/destinations`)).text());
+    throw e;
+  });
+  await page.close();
+  expect(scut.drivers.has("fly")).toBe(true);
 });
 
 test("no console errors on any page", () => {

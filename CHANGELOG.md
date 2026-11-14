@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.11.0 — 2026-11-14 02:42
+
+- "Add a cloud" is a real flow now: pick Fly.io, Render or Railway, follow the deep link to the provider's token page, paste, and Beamhop verifies the token before adding the destination (Fly: lists apps; Render: finds your workspace; Railway: creates or reuses a "beamhop" project and environment). Wrong tokens get a plain error.
+- Tested in real Chrome against a mock Fly API (wrong token → error, right token → Fly.io tile appears). Real provider calls still need your tokens.
+- Tests: 22/22 e2e, 8/8 UI.
+
 ## v0.10.0 — 2026-11-14 02:38
 
 - Slack channel (Socket Mode: outbound WebSocket, no public URL): answers DMs and @mentions, ignores other channel chatter, approvals as Block Kit buttons.
