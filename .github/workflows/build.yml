@@ -45,5 +45,18 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: ./scripts/build-app.sh
+        env: { TARGETS: "bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64" }
       - uses: actions/upload-artifact@v4
-        with: { name: scut-apps, path: "dist/scut-*\ndist/Beamhop-*.exe\ndist/Beamhop-*.app.zip" }
+        with: { name: scut-apps, path: "dist/scut-*\ndist/Beamhop-*.app.zip" }
+  app-windows:
+    # Bun embeds the Windows app icon only when compiling on Windows.
+    runs-on: windows-latest
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: ./scripts/build-app.sh
+        env: { TARGETS: bun-windows-x64 }
+      - uses: actions/upload-artifact@v4
+        with: { name: scut-apps-windows, path: "dist/scut-*\ndist/Beamhop-*.exe" }

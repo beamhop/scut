@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Beamhop app icon: the same mark as the favicon, on the macOS icon grid (824 px body, 100 px margin). -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2924"/>
+      <stop offset="1" stop-color="#171512"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f2ee"/>
+      <stop offset="1" stop-color="#dcd9d2"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)" filter="url(#shadow)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  <g fill="url(#dot)">
+    <circle cx="306.0" cy="306.0" r="64.4"/>
+    <circle cx="718.0" cy="306.0" r="64.4"/>
+    <circle cx="512.0" cy="409.0" r="64.4"/>
+    <circle cx="306.0" cy="512.0" r="64.4"/>
+    <circle cx="718.0" cy="512.0" r="64.4"/>
+    <circle cx="409.0" cy="718.0" r="64.4"/>
+    <circle cx="615.0" cy="718.0" r="64.4"/>
+  </g>
+</svg>
