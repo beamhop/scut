@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.16.0 — Skills
+
+- Each agent can learn Agent Skills (SKILL.md). Add one in Settings → Skills by pasting it or linking it (GitHub blob/tree links work).
+- Skills land in the agent's home (`~/.agents/skills`, plus `~/.codex/skills` for Codex), and the harness restarts once it's idle so it picks them up.
+- Bad SKILL.md files (missing name/description frontmatter) are rejected with a clear error.
+- Test: e2e checks that an added skill shows up in the model's system prompt.
+
 ## v0.15.0 — 2026-11-14 03:03
 
 Agents do their own setup chores, as decided in the UX plan.

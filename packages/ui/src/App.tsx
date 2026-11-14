@@ -51,6 +51,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [paused, setPaused] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [memory, setMemory] = useState<MemoryItem[]>([]);
+  const [skills, setSkills] = useState<{ items: { name: string; description: string }[]; error?: string }>({ items: [] });
   const ws = useRef<WebSocket | null>(null);
   const outbox = useRef<string[]>([]);
   const endpoint = agent?.current.endpoint;
@@ -92,6 +93,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "memory") setMemory(m.items);
+        else if (m.t === "skills") setSkills({ items: m.items, error: m.error });
         else if (m.t === "cloud.key") {
           fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: m.provider, token: m.token }) })
             .then((r) => r.json())
@@ -119,7 +121,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
     if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
     else outbox.current.push(JSON.stringify(m));
   }, []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, send };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, send };
 }
 
 // ---------------- mascot: one base bot, silhouettes differ per variant, visor shows status ----------------
@@ -630,6 +632,7 @@ function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; 
         ))}
       </div>
       <MemorySettings a={a} />
+      <SkillSettings a={a} />
       <ChannelSettings a={a} />
       <Schedules a={a} />
       {agent.agentPubkey && (
@@ -664,6 +667,26 @@ const CLOUD_SETUP = (provider: string, url: string) => [
   "3. Create an API key/token named \"beamhop\".",
   `4. Call give_cloud_key with provider "${provider.toLowerCase().replace(".io", "")}" and the key. Never write the key in chat.`,
 ].join("\n");
+
+function SkillSettings({ a }: { a: ReturnType<typeof useAgent> }) {
+  const [src, setSrc] = useState("");
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Skills · {a.skills.items.length}</div>
+      {a.skills.items.map((s) => (
+        <div key={s.name} className="flex items-start gap-2 rounded-lg bg-panel2 px-2 py-1.5">
+          <div className="min-w-0 flex-1"><div className="font-medium">{s.name}</div><div className="line-clamp-2 text-slate-400">{s.description}</div></div>
+          <button aria-label={`Remove ${s.name}`} onClick={() => a.send({ t: "skills", op: "delete", name: s.name })} className="text-slate-400 hover:text-red-300">✕</button>
+        </div>
+      ))}
+      <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); const v = src.trim(); if (!v) return; a.send(v.startsWith("http") ? { t: "skills", op: "add", url: v } : { t: "skills", op: "add", content: v }); setSrc(""); }}>
+        <input value={src} onChange={(e) => setSrc(e.target.value)} placeholder="Link to a SKILL.md (GitHub ok) or paste one" aria-label="Add a skill" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+        <button className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Add</button>
+      </form>
+      {a.skills.error && <div className="text-red-300">{a.skills.error}</div>}
+    </div>
+  );
+}
 
 function MemorySettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const [text, setText] = useState("");

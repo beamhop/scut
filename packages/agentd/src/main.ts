@@ -10,7 +10,7 @@ import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
 import { DiscordChannel, NostrChannel, SlackChannel, TelegramChannel, type Channel } from "@scut/channels";
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { Desktop } from "./desktop.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
@@ -400,13 +400,21 @@ async function run() {
   await mkdir(`${DATA}/workspace`, { recursive: true });
   desktop = new Desktop(DATA);
   await desktop.start();
-  harness = createHarness(
+  harness = makeHarness();
+  await harness.start();
+  await startChannels();
+  setState("running");
+  narrate("Ready");
+}
+
+function makeHarness() {
+  return createHarness(
     {
-      spec,
+      spec: spec!,
       dataDir: DATA,
       mcpCommand: MCP_CMD,
       mcpEnv: { SCUT_CONTROL_URL: `http://127.0.0.1:${PORT}`, SCUT_INTERNAL_TOKEN: INTERNAL_TOKEN },
-      systemPrompt: systemPromptFor(spec),
+      systemPrompt: systemPromptFor(spec!),
     },
     async (a) => {
       const r = await computer(a, "agent");
@@ -414,10 +422,43 @@ async function run() {
       return r.json();
     },
   );
+}
+
+// ---------- skills (Agent Skills: ~/.agents/skills/<name>/SKILL.md, read by Pi; mirrored for Codex) ----------
+const SKILLS_DIR = `${DATA}/home/.agents/skills`;
+function parseSkill(md: string): { name: string; description: string } | null {
+  const fm = md.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  const name = fm[1].match(/^name:\s*["']?([a-z0-9-]{1,64})["']?\s*$/m)?.[1];
+  const description = fm[1].match(/^description:\s*["']?(.+?)["']?\s*$/m)?.[1];
+  return name && description ? { name, description: description.slice(0, 1024) } : null;
+}
+async function listSkills() {
+  const out: { name: string; description: string }[] = [];
+  try {
+    for (const d of await readdir(SKILLS_DIR)) {
+      const f = Bun.file(`${SKILLS_DIR}/${d}/SKILL.md`);
+      if (await f.exists()) {
+        const meta = parseSkill(await f.text());
+        if (meta) out.push(meta);
+      }
+    }
+  } catch {}
+  return out;
+}
+function rawUrl(u: string) {
+  // github.com/<o>/<r>/blob/<branch>/<path> -> raw.githubusercontent.com/<o>/<r>/<branch>/<path>
+  const m = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|tree)\/([^/]+)\/(.+)$/);
+  if (!m) return u;
+  const path = m[4].endsWith("SKILL.md") ? m[4] : `${m[4].replace(/\/$/, "")}/SKILL.md`;
+  return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}/${path}`;
+}
+async function restartHarnessWhenIdle() {
+  await queue; // let any running prompt finish
+  if (!harness || !spec) return;
+  await harness.stop();
+  harness = makeHarness();
   await harness.start();
-  await startChannels();
-  setState("running");
-  narrate("Ready");
 }
 
 async function quiesce() {
@@ -587,7 +628,7 @@ Bun.serve<WsData>({
     }
   },
   websocket: {
-    open(ws) {
+    async open(ws) {
       clients.add(ws);
       ws.send(
         JSON.stringify({
@@ -604,6 +645,7 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "memory", items: memory } satisfies ServerMsg));
+      ws.send(JSON.stringify({ t: "skills", items: await listSkills() } satisfies ServerMsg));
     },
     async message(ws, raw) {
       let m: ClientMsg;
@@ -656,6 +698,27 @@ Bun.serve<WsData>({
         if (m.op === "delete") memory = memory.filter((x) => x.id !== m.id);
         if (m.op === "edit" && m.text?.trim()) memory = memory.map((x) => (x.id === m.id ? { ...x, text: m.text!.trim().slice(0, 500) } : x));
         await saveMemory();
+      } else if (m.t === "skills") {
+        let error: string | undefined;
+        try {
+          if (m.op === "add") {
+            const md = m.content?.trim() ? m.content : m.url ? await (await fetch(rawUrl(m.url), { signal: AbortSignal.timeout(15_000) })).text() : "";
+            const meta = parseSkill(md ?? "");
+            if (!meta) throw new Error("That doesn't look like a SKILL.md (needs name and description frontmatter)");
+            await mkdir(`${SKILLS_DIR}/${meta.name}`, { recursive: true });
+            await Bun.write(`${SKILLS_DIR}/${meta.name}/SKILL.md`, md!);
+            await mkdir(`${DATA}/home/.codex/skills`, { recursive: true });
+            await Bun.write(`${DATA}/home/.codex/skills/${meta.name}.md`, md!);
+            narrate(`Learned the skill "${meta.name}"`);
+          } else if (m.op === "delete" && m.name && /^[a-z0-9-]+$/.test(m.name)) {
+            await rm(`${SKILLS_DIR}/${m.name}`, { recursive: true, force: true });
+            await rm(`${DATA}/home/.codex/skills/${m.name}.md`, { force: true });
+          }
+          restartHarnessWhenIdle().catch((e) => log("harness restart failed", e?.message));
+        } catch (e: any) {
+          error = String(e?.message ?? e);
+        }
+        broadcast({ t: "skills", items: await listSkills(), error });
       } else if (m.t === "pause") {
         paused = !!m.paused;
         narrate(paused ? "You have control — agent paused" : "Control handed back");

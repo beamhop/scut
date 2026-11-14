@@ -139,7 +139,8 @@ export type ClientMsg =
   | { t: "pause"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "crew"; members: CrewMember[] }
-  | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string };
+  | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string }
+  | { t: "skills"; op: "add" | "delete"; name?: string; content?: string; url?: string };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
@@ -155,6 +156,7 @@ export type ServerMsg =
   | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean } }
   | { t: "paused"; paused: boolean }
   | { t: "memory"; items: MemoryItem[] }
+  | { t: "skills"; items: { name: string; description: string }[]; error?: string }
   /** The agent obtained a cloud provider key during an assisted signup; the app (owner) stores it. */
   | { t: "cloud.key"; provider: "fly" | "render" | "railway"; token: string; ts: number }
   | { t: "schedules"; schedules: Schedule[] }

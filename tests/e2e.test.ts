@@ -507,3 +507,28 @@ describe("v0.15: agent-assisted setup tools", () => {
     c.close();
   });
 });
+
+describe("v0.16: skills", () => {
+  test("adding a SKILL.md makes Pi advertise it to the model; bad ones are rejected", async () => {
+    const rec = await scut.create({
+      name: "Skilled",
+      harness: "pi",
+      model: { provider: "scut", api: "openai-completions", baseUrl: `http://host.docker.internal:${llm.port}/v1`, apiKey: "test", model: "mock-vision" },
+    });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "skills");
+    c.send({ t: "skills", op: "add", content: "no frontmatter here" });
+    const bad = await c.waitFor<any>((m) => m.t === "skills" && !!m.error);
+    expect(bad.error).toContain("SKILL.md");
+    c.send({ t: "skills", op: "add", content: "---\nname: weather-report\ndescription: Write a short weather report for a city. Use when asked about the weather.\n---\n\nOpen a weather site and summarise.\n" });
+    const ok = await c.waitFor<any>((m) => m.t === "skills" && m.items.some((x: any) => x.name === "weather-report"));
+    expect(ok.error).toBeUndefined();
+    await Bun.sleep(4000); // harness restarts to load it
+    const before = llm.requests.length;
+    c.send({ t: "chat", text: "what's on your screen?" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent" && (m as any).text.includes("MOCK_DONE"), 120_000);
+    const sys = JSON.stringify(llm.requests.slice(before)[0].messages.filter((m: any) => m.role === "system"));
+    expect(sys).toContain("weather-report");
+    c.close();
+  });
+});
