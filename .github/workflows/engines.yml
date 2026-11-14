@@ -24,37 +24,53 @@ jobs:
           [ -e /dev/kvm ] && sudo chmod 666 /dev/kvm || echo "no /dev/kvm"
           cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
       - run: XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-system-running || true
-      - run: bun test tests/ladder.test.ts
-      - run: bun test tests/screen-cdp.test.ts --timeout 120000
-      - run: bun test tests/host-service.test.ts --timeout 600000
-      - run: bun test tests/engines-real.test.ts --timeout 2400000
-      - name: Agent image and a local registry (gVisor and WSL tests pull without Docker)
+      - if: ${{ !cancelled() }}
+        run: bun test tests/ladder.test.ts
+      - if: ${{ !cancelled() }}
+        run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/host-service.test.ts --timeout 600000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/engines-real.test.ts --timeout 2400000
+      - if: ${{ !cancelled() }}
+        name: Agent image and a local registry (gVisor and WSL tests pull without Docker)
         run: |
           ./scripts/build-image.sh
           docker run -d -p 127.0.0.1:5000:5000 registry:2
           docker tag ghcr.io/beamhop/scut-agent:dev localhost:5000/scut-agent:dev
           docker push -q localhost:5000/scut-agent:dev
-      - run: bun test tests/host.test.ts --timeout 600000
-      - run: bun test tests/host-pi.test.ts --timeout 1200000
-      - run: bun test tests/ladder-fallback.test.ts --timeout 300000
-      - name: gVisor as a normal user (blocked by AppArmor on Ubuntu 24.04; the ladder must say so and move on)
+      - if: ${{ !cancelled() }}
+        run: bun test tests/host.test.ts --timeout 600000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/host-pi.test.ts --timeout 1200000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/ladder-fallback.test.ts --timeout 300000
+      - if: ${{ !cancelled() }}
+        name: gVisor as a normal user (blocked by AppArmor on Ubuntu 24.04; the ladder must say so and move on)
         continue-on-error: true
         run: bun test tests/gvisor.test.ts --timeout 1500000
-      - run: sudo -E env "PATH=$PATH" bun test tests/gvisor.test.ts --timeout 1500000
-      - run: sudo -E env "PATH=$PATH" bun test tests/gvisor-agent.test.ts --timeout 1500000
-      - run: sudo -E env "PATH=$PATH" bun test tests/wsl.test.ts --timeout 1500000
+      - if: ${{ !cancelled() }}
+        run: sudo -E env "PATH=$PATH" bun test tests/gvisor.test.ts --timeout 1500000
+      - if: ${{ !cancelled() }}
+        run: sudo -E env "PATH=$PATH" bun test tests/gvisor-agent.test.ts --timeout 1500000
+      - if: ${{ !cancelled() }}
+        run: sudo -E env "PATH=$PATH" bun test tests/wsl.test.ts --timeout 1500000
 
   macos:
-    runs-on: macos-14 # Apple Silicon
+    runs-on: macos-latest # Apple Silicon
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun test tests/ladder.test.ts
-      - run: bun test tests/screen-cdp.test.ts --timeout 120000
-      - run: bun test tests/host-service.test.ts --timeout 600000
-      - run: bun test tests/engines-real.test.ts --timeout 2400000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/ladder.test.ts
+      - if: ${{ !cancelled() }}
+        run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/host-service.test.ts --timeout 600000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/engines-real.test.ts --timeout 2400000
 
   windows:
     runs-on: windows-latest
@@ -65,7 +81,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: wsl.exe --status; wsl.exe --version; exit 0
         shell: pwsh
-      - run: bun test tests/ladder.test.ts
-      - run: bun test tests/screen-cdp.test.ts --timeout 120000
-      - run: bun test tests/host-service.test.ts --timeout 600000
-      - run: bun test tests/engines-real.test.ts --timeout 2400000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/ladder.test.ts
+      - if: ${{ !cancelled() }}
+        run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/host-service.test.ts --timeout 600000
+      - if: ${{ !cancelled() }}
+        run: bun test tests/engines-real.test.ts --timeout 2400000

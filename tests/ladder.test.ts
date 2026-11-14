@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chooseLocal, ladder, loadSaved, saveLocal, serviceFiles, type Engine, type Probe } from "@scut/drivers";
 
 delete process.env.SCUT_LOCAL_DRIVER;
@@ -96,8 +97,11 @@ test("SCUT_LOCAL_DRIVER forces an engine", async () => {
 });
 
 test("service definitions keep a no-sandbox agent running, per OS", () => {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
   const sd = serviceFiles("systemd", "scut-atlas-1", "/h/hosts/scut-atlas-1/run.sh", "/home/me");
-  expect(sd.path).toBe("/home/me/.config/systemd/user/beamhop-scut-atlas-1.service");
+  expect(sd.path).toBe(join("/home/me", ".config", "systemd", "user", "beamhop-scut-atlas-1.service"));
+  if (xdg) process.env.XDG_CONFIG_HOME = xdg;
   expect(sd.body).toContain("ExecStart=/bin/sh /h/hosts/scut-atlas-1/run.sh");
   expect(sd.body).toContain("Restart=on-failure");
   expect(sd.body).toContain("WantedBy=default.target");
@@ -105,7 +109,7 @@ test("service definitions keep a no-sandbox agent running, per OS", () => {
   expect(sd.uninstall[0]).toEqual(["systemctl", "--user", "disable", "--now", "beamhop-scut-atlas-1.service"]);
 
   const ld = serviceFiles("launchd", "scut-atlas-1", "/Users/me/.scut/hosts/a&b/run.sh", "/Users/me");
-  expect(ld.path).toBe("/Users/me/Library/LaunchAgents/com.beamhop.scut-atlas-1.plist");
+  expect(ld.path).toBe(join("/Users/me", "Library", "LaunchAgents", "com.beamhop.scut-atlas-1.plist"));
   expect(ld.body).toContain("<string>/Users/me/.scut/hosts/a&amp;b/run.sh</string>");
   expect(ld.body).toContain("<key>RunAtLoad</key><true/>");
   expect(ld.install[0].slice(0, 2)).toEqual(["launchctl", "bootstrap"]);
@@ -121,7 +125,7 @@ test("service definitions keep a no-sandbox agent running, per OS", () => {
 test("saved choices live in engine.json", async () => {
   const h = home();
   await saveLocal(h, { engine: "gvisor", hostAllowed: true });
-  const j = JSON.parse(readFileSync(`${h}/engine.json`, "utf8"));
+  const j = JSON.parse(readFileSync(join(h, "engine.json"), "utf8"));
   expect(j.engine).toBe("gvisor");
   expect(j.hostAllowed).toBe(true);
   expect(typeof j.at).toBe("number");
