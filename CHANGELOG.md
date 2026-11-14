@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.47.0 — Survives a reboot
+
+- **Fixed:** after the computer (or Docker) restarted, local agents stayed dead — and when started by hand they crashed, because the previous X server's lock file and Chromium's "profile in use" lock were still on disk. Now:
+  - agent hosts clear those stale locks when they start;
+  - local agent containers restart with Docker on their own;
+  - when the app starts, it starts any stopped local agents and picks up their new address (the port can change).
+- Test: stop an agent's container as a power-off would, start the app — the agent is back with its chat history and a live screen.
+
 ## v0.46.1 — Hear about finished tasks
 
 - When a scheduled task finishes while Beamhop is in the background, you get a desktop notification with what the agent found (or that it couldn't finish). Chat apps you've paired still get the full result.

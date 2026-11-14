@@ -25,6 +25,8 @@ export interface HostDriver {
   monthlyUsd: number;
   create(opts: CreateOpts): Promise<Instance>;
   destroy(inst: Instance): Promise<void>;
+  /** Bring a stopped host back (e.g. after the computer restarted). Returns it with its current endpoint. */
+  revive?(inst: Instance): Promise<Instance>;
 }
 
 export async function waitHealthy(endpoint: string, timeoutMs = 180_000): Promise<any> {

@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 // The agent's own computer: Xvfb + Openbox + Chromium, MJPEG frames via ffmpeg, input via xdotool.
 import { SCREEN } from "@scut/protocol";
 import type { Subprocess } from "bun";
@@ -18,6 +19,9 @@ export class Desktop {
   constructor(private dataDir: string, private homeUrl = "about:blank") {}
 
   async start() {
+    // After a restart of the host, the last X server's lock and socket are still there and stop a new one starting.
+    const n = DISPLAY.replace(":", "");
+    for (const f of [`/tmp/.X${n}-lock`, `/tmp/.X11-unix/X${n}`]) await rm(f, { force: true }).catch(() => {});
     const xvfb = Bun.spawn(["Xvfb", DISPLAY, "-screen", "0", `${SCREEN.w}x${SCREEN.h}x24`, "-nolisten", "tcp", "-ac"], {
       stdout: "ignore",
       stderr: "ignore",
@@ -58,6 +62,8 @@ export class Desktop {
   }
 
   startBrowser(url = "about:blank") {
+    // A profile left by a host that stopped uncleanly (restart, beam) still says it's in use; Chromium would refuse it.
+    for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) require("node:fs").rmSync(`${this.dataDir}/chrome/${f}`, { force: true });
     const bin = process.env.SCUT_BROWSER ?? "chromium";
     const p = Bun.spawn(
       [

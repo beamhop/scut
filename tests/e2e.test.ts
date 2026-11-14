@@ -866,3 +866,25 @@ describe("v0.46: agents schedule their own tasks", () => {
     c.close();
   });
 });
+
+describe("v0.47: after a restart", () => {
+  test("a stopped local agent is started again on app start, at its new address, with its memory", async () => {
+    const rec = await scut.create({ name: "Phoenix", harness: "mock" });
+    const c = await client(rec.id);
+    c.send({ t: "chat", text: "before the restart" });
+    await c.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
+    c.close();
+    const name = rec.current.meta!.name;
+    Bun.spawnSync(["docker", "stop", "-t", "2", name]); // the computer was switched off
+    expect(await fetch(`${rec.current.endpoint}/health`).then(() => "up", () => "down")).toBe("down");
+    const again = await Scut.open(); // the app starts with the computer
+    const ep = again.get(rec.id).current.endpoint;
+    await until(async () => (await fetch(`${ep}/health`).then((r) => r.json(), () => null))?.state === "running" || undefined, 90_000, "agent back up");
+    Object.assign(scut.get(rec.id), { current: again.get(rec.id).current });
+    const c2 = await client(rec.id);
+    const h = await c2.waitFor<any>((m) => m.t === "history");
+    expect(JSON.stringify(h.chat)).toContain("before the restart");
+    await until(() => c2.frames > 0 || undefined, 30_000, "its screen is back"); // X server and Chromium restarted cleanly
+    c2.close();
+  }, 200_000);
+});

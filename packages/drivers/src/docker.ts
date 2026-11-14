@@ -59,6 +59,16 @@ export class DockerDriver implements HostDriver {
     if ((await p.exited) !== 0) throw new Error(`Couldn't download the agent computer: ${(await new Response(p.stderr).text()).trim().slice(-300)}`);
   }
 
+  async revive(inst: Instance): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    const running = Bun.spawnSync(["docker", "inspect", "-f", "{{.State.Running}}", name], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
+    if (running === "") return inst; // gone; nothing to revive
+    if (running !== "true") Bun.spawnSync(["docker", "start", name], { stdout: "ignore", stderr: "ignore" });
+    // The host port is picked at start, so it can differ from last time.
+    const port = Bun.spawnSync(["docker", "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
+    return port ? { ...inst, endpoint: `http://${this.host}:${port}` } : inst;
+  }
+
   async create(o: CreateOpts): Promise<Instance> {
     const engine = DockerDriver.available();
     if (!engine.ok) throw new Error(engine.reason);
@@ -69,6 +79,7 @@ export class DockerDriver implements HostDriver {
       "-p", `${this.host}::8080`,
       "-v", `${name}-data:/data`,
       "--shm-size", "512m",
+      "--restart", "unless-stopped", // come back after Docker or the computer restarts
       ...(o.cpus ? ["--cpus", String(o.cpus)] : []),
       ...(o.memoryMb ? ["-m", `${o.memoryMb}m`] : []),
       "--add-host", "host.docker.internal:host-gateway",

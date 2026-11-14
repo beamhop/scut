@@ -60,6 +60,7 @@ export class Scut {
     s.agents = await loadJson<AgentRecord[]>(home, "agents.json", []);
     await s.loadDrivers();
     await s.recoverInterruptedBeams();
+    await s.reviveLocalHosts();
     void s.cleanupRetiredHosts();
     return s;
   }
@@ -90,6 +91,20 @@ export class Scut {
       a.beam = { ...a.beam!, stage: "failed", target: undefined, error: `The app closed during the move. ${a.name} stayed where it was.`, doneAt: Date.now() };
     }
     if (stuck.length) await this.save();
+  }
+
+  /** After a restart of the computer (or Docker), start local agents again and pick up their new addresses. */
+  async reviveLocalHosts() {
+    let changed = false;
+    for (const a of this.agents) {
+      const d = this.drivers.get(a.current.driver);
+      if (!d?.revive || d.monthlyUsd > 0) continue; // only local hosts; clouds keep running on their own
+      const ok = await fetch(`${a.current.endpoint}/health`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false);
+      if (ok) continue;
+      const next = await d.revive(a.current).catch(() => a.current);
+      if (next.endpoint !== a.current.endpoint) { a.current = next; changed = true; }
+    }
+    if (changed) await this.save();
   }
 
   /** Remove old hosts that earlier versions left behind after beams (retired, but still a container or a billed machine). */
