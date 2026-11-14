@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.33.1 — CI green again
+
+- Fixed: since v0.20 the CI typecheck failed on GitHub because the embedded-UI module is generated at build time and isn't in git, which also skipped the CI image build and test run. Added a type declaration for it; typecheck passes with and without the generated file.
+
 ## v0.33.0 — Copilot CLI on your brain too
 
 - Copilot CLI uses the brain you picked through its bring-your-own-key mode (`COPILOT_PROVIDER_*`, offline so it never calls GitHub), so all four harnesses now work with just an API key. Without a brain it still uses your GitHub sign-in.
