@@ -15,6 +15,27 @@ function asset(path: string): Response | null {
   return a ? new Response(Buffer.from(a.b64, "base64"), { headers: { "content-type": a.type } }) : null;
 }
 
+const LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+const SECURITY_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY", // nobody can frame the app and trick a click on "Allow"
+  "content-security-policy": "frame-ancestors 'none'",
+  "referrer-policy": "no-referrer",
+};
+
+/**
+ * The app API runs on localhost, but any website the user visits can still send requests to it.
+ * Refuse anything that isn't from the app's own page: a foreign Host (DNS rebinding) or a foreign Origin (CSRF).
+ */
+export function localOnly(req: Request): string | null {
+  const host = req.headers.get("host") ?? "";
+  if (!LOOPBACK.test(host)) return "forbidden host";
+  const origin = req.headers.get("origin");
+  if (origin && origin !== `http://${host}`) return "forbidden origin";
+  if (req.headers.get("sec-fetch-site") === "cross-site") return "forbidden cross-site request";
+  return null;
+}
+
 export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) {
   const json = (v: unknown, status = 200) => Response.json(v, { status });
   return Bun.serve({
@@ -22,6 +43,15 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
     hostname: "127.0.0.1",
     idleTimeout: 255,
     async fetch(req) {
+      const bad = localOnly(req);
+      if (bad) return new Response(bad, { status: 403, headers: SECURITY_HEADERS });
+      const res = await handle(req);
+      for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.headers.set(k, v);
+      return res;
+    },
+  });
+
+  async function handle(req: Request): Promise<Response> {
       const url = new URL(req.url);
       const p = url.pathname;
       try {
@@ -99,6 +129,5 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
       } catch (e: any) {
         return json({ error: String(e?.message ?? e) }, 500);
       }
-    },
-  });
+  }
 }

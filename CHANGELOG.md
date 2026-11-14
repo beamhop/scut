@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.26.0 — Security hardening
+
+- **Fixed a real hole:** any website you visited could send requests to the app's local API (cross-site POSTs are processed even when the reply can't be read), e.g. to start a beam or save a cloud token, and DNS rebinding could read it. The API now refuses requests whose Host isn't localhost or whose Origin isn't the app itself, and anything marked cross-site.
+- The app and the agent's phone page can't be framed by other sites (X-Frame-Options DENY + CSP frame-ancestors), so nobody can trick a click on "Allow".
+- Agent hosts: constant-time check of the internal token, handoff bodies capped at 1 MB, `..` paths never reach the file system; added nosniff and no-referrer headers.
+- Tests: CSRF, rebinding and cross-site requests get 403 while the real UI keeps working; path-traversal probes against a live agent never return its data.
+
 ## v0.25.0 — Accessibility audit
 
 - Ran axe-core (all rules, WCAG 2.2 AA plus best practices) on the crew grid, New agent, Add a cloud, the agent view and Settings. WCAG rules already passed; fixed the remaining structure issues: one level-one heading per screen (Beamhop / the agent's name), a main landmark around the agent's screen, a labelled chat/settings sidebar, and the destination dock as a labelled navigation region.

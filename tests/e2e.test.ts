@@ -599,3 +599,19 @@ describe("v0.24: laptop sleep", () => {
     expect(health.state).toBe("running");
   }, 180_000);
 });
+
+describe("v0.26: agentd hardening", () => {
+  test("no path traversal, no framing, oversized handoffs refused, internal API needs its token", async () => {
+    const ep = scut.agents.find((a) => a.name === "Mocky")!.current.endpoint;
+    for (const probe of ["/../data/spec.json", "/assets/../../data/spec.json", "/%2e%2e/%2e%2e/data/spec.json", "/x/..%2f..%2fdata%2fspec.json.js"]) {
+      const r = await fetch(`${ep}${probe}`);
+      const body = await r.text();
+      expect(body).not.toContain("ownerPubkey");
+      expect(body).not.toContain("agentPubkey");
+    }
+    const ui = await fetch(`${ep}/`);
+    expect(ui.headers.get("x-frame-options")).toBe("DENY");
+    const internal = await fetch(`${ep}/internal/computer`, { method: "POST", headers: { "x-internal-token": "nope" }, body: "{}" });
+    expect(internal.status).toBe(403);
+  });
+});

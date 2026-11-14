@@ -11,6 +11,7 @@ import { DiscordChannel, NostrChannel, SlackChannel, TelegramChannel, type Chann
 import type { Event } from "nostr-tools";
 import type { ServerWebSocket } from "bun";
 import { appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { Desktop } from "./desktop.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
@@ -574,12 +575,13 @@ Bun.serve<WsData>({
       if (p === "/beam/hello") return Response.json({ hostPubkey, state, ticket });
 
       if (p === "/internal/computer" && req.method === "POST") {
-        if (req.headers.get("x-internal-token") !== INTERNAL_TOKEN) return new Response("forbidden", { status: 403 });
+        if (!sameToken(req.headers.get("x-internal-token"), INTERNAL_TOKEN)) return new Response("forbidden", { status: 403 });
         return computer((await req.json()) as Record<string, any>, "agent");
       }
 
       if (p === "/beam/handoff" && req.method === "POST") {
         if (state !== "awaiting" || !ticket) return new Response("not awaiting", { status: 409 });
+        if (!smallBody(req)) return new Response("too large", { status: 413 });
         const { sealed } = (await req.json()) as { sealed: string };
         const h = unseal<Handoff>(hostSk, ticket.ownerPubkey, sealed); // only the owner can produce this
         if (h.beamId !== ticket.beamId) return new Response("wrong beam", { status: 400 });
@@ -791,12 +793,15 @@ setInterval(() => {
   if (!desktop) frameHooked = false;
 }, 200);
 
+const UI_HEADERS = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "referrer-policy": "no-referrer" };
 async function serveUi(p: string) {
-  const f = Bun.file(`${UI_DIR}${p === "/" ? "/index.html" : p}`);
-  if (await f.exists()) return new Response(f);
+  const f = Bun.file(`${UI_DIR}${p === "/" || p.includes("..") ? "/index.html" : p}`);
+  if (await f.exists()) return new Response(f, { headers: UI_HEADERS });
   const idx = Bun.file(`${UI_DIR}/index.html`);
-  return (await idx.exists()) ? new Response(idx) : new Response("scut agent", { status: 200 });
+  return (await idx.exists()) ? new Response(idx, { headers: UI_HEADERS }) : new Response("scut agent", { status: 200 });
 }
+const smallBody = (req: Request) => Number(req.headers.get("content-length") ?? 0) <= 1024 * 1024;
+const sameToken = (a: string | null, b: string) => !!a && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 log(`listening on :${PORT} host=${hostPubkey.slice(0, 12)} ticket=${ticket?.mode ?? "none"}`);
 await run();

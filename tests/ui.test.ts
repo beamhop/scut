@@ -213,3 +213,20 @@ test("no accessibility violations on the main screens (axe-core, all rules)", as
   expect(await audit(view)).toEqual([]);
   await view.close();
 });
+
+test("the local API refuses other websites (CSRF, DNS rebinding) and can't be framed", async () => {
+  const csrf = await fetch(`${base}/api/providers`, { method: "POST", headers: { origin: "https://evil.example", "content-type": "text/plain" }, body: JSON.stringify({ id: "fly", token: "x" }) });
+  expect(csrf.status).toBe(403);
+  const rebound = await fetch(`${base}/api/agents`, { headers: { host: "evil.example" } });
+  expect(rebound.status).toBe(403);
+  const crossSite = await fetch(`${base}/api/agents`, { headers: { "sec-fetch-site": "cross-site" } });
+  expect(crossSite.status).toBe(403);
+  const ok = await fetch(`${base}/api/agents`, { headers: { origin: base } });
+  expect(ok.status).toBe(200);
+  expect(ok.headers.get("x-frame-options")).toBe("DENY");
+  // and the real UI still works from its own origin (POST from the page)
+  const page = await open("/");
+  const r = await page.evaluate(async () => (await fetch("/api/brain/verify", { method: "POST", body: JSON.stringify({ api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", model: "x" }) })).status);
+  expect(r).toBe(200);
+  await page.close();
+});
