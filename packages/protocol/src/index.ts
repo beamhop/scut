@@ -102,10 +102,12 @@ export function signAuth(ownerSk: Uint8Array, host: string): string {
   return Buffer.from(JSON.stringify(ev)).toString("base64url");
 }
 
-export function verifyAuth(token: string, ownerPubkey: string, maxAgeSec = 300): boolean {
+/** Verify an owner token. When `host` is given, the token must have been signed for that host (no replay to other agents). */
+export function verifyAuth(token: string, ownerPubkey: string, maxAgeSec = 900, host?: string): boolean {
   try {
     const ev = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as Event;
     if (ev.kind !== AUTH_KIND || ev.pubkey !== ownerPubkey || !verifyEvent(ev)) return false;
+    if (host && ev.tags.find((t) => t[0] === "u")?.[1] !== host) return false;
     return Math.abs(Date.now() / 1000 - ev.created_at) <= maxAgeSec;
   } catch {
     return false;
@@ -129,7 +131,9 @@ export type ClientMsg =
   | { t: "chat"; text: string }
   | { t: "approval"; id: string; ok: boolean }
   | { t: "stop" }
-  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string };
+  | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string }
+  | { t: "pause"; paused: boolean }
+  | { t: "schedules"; schedules: Schedule[] };
 
 export type ServerMsg =
   | { t: "hello"; agent: Pick<AgentSpec, "id" | "name" | "harness" | "mascot" | "autonomy">; state: AgentState; screen: { w: number; h: number } }
@@ -143,8 +147,31 @@ export type ServerMsg =
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
   | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; dayTokens: number }
+  | { t: "paused"; paused: boolean }
+  | { t: "schedules"; schedules: Schedule[] }
   | { t: "pairing"; telegram?: { bot?: string; code?: string; owner?: string } };
 
 export type AgentState = "awaiting" | "starting" | "running" | "busy" | "stuck" | "quiescing" | "retired";
 
 export const SCREEN = { w: 1280, h: 800 };
+
+/** A recurring task. `daily` runs at minuteOfDay (UTC); `every` runs every `minutes`. */
+export interface Schedule {
+  id: string;
+  prompt: string;
+  kind: "daily" | "every";
+  minuteOfDay?: number;
+  minutes?: number;
+  lastRun?: number;
+  enabled: boolean;
+}
+
+export function scheduleDue(s: Schedule, now = Date.now()): boolean {
+  if (!s.enabled) return false;
+  if (s.kind === "every") return !s.lastRun || now - s.lastRun >= (s.minutes ?? 60) * 60_000;
+  const d = new Date(now);
+  const mod = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const at = today + (s.minuteOfDay ?? 0) * 60_000;
+  return mod >= (s.minuteOfDay ?? 0) && (!s.lastRun || s.lastRun < at);
+}

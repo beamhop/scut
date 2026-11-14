@@ -39,5 +39,5 @@
     "@scut/ui": "workspace:*",
     "@scut/app": "workspace:*"
   },
-  "version": "0.2.1"
+  "version": "0.3.0"
 }

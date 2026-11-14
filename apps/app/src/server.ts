@@ -12,7 +12,7 @@ export function serve(scut: Scut, port: number, uiDir: string) {
       const p = url.pathname;
       try {
         if (p === "/api/agents" && req.method === "GET") {
-          return json(scut.agents.map((a) => ({ ...a, token: scut.auth(a.current.endpoint) })));
+          return json(await Promise.all(scut.agents.map(async (a) => ({ ...a, token: scut.auth(a.current.endpoint), price: await scut.price(a.model) }))));
         }
         if (p === "/api/agents" && req.method === "POST") {
           const body = (await req.json()) as any;

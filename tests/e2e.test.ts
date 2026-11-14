@@ -7,7 +7,7 @@ import type { ServerMsg } from "@scut/protocol";
 import { startMockLlm } from "./mock-llm.ts";
 import { startMockTelegram } from "./mock-telegram.ts";
 const tg = startMockTelegram();
-process.env.SCUT_AGENT_ENV = `SCUT_TELEGRAM_API=http://host.docker.internal:${tg.port}`;
+process.env.SCUT_AGENT_ENV = `SCUT_TELEGRAM_API=http://host.docker.internal:${tg.port},SCUT_SCHEDULE_TICK_MS=1000`;
 
 process.env.SCUT_HOME = mkdtempSync(`${tmpdir()}/scut-test-`);
 process.env.SCUT_SIM_CLOUD = "1";
@@ -255,5 +255,42 @@ describe("approvals survive reconnects", () => {
     c2.send({ t: "approval", id: req.id, ok: true });
     await c2.waitFor((m) => m.t === "chat" && (m as any).from === "agent");
     c2.close();
+  });
+});
+
+describe("v0.3: auth binding, take control, schedules", () => {
+  test("a token signed for one agent is rejected by another", async () => {
+    const a = await scut.create({ name: "Alpha", harness: "mock" });
+    const b = await scut.create({ name: "Bravo", harness: "mock" });
+    const tokA = scut.auth(a.current.endpoint);
+    expect((await fetch(`${a.current.endpoint}/status?auth=${tokA}`)).status).toBe(200);
+    expect((await fetch(`${b.current.endpoint}/status?auth=${tokA}`)).status).toBe(401);
+  });
+
+  test("take control pauses agent actions until handed back", async () => {
+    const rec = await scut.create({ name: "Pausy", harness: "mock" });
+    const c = await client(rec.id);
+    c.send({ t: "pause", paused: true });
+    await c.waitFor((m) => m.t === "paused" && (m as any).paused === true);
+    c.send({ t: "chat", text: "open https://example.com" });
+    await c.waitFor((m) => m.t === "narration" && (m as any).text.startsWith("Paused"));
+    await Bun.sleep(1500);
+    expect(c.msgs.find((m) => m.t === "chat" && (m as any).from === "agent")).toBeUndefined();
+    c.send({ t: "pause", paused: false });
+    const reply = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent");
+    expect(reply.text).toContain("message #1");
+    c.close();
+  });
+
+  test("scheduled tasks run on their own and persist", async () => {
+    const rec = await scut.create({ name: "Clock", harness: "mock" });
+    const c = await client(rec.id);
+    await c.waitFor((m) => m.t === "schedules");
+    c.send({ t: "schedules", schedules: [{ id: "s1", prompt: "scheduled ping", kind: "every", minutes: 60, enabled: true }] });
+    const ran = await c.waitFor<any>((m) => m.t === "chat" && m.from === "agent" && m.channel === "schedule", 20_000);
+    expect(ran.text).toContain("scheduled ping");
+    const sched = await c.waitFor<any>((m) => m.t === "schedules" && m.schedules[0]?.lastRun);
+    expect(sched.schedules[0].lastRun).toBeGreaterThan(0);
+    c.close();
   });
 });

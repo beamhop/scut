@@ -20,6 +20,7 @@ export interface AgentRecord {
   mascot: string;
   harness: HarnessKind;
   agentPubkey: string;
+  model?: { baseUrl?: string; model: string };
   current: Instance;
   history: Instance[];
   beam?: { to: string; stage: BeamStage; error?: string; startedAt: number };
@@ -84,9 +85,31 @@ export class Scut {
     return a;
   }
 
+  private tokenCache = new Map<string, { token: string; at: number }>();
+  /** Owner token for an agent endpoint, cached for 5 minutes (tokens are valid for 15). */
   auth(endpoint: string) {
-    return signAuth(this.ownerSk, new URL(endpoint).host);
+    const host = new URL(endpoint).host;
+    const c = this.tokenCache.get(host);
+    if (c && Date.now() - c.at < 300_000) return c.token;
+    const token = signAuth(this.ownerSk, host);
+    this.tokenCache.set(host, { token, at: Date.now() });
+    return token;
   }
+
+  private prices = new Map<string, { in: number; out: number }>();
+  /** USD per million tokens for OpenRouter models (fetched once per hour). */
+  async price(model?: { baseUrl?: string; model: string }) {
+    if (!model?.baseUrl?.includes("openrouter.ai")) return undefined;
+    if (!this.prices.size || Date.now() - this.pricesAt > 3_600_000) {
+      try {
+        const j = (await (await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(8000) })).json()) as any;
+        for (const m of j.data ?? []) this.prices.set(m.id, { in: Number(m.pricing?.prompt ?? 0) * 1e6, out: Number(m.pricing?.completion ?? 0) * 1e6 });
+        this.pricesAt = Date.now();
+      } catch {}
+    }
+    return this.prices.get(model.model);
+  }
+  private pricesAt = 0;
 
   private async req(endpoint: string, path: string, init: RequestInit = {}) {
     const r = await fetch(`${endpoint}${path}`, {
@@ -157,7 +180,7 @@ export class Scut {
       await driver.destroy(inst).catch(() => {});
       throw e;
     }
-    const rec: AgentRecord = { id, name: o.name, mascot: spec.mascot!, harness: spec.harness, agentPubkey: spec.agentPubkey, current: inst, history: [] };
+    const rec: AgentRecord = { id, name: o.name, mascot: spec.mascot!, harness: spec.harness, agentPubkey: spec.agentPubkey, model: o.model && { baseUrl: o.model.baseUrl, model: o.model.model }, current: inst, history: [] };
     this.agents.push(rec);
     await this.save();
     return rec;

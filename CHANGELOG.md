@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.0 — 2026-11-14 01:45
+
+- Owner tokens are bound to the agent's host (a token for one agent can't be replayed against another) and live 15 minutes; the app caches them so viewers no longer reconnect on every poll.
+- Take control / Hand back: pauses the agent's actions (it keeps observing) while you work on its screen, e.g. for logins and CAPTCHAs.
+- Scheduled tasks per agent (daily at a local time, or every N minutes); results are also sent to your paired Telegram.
+- Cost shown per agent for OpenRouter models (live pricing), tokens otherwise.
+- Tests: 17/17 e2e, 5/5 UI.
+
 ## v0.2.1 — 2026-11-14 01:30
 
 - Fix: agent view crashed in current Chrome (effect returned scrollIntoView's promise).

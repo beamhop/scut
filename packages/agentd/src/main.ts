@@ -3,7 +3,7 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  SCREEN, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -45,6 +45,8 @@ let tgBot: string | undefined;
 type ChatLine = { from: string; channel: string; text: string; ts: number };
 const chatLog: ChatLine[] = [];
 const narrationLog: { text: string; ts: number }[] = [];
+let paused = false;
+let schedules: Schedule[] = [];
 let usageDay = new Date().toISOString().slice(0, 10);
 let dayTokens = 0;
 
@@ -134,6 +136,11 @@ async function computer(a: Record<string, any>, who: "agent" | "owner"): Promise
     return Response.json({ ok });
   }
   if (who === "agent") {
+    if (paused) {
+      narrate("Paused — waiting for you to hand back control");
+      while (paused) await Bun.sleep(300);
+      narrate("Resumed");
+    }
     if (spec?.autonomy === "ask") {
       const ok = await requestApproval(`${a.kind}${a.url ? " " + a.url : ""}${a.x !== undefined ? ` at ${a.x},${a.y}` : ""}${a.text ? ` "${String(a.text).slice(0, 40)}"` : ""}`);
       if (!ok) return new Response("denied by owner", { status: 403 });
@@ -157,7 +164,7 @@ function describe(a: Record<string, any>) {
 
 // ---------- prompts (serialized) ----------
 let queue: Promise<unknown> = Promise.resolve();
-function prompt(text: string, origin: { channel: string; chatId?: string; from: string }) {
+function prompt(text: string, origin: { channel: string; chatId?: string; from: string; notify?: boolean }) {
   recordChat({ from: origin.from, channel: origin.channel, text, ts: Date.now() });
   queue = queue.then(async () => {
     if (!harness || state === "retired" || state === "quiescing") return;
@@ -188,7 +195,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       });
       const out = reply || "(no reply)";
       recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
-      if (origin.channel === "telegram" && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, out);
+      if ((origin.channel === "telegram" || origin.notify) && origin.chatId) await channels.find((c) => c.name === "telegram")?.send(origin.chatId, origin.notify ? `⏰ ${text}\n\n${out}` : out);
       setState("running");
       narrate("Idle");
     } catch (e: any) {
@@ -253,6 +260,7 @@ async function run() {
     usageDay = usage.usageDay;
     dayTokens = usage.dayTokens;
   }
+  schedules = (await readJson<Schedule[]>(`${DATA}/schedules.json`)) ?? [];
   try {
     const lines = (await readFile(`${DATA}/chat.jsonl`, "utf8")).trim().split("\n").filter(Boolean).slice(-500);
     chatLog.splice(0, chatLog.length, ...lines.map((l) => JSON.parse(l)));
@@ -337,10 +345,27 @@ async function stats() {
 }
 setInterval(() => clients.size && stats().catch(() => {}), 2000);
 
+// ---------- scheduled tasks ----------
+setInterval(async () => {
+  if (state !== "running" || !holdsLease()) return;
+  let changed = false;
+  for (const s of schedules) {
+    if (!scheduleDue(s)) continue;
+    s.lastRun = Date.now();
+    changed = true;
+    prompt(s.prompt, { channel: "schedule", from: "schedule", chatId: tgOwner?.chatId, notify: true });
+  }
+  if (changed) {
+    await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
+    broadcast({ t: "schedules", schedules });
+  }
+}, Number(process.env.SCUT_SCHEDULE_TICK_MS ?? 20_000));
+
 // ---------- HTTP / WS server ----------
 function authed(req: Request, url: URL) {
   const tok = url.searchParams.get("auth") ?? req.headers.get("authorization")?.replace(/^Scut /, "") ?? "";
-  return !!ownerPubkey() && verifyAuth(tok, ownerPubkey());
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? undefined;
+  return !!ownerPubkey() && verifyAuth(tok, ownerPubkey(), 900, host);
 }
 
 Bun.serve<WsData>({
@@ -443,6 +468,8 @@ Bun.serve<WsData>({
       ws.send(JSON.stringify(pairingMsg()));
       ws.send(JSON.stringify(settingsMsg()));
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
+      ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
+      ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
     },
     async message(ws, raw) {
       let m: ClientMsg;
@@ -468,6 +495,14 @@ Bun.serve<WsData>({
         if (typeof m.persona === "string") spec.persona = m.persona.slice(0, 2000);
         await Bun.write(`${DATA}/spec.json`, JSON.stringify(spec, null, 2));
         broadcast(settingsMsg());
+      } else if (m.t === "pause") {
+        paused = !!m.paused;
+        narrate(paused ? "You have control — agent paused" : "Control handed back");
+        broadcast({ t: "paused", paused });
+      } else if (m.t === "schedules" && Array.isArray(m.schedules)) {
+        schedules = m.schedules.slice(0, 50).map((s) => ({ ...s, prompt: String(s.prompt).slice(0, 2000) }));
+        await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
+        broadcast({ t: "schedules", schedules });
       } else if (m.t === "stop") {
         harness?.abort?.();
         for (const [id] of approvals) resolveApproval(id, false, "owner");

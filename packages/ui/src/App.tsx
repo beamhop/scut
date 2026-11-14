@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState } from "@scut/protocol";
+import type { ServerMsg, AgentState, Schedule } from "@scut/protocol";
 
 // ---------------- types + api ----------------
 type Instance = { driver: string; instanceId: string; endpoint: string };
 type Agent = {
   id: string; name: string; mascot: string; harness: string; agentPubkey: string;
   current: Instance; history: Instance[]; token: string;
+  model?: { baseUrl?: string; model: string }; price?: { in: number; out: number };
   beam?: { to: string; stage: string; error?: string; startedAt: number };
 };
 type Destination = { id: string; label: string; isolation: "vm" | "container"; monthlyUsd: number };
@@ -45,9 +46,13 @@ function useAgent(agent: Agent | undefined, frames: boolean) {
   const [settings, setSettings] = useState<Settings>();
   const [pairing, setPairing] = useState<Pairing>();
   const [connected, setConnected] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
   const ws = useRef<WebSocket | null>(null);
   const endpoint = agent?.current.endpoint;
-  const token = agent?.token;
+  const tokenRef = useRef(agent?.token);
+  tokenRef.current = agent?.token;
+  const token = agent?.token ? "y" : "";
   const beaming = !!agent?.beam && !["online", "failed"].includes(agent.beam.stage);
 
   useEffect(() => {
@@ -56,7 +61,7 @@ function useAgent(agent: Agent | undefined, frames: boolean) {
     let url: string | undefined;
     let sock: WebSocket;
     const connect = () => {
-      sock = new WebSocket(`${endpoint.replace(/^http/, "ws")}/ws?auth=${token}`);
+      sock = new WebSocket(`${endpoint.replace(/^http/, "ws")}/ws?auth=${tokenRef.current}`);
       sock.binaryType = "blob";
       ws.current = sock;
       sock.onopen = () => { setConnected(true); sock.send(JSON.stringify({ t: "subscribe", frames })); };
@@ -76,6 +81,8 @@ function useAgent(agent: Agent | undefined, frames: boolean) {
         else if (m.t === "stats") setStats(m);
         else if (m.t === "settings") setSettings(m);
         else if (m.t === "pairing") setPairing(m.telegram);
+        else if (m.t === "paused") setPaused(m.paused);
+        else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "cursor" && m.who === "agent") setAgentCursor({ x: m.x, y: m.y });
         else if (m.t === "approval.request") {
           setApprovals((a) => [...a, m]);
@@ -93,7 +100,7 @@ function useAgent(agent: Agent | undefined, frames: boolean) {
   }, [endpoint, token, frames, beaming]);
 
   const send = useCallback((m: unknown) => ws.current?.readyState === 1 && ws.current.send(JSON.stringify(m)), []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, send };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, send };
 }
 
 // ---------------- mascot: one base bot, silhouettes differ per variant, visor shows status ----------------
@@ -121,6 +128,12 @@ function Mascot({ variant = "cyan", size = 40, state = "running" }: { variant?: 
       <path d="M22 51 l-3 8 M42 51 l3 8" stroke={c} strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
+}
+
+function cost(agent: Agent, t: { input: number; output: number }) {
+  if (!agent.price) return `${((t.input + t.output) / 1000).toFixed(1)}k tokens`;
+  const usd = (t.input * agent.price.in + t.output * agent.price.out) / 1e6;
+  return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)} spent`;
 }
 
 const STATE_META: Record<string, { label: string; icon: string; tone: string }> = {
@@ -212,7 +225,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
           </div>
           <div className="truncate font-mono text-[12px] text-slate-400">{now}</div>
         </div>
-        {a.stats && <div className="text-right font-mono text-[10px] leading-4 text-slate-500">{a.stats.cpu}% CPU<br />{(a.stats.memMb / 1024).toFixed(1)} GB</div>}
+        {a.stats && <div className="text-right font-mono text-[10px] leading-4 text-slate-500">{a.stats.cpu}% CPU · {(a.stats.memMb / 1024).toFixed(1)} GB<br />{cost(agent, a.stats.tokens)}</div>}
       </div>
       {agent.beam?.stage === "failed" && <div className="bg-red-500/15 px-3 py-1.5 text-xs text-red-300">Beam failed, {agent.name} stayed put: {agent.beam.error?.slice(0, 120)}</div>}
     </div>
@@ -402,8 +415,9 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
         <StateChip state={a.state} />
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden font-mono text-[11px] text-slate-500 lg:inline">
-            {a.stats && `${a.stats.cpu}% CPU · ${(a.stats.memMb / 1024).toFixed(1)}/${(a.stats.memTotalMb / 1024).toFixed(1)} GB · ${(a.stats.tokens.input + a.stats.tokens.output).toLocaleString()} tokens`}
+            {a.stats && `${a.stats.cpu}% CPU · ${(a.stats.memMb / 1024).toFixed(1)}/${(a.stats.memTotalMb / 1024).toFixed(1)} GB · ${cost(agent, a.stats.tokens)}`}
           </span>
+          <button onClick={() => a.send({ t: "pause", paused: !a.paused })} className={`rounded-full px-3 py-1 text-sm ${a.paused ? "bg-beam font-semibold text-black" : "bg-panel2 hover:bg-white/10"}`}>{a.paused ? "Hand back" : "Take control"}</button>
           {a.state === "busy" && <button onClick={() => a.send({ t: "stop" })} className="rounded-full border border-red-400/50 px-3 py-1 text-sm text-red-300 hover:bg-red-500/10">Stop</button>}
           <div className="relative">
             <button onClick={() => setMenu(!menu)} disabled={beaming} className="rounded-full bg-panel2 px-3 py-1 text-sm text-beam hover:bg-white/10 disabled:opacity-50" aria-haspopup="menu">Beam to…</button>
@@ -438,6 +452,7 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
             {a.agentCursor && a.state === "busy" && <Cursor p={a.agentCursor} color="#b06bff" label={agent.name} />}
             {myCursor && <Cursor p={myCursor} color="#38e1ff" label="you" />}
             {beaming && <BeamProgress agent={agent} />}
+            {a.paused && <div className="pointer-events-none absolute inset-x-0 top-0 bg-beam py-1 text-center text-xs font-semibold text-black">You have control · {agent.name} is waiting</div>}
           </div>
           <div className="mt-2 text-center text-xs text-slate-500">Shared screen: you and {agent.name} can both act. Click into it to type; logins and payments are yours to do.</div>
         </div>
@@ -508,11 +523,55 @@ function SettingsPanel({ a }: { a: ReturnType<typeof useAgent> }) {
           </label>
         ))}
       </div>
+      <Schedules a={a} />
       <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Daily token budget</div>
       <div className="flex items-center gap-2">
         <input value={budget} onChange={(e) => setBudget(e.target.value)} inputMode="numeric" className="w-32 rounded-lg border border-white/10 bg-panel2 px-2 py-1 font-mono" aria-label="Daily token budget, 0 for none" />
         <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
         <span className="font-mono text-[11px] text-slate-500">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
+  const [prompt, setPrompt] = useState("");
+  const [kind, setKind] = useState<"daily" | "every">("daily");
+  const [time, setTime] = useState("08:00");
+  const [minutes, setMinutes] = useState("60");
+  const save = (list: Schedule[]) => a.send({ t: "schedules", schedules: list });
+  const add = () => {
+    if (!prompt.trim()) return;
+    const [h, m] = time.split(":").map(Number);
+    const local = new Date();
+    local.setHours(h, m, 0, 0);
+    const minuteOfDay = local.getUTCHours() * 60 + local.getUTCMinutes();
+    save([...a.schedules, { id: Math.random().toString(36).slice(2, 8), prompt, kind, minuteOfDay, minutes: Number(minutes) || 60, enabled: true }]);
+    setPrompt("");
+  };
+  const label = (s: Schedule) => {
+    if (s.kind === "every") return `every ${s.minutes} min`;
+    const d = new Date();
+    d.setUTCHours(Math.floor((s.minuteOfDay ?? 0) / 60), (s.minuteOfDay ?? 0) % 60, 0, 0);
+    return `daily ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  };
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Scheduled tasks</div>
+      {a.schedules.map((s) => (
+        <div key={s.id} className="flex items-center gap-2 rounded-lg bg-panel2 px-2 py-1.5">
+          <input type="checkbox" checked={s.enabled} aria-label="Enabled" onChange={() => save(a.schedules.map((x) => (x.id === s.id ? { ...x, enabled: !x.enabled } : x)))} className="accent-cyan-400" />
+          <div className="min-w-0 flex-1"><div className="truncate">{s.prompt}</div><div className="font-mono text-[10px] text-slate-500">{label(s)}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ""}</div></div>
+          <button aria-label="Delete task" onClick={() => save(a.schedules.filter((x) => x.id !== s.id))} className="text-slate-500 hover:text-red-300">✕</button>
+        </div>
+      ))}
+      <div className="flex gap-1">
+        <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. Check Hacker News and send me the top 3" aria-label="Task" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
+      </div>
+      <div className="flex items-center gap-1">
+        <select value={kind} onChange={(e) => setKind(e.target.value as any)} aria-label="Repeat" className="rounded-lg bg-panel2 px-2 py-1"><option value="daily">Daily at</option><option value="every">Every (min)</option></select>
+        {kind === "daily" ? <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" className="rounded-lg bg-panel2 px-2 py-1" /> : <input value={minutes} onChange={(e) => setMinutes(e.target.value)} inputMode="numeric" aria-label="Minutes" className="w-20 rounded-lg bg-panel2 px-2 py-1" />}
+        <button onClick={add} className="ml-auto rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Add</button>
       </div>
     </div>
   );
