@@ -12,7 +12,7 @@ export class Desktop {
   frameListeners = new Set<(jpeg: Uint8Array) => void>();
   private fps = Number(process.env.SCUT_FPS ?? 8);
 
-  constructor(private dataDir: string) {}
+  constructor(private dataDir: string, private homeUrl = "about:blank") {}
 
   async start() {
     const xvfb = Bun.spawn(["Xvfb", DISPLAY, "-screen", "0", `${SCREEN.w}x${SCREEN.h}x24`, "-nolisten", "tcp", "-ac"], {
@@ -23,7 +23,7 @@ export class Desktop {
     await this.waitForX();
     this.trustExtraCa();
     this.procs.push(Bun.spawn(["openbox"], { env: env(), stdout: "ignore", stderr: "ignore" }));
-    this.startBrowser();
+    this.startBrowser(this.homeUrl);
     this.startFrames();
   }
 

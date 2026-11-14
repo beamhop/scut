@@ -420,7 +420,7 @@ async function run() {
   } catch {}
   setState("starting");
   await mkdir(`${DATA}/workspace`, { recursive: true });
-  desktop = new Desktop(DATA);
+  desktop = new Desktop(DATA, `http://127.0.0.1:${PORT}/start?name=${encodeURIComponent(spec!.name)}&color=${encodeURIComponent(MASCOT_HEX[spec!.mascot ?? "cyan"] ?? "#38e1ff")}`);
   await desktop.start();
   harness = makeHarness();
   await harness.start();
@@ -588,6 +588,7 @@ Bun.serve<WsData>({
     try {
       if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null });
       if (p === "/beam/hello") return Response.json({ hostPubkey, state, ticket });
+      if (p === "/start") return new Response(START_PAGE, { headers: { "content-type": "text/html; charset=utf-8", ...UI_HEADERS } });
 
       if (p === "/internal/computer" && req.method === "POST") {
         if (!sameToken(req.headers.get("x-internal-token"), INTERNAL_TOKEN)) return new Response("forbidden", { status: 403 });
@@ -808,6 +809,25 @@ setInterval(() => {
   if (!desktop) frameHooked = false;
 }, 200);
 
+const MASCOT_HEX: Record<string, string> = { cyan: "#38e1ff", magenta: "#ff4fd8", lime: "#a8ff4f", amber: "#ffb03b", violet: "#b06bff", coral: "#ff6b6b" };
+/** The agent's browser home page: what you see on its screen while it waits for a task. Self-contained, no network,
+ * and deliberately still: an animated idle screen would turn every tile into a constant video stream. */
+const START_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ready</title><style>
+html,body{margin:0;height:100%;background:#070a14;color:#e2e8f0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:grid;place-items:center;background:radial-gradient(60% 60% at 50% 40%,#0f1a33 0%,#070a14 70%)}
+.c{text-align:center}.n{font-size:40px;font-weight:700;letter-spacing:-.02em;margin:18px 0 4px}.s{color:#94a3b8}
+.h{margin-top:28px;font:12px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#64748b}
+</style></head><body><div class="c">
+<svg width="120" height="120" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke-width="3" id="m">
+<line x1="32" y1="6" x2="32" y2="14"/><circle cx="32" cy="5" r="3" stroke="none" id="d"/>
+<rect x="12" y="14" width="40" height="30" rx="12"/><line x1="22" y1="44" x2="18" y2="56"/><line x1="42" y1="44" x2="46" y2="56"/></g>
+<g class="e" style="transform-origin:32px 29px"><circle cx="25" cy="29" r="3.5" id="l"/><circle cx="39" cy="29" r="3.5" id="r"/></g></svg>
+<div class="n" id="name"></div><div class="s">Ready for a task. Message me from Beamhop or a chat app.</div>
+<div class="h">Beamhop agent computer</div></div>
+<script>const q=new URLSearchParams(location.search),c=/^#[0-9a-f]{6}$/i.test(q.get("color")||"")?q.get("color"):"#38e1ff";
+document.getElementById("name").textContent=q.get("name")||"Your agent";document.title=(q.get("name")||"Agent")+" is ready";
+document.getElementById("m").setAttribute("stroke",c);for(const i of["d","l","r"])document.getElementById(i).setAttribute("fill",c);</script>
+</body></html>`;
 const UI_HEADERS = { "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "referrer-policy": "no-referrer" };
 async function serveUi(p: string) {
   const f = Bun.file(`${UI_DIR}${p === "/" || p.includes("..") ? "/index.html" : p}`);

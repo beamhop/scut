@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.30.0 — A face on every screen
+
+- The agent's browser now opens on its own start page instead of a blank white tab: its name and mascot in its colour, and "Ready for a task". The crew grid finally shows who is who at a glance.
+- The page is self-contained and deliberately still, so idle tiles keep costing almost no frames (checked by the existing frame-budget test, which caught a first animated version).
+- An empty chat offers three one-tap starters (look something up, research with links, a daily scheduled task).
+
 ## v0.29.0 — Chat app health
 
 - Settings now shows what each chat app is actually doing: "connected as @your_bot", "connecting…", or, if the token doesn't work, "Couldn't sign in with this token. Check it, or disconnect and paste a new one." Before, a wrong token still said "connected".

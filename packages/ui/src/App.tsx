@@ -623,7 +623,16 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
             </div>
           )}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {a.chat.length === 0 && <div className="mt-10 text-center text-sm text-slate-400">Say hi to {agent.name}. Try “open wikipedia and find today's featured article”.</div>}
+            {a.chat.length === 0 && (
+              <div className="mt-8 space-y-3 text-center text-sm text-slate-400">
+                <div>Say hi to {agent.name}, or try one of these:</div>
+                <div className="flex flex-col items-center gap-2">
+                  {["Open Wikipedia and tell me today's featured article", "Find three well-reviewed e-bikes under €2,000, with links", "Every morning at 8, send me the top 3 Hacker News stories"].map((s) => (
+                    <button key={s} onClick={() => a.send({ t: "chat", text: s })} className="rounded-full border border-white/10 px-3 py-1.5 text-slate-200 hover:border-beam/60 hover:bg-white/5">{s}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             {a.chat.map((m, i) => (
               <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.from === "agent" ? "bg-panel2" : "ml-auto bg-beam/15"}`}>
                 <div className="mb-0.5 font-mono text-[11px] uppercase tracking-wider text-slate-400">{m.from === "agent" ? agent.name : m.from === "owner" ? "You" : m.from}{m.channel !== "app" ? ` · ${m.channel}` : ""}</div>
