@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { pruneBlobs, pullImage, type PulledImage } from "./oci.ts";
-import { freePort, portInUse } from "./util.ts";
+import { backupScript, freePort, portInUse, stageFiles } from "./util.ts";
 import { EngineUnavailable } from "./gvisor.ts";
 
 const exe = () => process.env.SCUT_WSL_EXE ?? "wsl.exe";
@@ -226,6 +226,30 @@ export class WslDriver implements HostDriver {
     if (await portInUse(h.cdp)) h.cdp = await freePort();
     await this.start(name, h);
     return { ...inst, endpoint: `http://127.0.0.1:${h.port}` };
+  }
+
+  async installCode(inst: Instance, files: Record<string, Uint8Array>): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    const h = JSON.parse(await readFile(join(this.dir(name), "host.json"), "utf8")) as HostFile;
+    const b = wsl(["-d", h.distro, "-u", "root", "--exec", "/bin/sh", "-c", backupScript(Object.keys(files))]);
+    if (b.code !== 0) throw new Error(`Couldn't prepare the agent for its update: ${b.err.slice(0, 200)}`);
+    const st = await stageFiles(files);
+    try {
+      const x = wsl(["-d", h.distro, "-u", "root", "--exec", "tar", "-xf", "-", "-C", "/"], { stdin: st.tar, timeout: 300_000 });
+      if (x.code !== 0) throw new Error(`Couldn't copy the agent's code: ${x.err.slice(0, 200)}`);
+    } finally {
+      await st.cleanup();
+    }
+    wsl(["--terminate", h.distro]);
+    return this.revive(inst);
+  }
+
+  async restoreCode(inst: Instance, paths: string[]): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    const h = JSON.parse(await readFile(join(this.dir(name), "host.json"), "utf8")) as HostFile;
+    wsl(["-d", h.distro, "-u", "root", "--exec", "/bin/sh", "-c", backupScript(paths, true)]);
+    wsl(["--terminate", h.distro]);
+    return this.revive(inst);
   }
 
   boundHosts(): string[] {

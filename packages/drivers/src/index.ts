@@ -35,6 +35,13 @@ export interface HostDriver {
    * up and holds the agent; if it throws, the old host is put back exactly as it was. Never deletes the disk.
    */
   upgrade?(inst: Instance, image: string, check: (next: Instance) => Promise<void>): Promise<Instance>;
+  /**
+   * Put the app's own agent code into this agent (absolute paths inside it), keeping what was there as `<path>.prev`,
+   * and restart it on that code. Its /data is untouched. Local sandboxes only: their image can be older than the app.
+   */
+  installCode?(inst: Instance, files: Record<string, Uint8Array>): Promise<Instance>;
+  /** Undo the last installCode (the `.prev` copies back) and restart. */
+  restoreCode?(inst: Instance, paths: string[]): Promise<Instance>;
   /** Get the agent computer ready ahead of the first create (download it), reporting parts done/total. */
   prepare?(image: string, onProgress?: (p: { done: number; total: number }) => void): Promise<unknown>;
   /** Addresses the host's port listens on, on this computer (e.g. ["127.0.0.1"] or ["0.0.0.0"]). */

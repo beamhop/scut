@@ -17,6 +17,8 @@ import { createScreen, type Screen } from "./screen.ts";
 
 const DATA = process.env.SCUT_DATA ?? "/data";
 const PORT = Number(process.env.PORT ?? 8080);
+/** Which build of this code runs here: the app installs its own build into agents whose code differs (agent-code.ts). */
+const CODE = "__SCUT_AGENT_CODE__";
 const HARNESSES: HarnessKind[] = ["pi", "opencode", "codex", "copilot", "mock"];
 const HARNESS_NAME: Record<HarnessKind, string> = { pi: "Pi", opencode: "opencode", codex: "Codex", copilot: "Copilot CLI", mock: "the demo brain" };
 const UI_DIR = process.env.SCUT_UI_DIR ?? "/opt/scut/ui";
@@ -911,7 +913,7 @@ Bun.serve<WsData>({
     const url = new URL(req.url);
     const p = url.pathname;
     try {
-      if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null, ...(UNSANDBOXED ? { unsandboxed: true } : {}) });
+      if (p === "/health") return Response.json({ state, hostPubkey, mode: ticket?.mode ?? null, agent: spec?.id ?? ticket?.agentPubkey ?? null, code: CODE, ...(UNSANDBOXED ? { unsandboxed: true } : {}) });
       if (p === "/beam/hello") return Response.json({ hostPubkey, state, ticket });
       if (p === "/start") return new Response(startPage(spec?.name ?? "", spec?.agentPubkey ?? ""), { headers: { "content-type": "text/html; charset=utf-8", ...UI_HEADERS } });
 

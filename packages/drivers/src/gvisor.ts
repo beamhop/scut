@@ -10,7 +10,7 @@ import { mkdir, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync, openSync } from "node:fs";
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { extractRootfs, pruneBlobs, pullImage } from "./oci.ts";
-import { freePort, portInUse, run } from "./util.ts";
+import { backupScript, freePort, portInUse, run } from "./util.ts";
 
 /** This engine turned out not to work on this computer (found during setup): the ladder should move on. */
 export class EngineUnavailable extends Error {
@@ -237,6 +237,35 @@ export class GvisorDriver implements HostDriver {
     await this.writeBundle(name, existsSync(same.rootfs) ? same : img, h.env, port, cdp);
     await this.start(name);
     return { ...inst, endpoint: `http://127.0.0.1:${port}` };
+  }
+
+  /** The agent's root filesystem on this computer (shared by agents made from the same image). */
+  private async rootfsOf(inst: Instance): Promise<string> {
+    const h = JSON.parse(await readFile(`${this.dir(inst.meta?.name ?? inst.instanceId)}/host.json`, "utf8")) as { digest: string };
+    return `${this.home}/images/${h.digest.replace(":", "-")}/rootfs`;
+  }
+
+  private async restartSandbox(inst: Instance): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    this.stopSandbox(name);
+    await this.start(name);
+    return inst;
+  }
+
+  async installCode(inst: Instance, files: Record<string, Uint8Array>): Promise<Instance> {
+    const root = await this.rootfsOf(inst);
+    const b = run(["/bin/sh", "-c", backupScript(Object.keys(files).map((p) => root + p))]);
+    if (b.code !== 0) throw new Error(`Couldn't prepare the agent for its update: ${b.err.slice(0, 200)}`);
+    for (const [p, data] of Object.entries(files)) await writeFile(root + p, data);
+    // The sandbox's own changes sit in its overlay: drop stale copies of these files there too.
+    await rm(`${this.dir(inst.meta?.name ?? inst.instanceId)}/overlay`, { recursive: true, force: true });
+    return this.restartSandbox(inst);
+  }
+
+  async restoreCode(inst: Instance, paths: string[]): Promise<Instance> {
+    const root = await this.rootfsOf(inst);
+    run(["/bin/sh", "-c", backupScript(paths.map((p) => root + p), true)]);
+    return this.restartSandbox(inst);
   }
 
   outdated(inst: Instance, image: string): boolean {

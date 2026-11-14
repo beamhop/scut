@@ -1,4 +1,5 @@
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
+import { backupScript, stageFiles } from "./util.ts";
 
 /** Local container driver. Used for development and tests, and on machines without a hypervisor. */
 export class DockerDriver implements HostDriver {
@@ -187,4 +188,29 @@ export class DockerDriver implements HostDriver {
     Bun.spawnSync([this.bin, "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
     Bun.spawnSync([this.bin, "volume", "rm", "-f", `${name}-data`], { stdout: "ignore", stderr: "ignore" });
   }
+
+  async installCode(inst: Instance, files: Record<string, Uint8Array>): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    Bun.spawnSync([this.bin, "start", name], { stdout: "ignore", stderr: "ignore" });
+    const b = Bun.spawnSync([this.bin, "exec", name, "/bin/sh", "-c", backupScript(Object.keys(files))], { stdout: "pipe", stderr: "pipe" });
+    if (b.exitCode !== 0) throw new Error(`Couldn't prepare the agent for its update: ${b.stderr.toString().slice(0, 200)}`);
+    const st = await stageFiles(files);
+    try {
+      const cp = Bun.spawnSync([this.bin, "cp", `${st.dir}/.`, `${name}:/`], { stdout: "pipe", stderr: "pipe" });
+      if (cp.exitCode !== 0) throw new Error(`Couldn't copy the agent's code: ${cp.stderr.toString().slice(0, 200)}`);
+    } finally {
+      await st.cleanup();
+    }
+    Bun.spawnSync([this.bin, "restart", name], { stdout: "ignore", stderr: "ignore" });
+    return this.revive(inst);
+  }
+
+  async restoreCode(inst: Instance, paths: string[]): Promise<Instance> {
+    const name = inst.meta?.name ?? inst.instanceId;
+    Bun.spawnSync([this.bin, "start", name], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync([this.bin, "exec", name, "/bin/sh", "-c", backupScript(paths, true)], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync([this.bin, "restart", name], { stdout: "ignore", stderr: "ignore" });
+    return this.revive(inst);
+  }
+
 }

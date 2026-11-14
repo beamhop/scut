@@ -5,3 +5,4 @@ dist
 /.scut-test
 apps/app/src/ui-assets.ts
 packages/drivers/src/engine-blob.ts
+apps/app/src/agent-code.gen.ts

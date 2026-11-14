@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bun run --cwd packages/ui build
 bun scripts/embed-ui.ts
+bun scripts/embed-agent-code.ts # agents run exactly this version of their software
 mkdir -p dist
 trap "rm -f packages/drivers/src/engine-blob.ts" EXIT
 # Bun sets Windows executable options (no console, icon, name) only when compiling on Windows: CI builds the

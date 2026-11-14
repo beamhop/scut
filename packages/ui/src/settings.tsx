@@ -367,8 +367,8 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
   const outdated = !!a.settings && a.settings.harness === undefined;
   if (outdated) return (
     <Notice tone="needs">
-      <span className="font-medium">{name} runs an older version that can't sign in from here.</span> Its software comes
-      from the agent image, which doesn't have sign-in yet. Once a newer image is out, make a new agent with {label} to sign in.
+      <span className="font-medium">Updating {name}'s software to this version of Beamhop.</span> Signing in to {label} shows
+      up here once it's done, usually within a minute of {name} being free.
     </Notice>
   );
   const state = s?.state ?? "checking";

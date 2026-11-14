@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openAgentFile, writeAgentFile } from "./agentfile.ts";
+import { agentCode } from "./agent-code.ts";
 
 const HARNESS_KINDS: HarnessKind[] = ["pi", "opencode", "codex", "copilot", "mock"];
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
@@ -69,7 +70,7 @@ export class Scut {
     await s.recoverInterruptedBeams();
     await s.reviveLocalHosts();
     void s.cleanupRetiredHosts();
-    if (process.env.SCUT_NO_AUTO_UPDATE !== "1") void s.updateOutdatedHosts();
+    if (process.env.SCUT_NO_AUTO_UPDATE !== "1") void s.updateOutdatedHosts().finally(() => s.syncAgentCode());
     return s;
   }
 
@@ -158,6 +159,71 @@ export class Scut {
     if (out.waiting.length) this.updateRetry = setTimeout(() => void this.updateOutdatedHosts(image), 60_000);
     return out;
   }
+
+  /**
+   * Make an agent run this app's own agent code (agent-code.ts): a local sandbox starts from the agent image, which
+   * can be older than the app. Installs the code and restarts it when it differs, then checks the agent came back on
+   * it; if not, puts the old code back and throws. Returns the instance (its address can change on a restart).
+   */
+  async withCode(d: HostDriver, inst: Instance): Promise<Instance> {
+    if (!d.installCode) return inst;
+    const code = await agentCode();
+    if (!code) return inst;
+    const h = (await fetch(`${inst.endpoint}/health`, { signal: AbortSignal.timeout(5000) }).then((r) => r.json()).catch(() => null)) as { code?: string } | null;
+    if (!h || h.code === code.hash) return inst;
+    let next = await d.installCode(inst, code.files);
+    try {
+      const deadline = Date.now() + 180_000;
+      for (;;) {
+        const now = (await fetch(`${next.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { code?: string } | null;
+        if (now?.code === code.hash) break;
+        if (Date.now() > deadline) throw new Error(now ? `it came back on other code (${now.code ?? "unknown"})` : "it didn't come back");
+        await Bun.sleep(1000);
+      }
+    } catch (e: any) {
+      if (d.restoreCode) next = await d.restoreCode(next, Object.keys(code.files)).catch(() => next);
+      throw new Error(`Couldn't update the agent's software to this app's version: ${e?.message ?? e}`);
+    }
+    return next;
+  }
+
+  /**
+   * Agents whose software differs from this app's (made from an older agent image, or before an app update): install
+   * the app's own code, once each is free. Busy ones are tried again a minute later; a failed one keeps its old code.
+   */
+  async syncAgentCode(): Promise<{ updated: string[]; waiting: string[]; failed: string[] }> {
+    const out = { updated: [] as string[], waiting: [] as string[], failed: [] as string[] };
+    const code = await agentCode();
+    if (!code) return out;
+    for (const a of this.agents) {
+      const d = this.driverOf(a.current);
+      if (!d?.installCode || this.updating.has(a.id)) continue;
+      if (a.beam && !["online", "failed"].includes(a.beam.stage)) { out.waiting.push(a.name); continue; }
+      const h = (await fetch(`${a.current.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { state?: string; code?: string } | null;
+      if (!h || h.code === code.hash) continue; // unreachable for now (revive brings it back), or already current
+      if (h.state !== "running") { out.waiting.push(a.name); continue; }
+      const job = (async () => {
+        a.current = await this.withCode(d, a.current);
+        await this.waitState(a.current.endpoint, ["running"], 180_000);
+        this.tokenCache.clear();
+        await this.save();
+      })();
+      this.updating.set(a.id, job.catch(() => {}));
+      try {
+        await job;
+        out.updated.push(a.name);
+      } catch (e: any) {
+        console.error(`couldn't update ${a.name}'s software:`, e?.message ?? e);
+        out.failed.push(a.name);
+      } finally {
+        this.updating.delete(a.id);
+      }
+    }
+    clearTimeout(this.codeRetry);
+    if (out.waiting.length) this.codeRetry = setTimeout(() => void this.syncAgentCode(), 60_000);
+    return out;
+  }
+  private codeRetry?: ReturnType<typeof setTimeout>;
 
   /**
    * A link that opens this agent on a phone. Cloud agents: always. Agents on this computer: only if their port listens on
@@ -516,6 +582,7 @@ export class Scut {
     try {
       const hello = await (async () => {
         await waitHealthy(inst.endpoint);
+        inst = await this.withCode(driver, inst);
         return (await (await fetch(`${inst.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
       })();
       const lease = signLease(agentSk, id, { holder: hello.hostPubkey, seq: 1 });
@@ -570,6 +637,8 @@ export class Scut {
       rec.beam!.target = target; // remembered so a crash from here on can be cleaned up or completed
       await this.save();
       await waitHealthy(target.endpoint);
+      target = await this.withCode(driver, target);
+      rec.beam!.target = target;
       const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
 
       await stage("transferring");
@@ -646,9 +715,10 @@ export class Scut {
     if (getPublicKey(hexToBytes(secrets.agentSk)) !== h.agentPubkey) throw new Error("This agent file is damaged");
     const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
     const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: h.agentPubkey, bundleHash: h.hash, issuedAt: Date.now() };
-    const target = this.stamp(await driver.create({ name: `${h.id}-${bytesToHex(crypto.getRandomValues(new Uint8Array(2)))}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
+    let target = this.stamp(await driver.create({ name: `${h.id}-${bytesToHex(crypto.getRandomValues(new Uint8Array(2)))}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
     try {
       await waitHealthy(target.endpoint);
+      target = await this.withCode(driver, target);
       const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
       const lease = signLease(hexToBytes(secrets.agentSk), h.id, { holder: hello.hostPubkey, seq: h.leaseSeq + 1 });
       await this.req(target.endpoint, "/beam/bundle", { method: "PUT", body: bundle as Uint8Array<ArrayBuffer> });

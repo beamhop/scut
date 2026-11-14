@@ -1,6 +1,7 @@
 import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { EngineUnavailable } from "./gvisor.ts";
 import { loadSmolmachines } from "./engine.ts";
+import { backupScript } from "./util.ts";
 
 /** libkrun/hypervisor errors that mean "no VM can start on this computer", not "this one agent failed". */
 const NO_VM = /krun_start_enter|VmCreate|start vm|Hypervisor|HV_|KVM|kvm|EINVAL/;
@@ -110,6 +111,36 @@ export class SmolvmDriver implements HostDriver {
     if ((await m.state()) !== "running") await m.start({ waitUntilReady: true });
     const port = ((await m.ports().catch(() => [])) as { host?: number; guest: number }[]).find((p) => p.guest === 8080)?.host;
     return port ? { ...inst, endpoint: `http://127.0.0.1:${port}` } : inst;
+  }
+
+  private async machine(inst: Instance) {
+    const M = await SmolvmDriver.load();
+    if (!M) throw new EngineUnavailable("smolvm", "smolvm engine not available on this platform");
+    const m = await M.connect(inst.meta?.name ?? inst.instanceId, { waitForPorts: false });
+    if ((await m.state()) !== "running") await m.start({ waitUntilReady: true });
+    return m;
+  }
+
+  /** A stop and start of the VM, on the code now on its disk; picks up its port. */
+  private async restart(inst: Instance): Promise<Instance> {
+    const m = await this.machine(inst);
+    await m.sync?.().catch(() => {});
+    await m.stop();
+    return this.revive(inst);
+  }
+
+  async installCode(inst: Instance, files: Record<string, Uint8Array>): Promise<Instance> {
+    const m = await this.machine(inst);
+    const sh = await m.exec(["/bin/sh", "-c", backupScript(Object.keys(files))]);
+    if (sh?.exitCode) throw new Error(`Couldn't prepare the agent for its update: ${String(sh.stderr ?? "").slice(0, 200)}`);
+    for (const [p, data] of Object.entries(files)) await m.writeFile(p, data);
+    return this.restart(inst);
+  }
+
+  async restoreCode(inst: Instance, paths: string[]): Promise<Instance> {
+    const m = await this.machine(inst);
+    await m.exec(["/bin/sh", "-c", backupScript(paths, true)]);
+    return this.restart(inst);
   }
 
   async destroy(inst: Instance) {

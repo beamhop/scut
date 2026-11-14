@@ -23,6 +23,30 @@ export function portInUse(port: number): Promise<boolean> {
   });
 }
 
+/** Write `files` (absolute paths) under a new temporary folder, as they should land in the agent's root; and a tar of it. */
+export async function stageFiles(files: Record<string, Uint8Array>): Promise<{ dir: string; tar: string; cleanup: () => Promise<void> }> {
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const base = await mkdtemp(`${tmpdir()}/scut-code-`);
+  const dir = `${base}/root`;
+  for (const [p, data] of Object.entries(files)) {
+    await mkdir(`${dir}${p.slice(0, p.lastIndexOf("/"))}`, { recursive: true });
+    await writeFile(`${dir}${p}`, data);
+  }
+  const tar = `${base}/code.tar`;
+  const t = run(["tar", "-cf", tar, "-C", dir, "."], { timeout: 60_000 });
+  if (t.code !== 0) throw new Error(`Couldn't pack the agent's code: ${t.err.slice(0, 200)}`);
+  return { dir, tar, cleanup: () => rm(base, { recursive: true, force: true }) };
+}
+
+/** Shell lines that keep `<f>.prev` copies of files about to be replaced, or put them back. Paths are quoted. */
+export function backupScript(paths: string[], restore = false): string {
+  const q = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
+  return paths.map((p) => restore
+    ? `if [ -f ${q(p + ".prev")} ]; then mv -f ${q(p + ".prev")} ${q(p)}; fi`
+    : `mkdir -p ${q(p.slice(0, p.lastIndexOf("/")) || "/")}; if [ -f ${q(p)} ]; then cp -f ${q(p)} ${q(p + ".prev")}; fi`).join("\n");
+}
+
 /** Like run, without blocking: for long installs while the app keeps serving. */
 export async function runAsync(cmd: string[], opts: { timeout?: number; env?: Record<string, string | undefined>; cwd?: string } = {}): Promise<{ code: number; out: string; err: string }> {
   try {
