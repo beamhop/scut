@@ -1,0 +1,71 @@
+name: engines
+# How agents run on each platform: the local ladder, the no-sandbox screen and per-user services, gVisor, WSL2
+# (stand-in on Linux; real WSL where the Windows runner has it), smolvm where the runner exposes virtualization.
+on:
+  push:
+    branches: [main, "claude/**", "c-/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Per-user systemd session and KVM (if the runner has it)
+        run: |
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          [ -e /dev/kvm ] && sudo chmod 666 /dev/kvm || echo "no /dev/kvm"
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+      - run: XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-system-running || true
+      - run: bun test tests/ladder.test.ts
+      - run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - run: bun test tests/host-service.test.ts --timeout 600000
+      - run: bun test tests/engines-real.test.ts --timeout 2400000
+      - name: Agent image and a local registry (gVisor and WSL tests pull without Docker)
+        run: |
+          ./scripts/build-image.sh
+          docker run -d -p 127.0.0.1:5000:5000 registry:2
+          docker tag ghcr.io/beamhop/scut-agent:dev localhost:5000/scut-agent:dev
+          docker push -q localhost:5000/scut-agent:dev
+      - run: bun test tests/host.test.ts --timeout 600000
+      - run: bun test tests/host-pi.test.ts --timeout 1200000
+      - run: bun test tests/ladder-fallback.test.ts --timeout 300000
+      - name: gVisor as a normal user (blocked by AppArmor on Ubuntu 24.04; the ladder must say so and move on)
+        continue-on-error: true
+        run: bun test tests/gvisor.test.ts --timeout 1500000
+      - run: sudo -E env "PATH=$PATH" bun test tests/gvisor.test.ts --timeout 1500000
+      - run: sudo -E env "PATH=$PATH" bun test tests/gvisor-agent.test.ts --timeout 1500000
+      - run: sudo -E env "PATH=$PATH" bun test tests/wsl.test.ts --timeout 1500000
+
+  macos:
+    runs-on: macos-14 # Apple Silicon
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/ladder.test.ts
+      - run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - run: bun test tests/host-service.test.ts --timeout 600000
+      - run: bun test tests/engines-real.test.ts --timeout 2400000
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: wsl.exe --status; wsl.exe --version; exit 0
+        shell: pwsh
+      - run: bun test tests/ladder.test.ts
+      - run: bun test tests/screen-cdp.test.ts --timeout 120000
+      - run: bun test tests/host-service.test.ts --timeout 600000
+      - run: bun test tests/engines-real.test.ts --timeout 2400000

@@ -11,6 +11,7 @@ import { HOME, Scut } from "./core.ts";
 import { serve } from "./server.ts";
 import { CrewRoom } from "./crew.ts";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const { values, positionals } = parseArgs({
   args: Bun.argv.slice(2),
@@ -106,7 +107,7 @@ switch (cmd) {
   case undefined:
   case "app": {
     const port = Number(values.port ?? 7777);
-    const ui = values.ui ?? process.env.SCUT_UI_DIR ?? new URL("../../../packages/ui/dist", import.meta.url).pathname;
+    const ui = values.ui ?? process.env.SCUT_UI_DIR ?? fileURLToPath(new URL("../../../packages/ui/dist", import.meta.url));
     const crew = process.env.SCUT_NO_CREW ? undefined : new CrewRoom(scut);
     await crew?.start();
     const srv = serve(scut, port, ui, crew);

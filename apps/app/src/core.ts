@@ -4,13 +4,14 @@ import {
   bytesToHex, encodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, signAuth, signLease, unseal,
 } from "@scut/protocol";
 import {
-  DockerDriver, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, localDriver, saveLocal, waitHealthy,
+  DockerDriver, EngineUnavailable, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, localDriver, markBroken, saveLocal, waitHealthy,
   type Engine, type HostDriver, type HostRuntime, type Instance, type LocalChoice,
 } from "@scut/drivers";
 import type { Event } from "nostr-tools";
 import { chmod, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
+import { fileURLToPath } from "node:url";
 import { openAgentFile, writeAgentFile } from "./agentfile.ts";
 
 export const HOME = process.env.SCUT_HOME ?? `${process.env.HOME}/.scut`;
@@ -242,7 +243,16 @@ export class Scut {
     this.prefetch = { state: "pulling", done: 0, total: 0 };
     this.prefetching = local.prepare(IMAGE, (p) => { this.prefetch = { state: "pulling", ...p }; })
       .then(() => { this.prefetch = { ...this.prefetch, state: "ready" }; })
-      .catch((e) => {
+      .catch(async (e) => {
+        this.prefetching = undefined;
+        // The engine itself can't run here after all: remember that and move down the ladder (then prepare that).
+        if (e instanceof EngineUnavailable) {
+          console.error(`${e.engine} can't run here (${e.message}); trying the next way`);
+          await markBroken(this.home, e.engine as Engine, e.message);
+          await this.loadDrivers();
+          this.startPrefetch();
+          return;
+        }
         const msg = String(e?.message ?? e);
         const offline = /fetch|network|ENOTFOUND|ECONN|timed? ?out|Couldn't download/i.test(msg);
         this.prefetch = { ...this.prefetch, state: "error", error: offline ? `${msg} Check your internet connection; Beamhop tries again when you create an agent.` : msg };
@@ -396,9 +406,11 @@ export class Scut {
     driver?: string;
     dailyTokenBudget?: number;
   }): Promise<AgentRecord> {
+    // Don't start a second download of the same image; and if setup found the engine can't run here, the ladder
+    // has moved on by the time it settles (so look the driver up after).
+    if ((o.driver ?? "local") === "local") for (let p = this.prefetching; p; p = p === this.prefetching ? undefined : this.prefetching) await p;
     const driver = this.drivers.get(o.driver ?? "local");
     if (!driver) throw new Error((o.driver ?? "local") === "local" ? noLocal(this.local) : `unknown destination ${o.driver}`);
-    if ((o.driver ?? "local") === "local") await this.prefetching; // don't start a second download of the same image
     // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
     const saved = await this.brain();
     if (o.model && !o.model.apiKey && saved?.apiKey && saved.baseUrl === o.model.baseUrl) o.model = { ...o.model, apiKey: saved.apiKey };
@@ -616,7 +628,7 @@ export function noLocal(l: LocalChoice): string {
  */
 export function hostRuntime(home: string): HostRuntime {
   const compiled = /\$bunfs|~BUN/.test(Bun.main);
-  const main = new URL("./main.ts", import.meta.url).pathname;
+  const main = fileURLToPath(new URL("./main.ts", import.meta.url));
   const self = compiled ? [process.execPath] : [process.execPath, main];
   return {
     agentd: [...self, "agentd"],
@@ -633,14 +645,14 @@ function codeVersion(compiled: boolean, main: string): string {
   const { statSync } = require("node:fs") as typeof import("node:fs");
   try {
     if (compiled) { const st = statSync(process.execPath); return `bin-${st.size}-${Math.round(st.mtimeMs)}`; }
-    const agentd = new URL("../../../packages/agentd/src/main.ts", import.meta.url).pathname;
+    const agentd = fileURLToPath(new URL("../../../packages/agentd/src/main.ts", import.meta.url));
     return `dev-${Math.round(statSync(agentd).mtimeMs)}-${Math.round(statSync(main).mtimeMs)}`;
   } catch { return "unknown"; }
 }
 
 /** The agent's own web pages (start page, phone view): on disk in development, unpacked from the app otherwise. */
 function agentUiDir(home: string, compiled: boolean): string | undefined {
-  const dev = new URL("../../../packages/ui/dist", import.meta.url).pathname;
+  const dev = fileURLToPath(new URL("../../../packages/ui/dist", import.meta.url));
   if (!compiled && existsSync(`${dev}/index.html`)) return dev;
   const dir = `${home}/ui`;
   void (async () => {

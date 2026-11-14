@@ -12,6 +12,11 @@ import type { CreateOpts, HostDriver, Instance } from "./index.ts";
 import { extractRootfs, pruneBlobs, pullImage } from "./oci.ts";
 import { freePort, portInUse, run } from "./util.ts";
 
+/** This engine turned out not to work on this computer (found during setup): the ladder should move on. */
+export class EngineUnavailable extends Error {
+  constructor(readonly engine: string, reason: string) { super(reason); }
+}
+
 export const GVISOR_VERSION = "20261109.0";
 const GVISOR_SHA512: Record<string, string> = {
   x86_64: "1a6b8f74c37b4931ef473f67ec1f601690855bedc52ac709f2fac965c69677aa0426ef44598d8eee1aed72cfdb9df87a2a5f352cb3348880fc61a7732bc10f2a",
@@ -93,6 +98,9 @@ export class GvisorDriver implements HostDriver {
   /** Pull and unpack the agent image (first time only; reused while its digest is the same). */
   async prepare(image: string, onProgress?: (p: { done: number; total: number }) => void): Promise<Prepared> {
     await this.ensureRunsc();
+    // The quick check before the download can't see everything (e.g. AppArmor rules): now ask runsc itself.
+    const t = this.selfTest();
+    if (!t.available) throw new EngineUnavailable("gvisor", t.reason ?? "gVisor can't run here");
     const img = await pullImage(image, `${this.home}/images`, onProgress);
     const rootfs = `${this.home}/images/${img.digest.replace(":", "-")}/rootfs`;
     const ready = `${rootfs}/../.ready`;

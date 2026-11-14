@@ -147,7 +147,7 @@ export class HostProcessDriver implements HostDriver {
       SCUT_SCREEN: "cdp",
       SCUT_BROWSER: o.browser,
       SCUT_UNSANDBOXED: "1",
-      SCUT_MCP_CMD: this.rt.mcp.join(" "),
+      SCUT_MCP_CMD: JSON.stringify(this.rt.mcp),
       ...(this.rt.uiDir ? { SCUT_UI_DIR: this.rt.uiDir } : {}),
       // Not bunEnv: BUN_BE_BUN would turn the app binary into plain bun for agentd itself. Only the shims set it.
       ...(ca ? { NODE_EXTRA_CA_CERTS: ca, SSL_CERT_FILE: ca } : {}),

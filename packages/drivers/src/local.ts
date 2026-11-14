@@ -47,7 +47,9 @@ export function realProbes(home: string): Probes {
       const a = await GvisorDriver.availability(home);
       // Not downloaded yet: the same kernel feature runsc needs (user namespaces) answers for it until then.
       if (a.available && a.reason === "not downloaded yet") {
-        const u = process.getuid?.() === 0 || run(["unshare", "-Ur", "true"], { timeout: 10_000 }).code === 0;
+        // Ubuntu 23.10+ lets normal users make user namespaces but strips what runsc needs from them (AppArmor).
+        const apparmor = (() => { try { return require("node:fs").readFileSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8").trim() === "1"; } catch { return false; } })();
+        const u = process.getuid?.() === 0 || (!apparmor && run(["unshare", "-Ur", "true"], { timeout: 10_000 }).code === 0);
         return u ? { engine: "gvisor", available: true } : { engine: "gvisor", available: false, reason: "This computer doesn't allow sandboxes for normal users (user namespaces are restricted)" };
       }
       return { engine: "gvisor", available: a.available, reason: a.reason };
@@ -68,7 +70,14 @@ export function realProbes(home: string): Probes {
   };
 }
 
-type Saved = { engine?: Engine; hostAllowed?: boolean; at?: number };
+type Saved = { engine?: Engine; hostAllowed?: boolean; at?: number; broken?: Partial<Record<Engine, { at: number; reason: string }>> };
+const BROKEN_FOR = 7 * 24 * 3600_000; // an engine that failed its real test is tried again after a week
+
+/** An engine failed for real (e.g. gVisor's own test after its download): skip it from now on, for a while. */
+export async function markBroken(home: string, engine: Engine, reason: string) {
+  const s = await loadSaved(home);
+  await saveLocal(home, { broken: { ...(s.broken ?? {}), [engine]: { at: Date.now(), reason } }, ...(s.engine === engine ? { engine: undefined } : {}) });
+}
 const file = (home: string) => `${home}/engine.json`;
 
 export async function loadSaved(home: string): Promise<Saved> {
@@ -99,6 +108,9 @@ export async function chooseLocal(home: string, opts: { probes?: Probes; platfor
   const forced = process.env.SCUT_LOCAL_DRIVER === "none" ? undefined : (process.env.SCUT_LOCAL_DRIVER as Engine | undefined);
   if (forced) return { engine: forced, probes: [{ engine: forced, available: true, reason: "chosen with SCUT_LOCAL_DRIVER" }], hostAllowed };
   const results: Probe[] = [];
+  for (const [e, b] of Object.entries(saved.broken ?? {}) as [Engine, { at: number; reason: string }][]) {
+    if (Date.now() - b.at < BROKEN_FOR) probes[e] = async () => ({ engine: e, available: false, reason: b.reason });
+  }
   const check = async (e: Engine) => {
     const p = await probes[e]!().catch((err: any) => ({ engine: e, available: false, reason: String(err?.message ?? err) }));
     results.push(p);

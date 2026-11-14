@@ -20,7 +20,9 @@ const PORT = Number(process.env.PORT ?? 8080);
 const UI_DIR = process.env.SCUT_UI_DIR ?? "/opt/scut/ui";
 /** Running directly on a computer (no sandbox): said everywhere the agent is shown, and in its instructions. */
 const UNSANDBOXED = process.env.SCUT_UNSANDBOXED === "1";
-const MCP_CMD = (process.env.SCUT_MCP_CMD ?? "bun /opt/scut/packages/agent/src/mcp-computer.ts").split(" ");
+// A JSON array (paths with spaces, e.g. C:\Users\Jane Doe\…) or a plain space-separated command.
+const MCP_RAW = process.env.SCUT_MCP_CMD ?? "bun /opt/scut/packages/agent/src/mcp-computer.ts";
+const MCP_CMD: string[] = MCP_RAW.trim().startsWith("[") ? JSON.parse(MCP_RAW) : MCP_RAW.split(" ");
 const INTERNAL_TOKEN = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), "[agentd]", ...a);
 
