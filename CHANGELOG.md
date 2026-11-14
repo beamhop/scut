@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.19.0 — Run history for scheduled tasks
+
+- Every scheduled run is kept (last 10, survives beams): whether it worked, what the agent answered, how long it took, tokens used, and the screen when it finished.
+- "Recent runs" under Scheduled tasks in Settings; tap a run to see the result and the screenshot.
+- "Run now" on each task to try it without waiting.
+
 ## v0.18.0 — Safety check
 
 - Settings open with a plain-language safety check: sandboxed computer, autonomy level, daily spending cap (with a dollar estimate and today's use), who can approve risky actions on each connected chat app, and encrypted single-copy beams.

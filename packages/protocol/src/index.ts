@@ -138,6 +138,7 @@ export type ClientMsg =
   | { t: "settings"; autonomy?: Autonomy; dailyTokenBudget?: number; persona?: string; channels?: { telegram?: { token: string } | null; slack?: { appToken: string; botToken: string } | null; discord?: { token: string } | null; nostr?: { relays?: string[]; ownerPubkey?: string } | null } }
   | { t: "pause"; paused: boolean }
   | { t: "schedules"; schedules: Schedule[] }
+  | { t: "run_schedule"; id: string }
   | { t: "crew"; members: CrewMember[] }
   | { t: "memory"; op: "add" | "delete" | "edit"; id?: string; text?: string }
   | { t: "skills"; op: "add" | "delete"; name?: string; content?: string; url?: string };
@@ -159,6 +160,7 @@ export type ServerMsg =
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }
   /** The agent obtained a cloud provider key during an assisted signup; the app (owner) stores it. */
   | { t: "cloud.key"; provider: "fly" | "render" | "railway"; token: string; ts: number }
+  | { t: "runs"; items: TaskRun[] }
   | { t: "schedules"; schedules: Schedule[] }
   | { t: "pairing"; code?: string; channels?: Record<string, { bot?: string; owner?: string }>; telegram?: { bot?: string; code?: string; owner?: string } };
 
@@ -178,6 +180,19 @@ export interface CrewMember {
   pubkey: string;
   name: string;
   kind: "agent" | "owner";
+}
+
+/** One finished run of a scheduled task, kept so the owner can see what happened while away. */
+export interface TaskRun {
+  id: string;
+  scheduleId: string;
+  prompt: string;
+  startedAt: number;
+  endedAt: number;
+  ok: boolean;
+  result: string;
+  tokens: number;
+  shot?: string; // data: URL of the screen when it finished
 }
 
 export interface Schedule {

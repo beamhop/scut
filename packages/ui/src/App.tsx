@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ServerMsg, AgentState, Schedule, MemoryItem } from "@scut/protocol";
+import type { ServerMsg, AgentState, Schedule, MemoryItem, TaskRun } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
 import qrcode from "qrcode-generator";
 
@@ -51,6 +51,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [paused, setPaused] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [memory, setMemory] = useState<MemoryItem[]>([]);
+  const [runs, setRuns] = useState<TaskRun[]>([]);
   const [skills, setSkills] = useState<{ items: { name: string; description: string }[]; error?: string }>({ items: [] });
   const ws = useRef<WebSocket | null>(null);
   const outbox = useRef<string[]>([]);
@@ -93,6 +94,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
         else if (m.t === "paused") setPaused(m.paused);
         else if (m.t === "schedules") setSchedules(m.schedules);
         else if (m.t === "memory") setMemory(m.items);
+        else if (m.t === "runs") setRuns(m.items);
         else if (m.t === "skills") setSkills({ items: m.items, error: m.error });
         else if (m.t === "cloud.key") {
           fetch("/api/providers", { method: "POST", body: JSON.stringify({ id: m.provider, token: m.token }) })
@@ -121,7 +123,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
     if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
     else outbox.current.push(JSON.stringify(m));
   }, []);
-  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, send };
+  return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, memory, skills, runs, send };
 }
 
 // ---------------- mascot: one base bot, silhouettes differ per variant, visor shows status ----------------
@@ -835,6 +837,37 @@ function SecretRow({ label, connected, fields, onConnect, onDisconnect }: { labe
   );
 }
 
+function ago(ts: number) {
+  const m = Math.round((Date.now() - ts) / 60_000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(ts).toLocaleDateString();
+}
+
+/** What scheduled tasks did while you were away: result, how long, cost, and the screen at the end. */
+function RecentRuns({ runs }: { runs: TaskRun[] }) {
+  const [open, setOpen] = useState<string>();
+  return (
+    <div className="space-y-1 pt-1">
+      <div className="text-[12px] text-slate-400">Recent runs</div>
+      {[...runs].reverse().map((r) => (
+        <div key={r.id} className="rounded-lg bg-panel2">
+          <button onClick={() => setOpen(open === r.id ? undefined : r.id)} aria-expanded={open === r.id} className="flex w-full items-center gap-2 px-2 py-1.5 text-left">
+            <span aria-label={r.ok ? "Done" : "Failed"} className={r.ok ? "text-beam" : "text-red-300"}>{r.ok ? "✓" : "✕"}</span>
+            <span className="min-w-0 flex-1 truncate">{r.prompt}</span>
+            <span className="shrink-0 font-mono text-[11px] text-slate-400">{ago(r.endedAt)}</span>
+          </button>
+          {open === r.id && (
+            <div className="space-y-2 px-2 pb-2">
+              <div className="font-mono text-[11px] text-slate-400">took {Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000))}s · {r.tokens.toLocaleString()} tokens</div>
+              <div className="whitespace-pre-wrap text-slate-200">{r.result}</div>
+              {r.shot && <img src={r.shot} alt={`Screen when "${r.prompt}" finished`} className="w-full rounded-md ring-1 ring-white/10" />}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
   const [prompt, setPrompt] = useState("");
   const [kind, setKind] = useState<"daily" | "every">("daily");
@@ -863,6 +896,7 @@ function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
         <div key={s.id} className="flex items-center gap-2 rounded-lg bg-panel2 px-2 py-1.5">
           <input type="checkbox" checked={s.enabled} aria-label="Enabled" onChange={() => save(a.schedules.map((x) => (x.id === s.id ? { ...x, enabled: !x.enabled } : x)))} className="accent-cyan-400" />
           <div className="min-w-0 flex-1"><div className="truncate">{s.prompt}</div><div className="font-mono text-[11px] text-slate-400">{label(s)}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ""}</div></div>
+          <button onClick={() => a.send({ t: "run_schedule", id: s.id })} className="rounded-full bg-white/5 px-2 py-0.5 text-[12px] hover:bg-white/10">Run now</button>
           <button aria-label="Delete task" onClick={() => save(a.schedules.filter((x) => x.id !== s.id))} className="text-slate-400 hover:text-red-300">✕</button>
         </div>
       ))}
@@ -874,6 +908,7 @@ function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
         {kind === "daily" ? <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" className="rounded-lg bg-panel2 px-2 py-1" /> : <input value={minutes} onChange={(e) => setMinutes(e.target.value)} inputMode="numeric" aria-label="Minutes" className="w-20 rounded-lg bg-panel2 px-2 py-1" />}
         <button onClick={add} className="ml-auto rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Add</button>
       </div>
+      {a.runs.length > 0 && <RecentRuns runs={a.runs} />}
     </div>
   );
 }

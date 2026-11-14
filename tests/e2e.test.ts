@@ -309,7 +309,18 @@ describe("v0.3: auth binding, take control, schedules", () => {
     expect(ran.text).toContain("scheduled ping");
     const sched = await c.waitFor<any>((m) => m.t === "schedules" && !!(m as any).schedules[0]?.lastRun);
     expect(sched.schedules[0].lastRun).toBeGreaterThan(0);
+    // v0.19: each run is kept with its result and the screen at the end; "Run now" runs it on demand
+    const r1 = await c.waitFor<any>((m) => m.t === "runs" && m.items.length === 1);
+    expect(r1.items[0]).toMatchObject({ scheduleId: "s1", ok: true });
+    expect(r1.items[0].result).toContain("scheduled ping");
+    expect(r1.items[0].shot).toStartWith("data:image/jpeg;base64,");
+    c.send({ t: "run_schedule", id: "s1" });
+    await c.waitFor<any>((m) => m.t === "runs" && m.items.length === 2, 20_000);
     c.close();
+    const c2 = await client(rec.id); // a new viewer sees past runs right away
+    const past = await c2.waitFor<any>((m) => m.t === "runs");
+    expect(past.items.length).toBe(2);
+    c2.close();
   });
 });
 

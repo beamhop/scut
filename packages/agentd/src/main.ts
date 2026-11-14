@@ -3,7 +3,7 @@
 // serves the agent's own WSS endpoint (the agent is its own relay) and implements the beam protocol.
 import {
   type AgentSpec, type AgentState, type BeamTicket, type ClientMsg, type Handoff, type ServerMsg,
-  type CrewMember, type MemoryItem, type Schedule, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
+  type CrewMember, type MemoryItem, type Schedule, type TaskRun, SCREEN, scheduleDue, bytesToHex, decodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, unseal, verifyAuth,
 } from "@scut/protocol";
 import { makeBundle, openBundle } from "@scut/beam";
 import { createHarness, systemPromptFor, type Harness } from "@scut/agent";
@@ -62,6 +62,7 @@ const CREW_AGENT_LIMIT = Number(process.env.SCUT_CREW_AGENT_LIMIT ?? 4);
 const CREW_WINDOW_MS = 10 * 60_000;
 const crewAgentReplies: number[] = [];
 let schedules: Schedule[] = [];
+let runs: TaskRun[] = [];
 let usageDay = new Date().toISOString().slice(0, 10);
 let dayTokens = 0;
 
@@ -234,7 +235,7 @@ function describe(a: Record<string, any>) {
 
 // ---------- prompts (serialized) ----------
 let queue: Promise<unknown> = Promise.resolve();
-function prompt(text: string, origin: { channel: string; chatId?: string; from: string; notify?: boolean }) {
+function prompt(text: string, origin: { channel: string; chatId?: string; from: string; notify?: boolean; onDone?: (r: { ok: boolean; text: string; tokens: number }) => void }) {
   recordChat({ from: origin.from, channel: origin.channel, text, ts: Date.now() });
   queue = queue.then(async () => {
     if (!harness || state === "retired" || state === "quiescing") return;
@@ -247,11 +248,13 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
     if (budget > 0 && dayTokens >= budget) {
       const msg = `I've used today's token budget (${dayTokens.toLocaleString()} of ${budget.toLocaleString()}). Raise it in my settings or try again tomorrow.`;
       recordChat({ from: "agent", channel: origin.channel, text: msg, ts: Date.now() });
+      origin.onDone?.({ ok: false, text: msg, tokens: 0 });
       if (origin.chatId) await channels.find((c) => c.name === origin.channel)?.send(origin.chatId, msg).catch(() => {});
       narrate("Budget reached");
       return;
     }
     setState("busy");
+    const t0 = dayTokens;
     try {
       const reply = await harness.prompt(memoryPreamble() + text, (e) => {
         if (e.type === "tool" && !/computer/.test(e.name)) narrate(`Now: ${e.name}`);
@@ -265,6 +268,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       });
       const out = reply || "(no reply)";
       recordChat({ from: "agent", channel: origin.channel, text: out, ts: Date.now() });
+      origin.onDone?.({ ok: true, text: out, tokens: dayTokens - t0 });
       if (origin.notify) {
         // scheduled task: tell the owner wherever they paired
         for (const c of channels) {
@@ -278,6 +282,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       setState("running");
       narrate("Ready");
     } catch (e: any) {
+      origin.onDone?.({ ok: false, text: String(e?.message ?? e), tokens: dayTokens - t0 });
       setState("stuck");
       narrate(`Stuck: ${String(e?.message ?? e).slice(0, 200)} — reply or take over to help`);
     }
@@ -390,6 +395,7 @@ async function run() {
     dayTokens = usage.dayTokens;
   }
   schedules = (await readJson<Schedule[]>(`${DATA}/schedules.json`)) ?? [];
+  runs = (await readJson<TaskRun[]>(`${DATA}/runs.json`)) ?? [];
   crew = (await readJson<CrewMember[]>(`${DATA}/crew.json`)) ?? [];
   memory = (await readJson<MemoryItem[]>(`${DATA}/memory.json`)) ?? [];
   try {
@@ -525,13 +531,27 @@ setInterval(async () => {
     if (!scheduleDue(s)) continue;
     s.lastRun = Date.now();
     changed = true;
-    prompt(s.prompt, { channel: "schedule", from: "schedule", notify: true });
+    runSchedule(s);
   }
   if (changed) {
     await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
     broadcast({ t: "schedules", schedules });
   }
 }, Number(process.env.SCUT_SCHEDULE_TICK_MS ?? 20_000));
+
+function runSchedule(s: Schedule) {
+  const startedAt = Date.now();
+  prompt(s.prompt, {
+    channel: "schedule", from: "schedule", notify: true,
+    onDone: (r) => {
+      const shot = desktop?.latest ? `data:image/jpeg;base64,${Buffer.from(desktop.latest).toString("base64")}` : undefined;
+      runs.push({ id: bytesToHex(crypto.getRandomValues(new Uint8Array(6))), scheduleId: s.id, prompt: s.prompt, startedAt, endedAt: Date.now(), ok: r.ok, result: r.text.slice(0, 4000), tokens: r.tokens, shot });
+      runs = runs.slice(-10);
+      Bun.write(`${DATA}/runs.json`, JSON.stringify(runs)).catch(() => {});
+      broadcast({ t: "runs", items: runs });
+    },
+  });
+}
 
 // ---------- HTTP / WS server ----------
 function authed(req: Request, url: URL) {
@@ -648,6 +668,7 @@ Bun.serve<WsData>({
       for (const req of pendingApprovals.values()) ws.send(JSON.stringify(req));
       ws.send(JSON.stringify({ t: "paused", paused } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "schedules", schedules } satisfies ServerMsg));
+      ws.send(JSON.stringify({ t: "runs", items: runs } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "memory", items: memory } satisfies ServerMsg));
       ws.send(JSON.stringify({ t: "skills", items: await listSkills() } satisfies ServerMsg));
     },
@@ -731,6 +752,9 @@ Bun.serve<WsData>({
         schedules = m.schedules.slice(0, 50).map((s) => ({ ...s, prompt: String(s.prompt).slice(0, 2000) }));
         await Bun.write(`${DATA}/schedules.json`, JSON.stringify(schedules, null, 2));
         broadcast({ t: "schedules", schedules });
+      } else if (m.t === "run_schedule") {
+        const s = schedules.find((x) => x.id === m.id);
+        if (s) { s.lastRun = Date.now(); runSchedule(s); broadcast({ t: "schedules", schedules }); }
       } else if (m.t === "stop") {
         harness?.abort?.();
         for (const [id] of approvals) resolveApproval(id, false, "owner");
