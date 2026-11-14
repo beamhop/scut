@@ -363,6 +363,14 @@ function SubscriptionPanel({ a, name, kind, label }: { a: A; name: string; kind:
   const send = (op: "start" | "cancel" | "check" | "signout") => a.send({ t: "signin", op });
   const setModel = (v: string) => { a.send({ t: "settings", subModel: v || null }); announce(v ? `${name} now uses ${v}` : `${name} uses ${label}'s default model`); };
   const models = a.settings?.subModels ?? [];
+  // Agents made before sign-in existed (their software comes from the agent image) never answer: say so, don't spin.
+  const outdated = !!a.settings && a.settings.harness === undefined;
+  if (outdated) return (
+    <Notice tone="needs">
+      <span className="font-medium">{name} runs an older version that can't sign in from here.</span> Its software comes
+      from the agent image, which doesn't have sign-in yet. Once a newer image is out, make a new agent with {label} to sign in.
+    </Notice>
+  );
   const state = s?.state ?? "checking";
   return (
     <div className="space-y-3 rounded-unit border border-line bg-surface-2 p-3">
