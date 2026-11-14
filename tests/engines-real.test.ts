@@ -51,6 +51,7 @@ test.skipIf(!target)(`the real ${target ?? "engine"}: a whole agent if it can ru
     if (!scut.local.engine) expect(scut.prefetch.error).toContain("sandbox");
     return;
   }
+  if (scut.prefetch.state !== "ready") console.log(`setup on ${target} failed: ${scut.prefetch.error}`);
   expect(scut.prefetch.state).toBe("ready");
   const rec = await scut.create({ name: "Real", harness: "mock" });
   const ws = new WebSocket(`${rec.current.endpoint.replace(/^http/, "ws")}/ws?auth=${scut.auth(rec.current.endpoint)}`);
