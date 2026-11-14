@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.61.0 — Runs anywhere, no Docker needed
+
+Agents used to need either a microVM (Apple Silicon, Linux with KVM) or Docker. Now Beamhop picks the best way to run them on your computer, checks it works, and remembers it, with nothing to install.
+
+- **The ladder.** smolvm microVM → the computer's built-in sandbox (WSL2 on Windows, gVisor on Linux without KVM) → Docker or Podman if already installed → no sandbox, only if you choose it. The remembered choice is re-checked on every start; agents keep the engine they were made on even if a better one appears later.
+- **Windows: WSL2.** Each agent is its own WSL2 distro, built from the agent image without Docker (layers piped in, whiteouts applied, one export reused for every agent). WSL off? "Turn on WSL" asks once for permission, then Windows restarts.
+- **Linux without KVM: gVisor.** runsc (pinned, SHA-512 checked) is downloaded once and runs rootless; the image is pulled straight from the registry. The whole desktop runs inside it.
+- **No sandbox, as a last resort.** If no sandbox works, creating an agent offers: run it in your cloud, or run it here without a sandbox. The agent then runs as a normal program (the app runs agentd itself, `scut agentd`), with a headless browser of its own driven over DevTools: it never uses your screen, mouse or keyboard. Same tools, live view, Take over, approvals and beams. It works only in its folder and asks before anything outside it, and "No sandbox" shows wherever it does (place, safety check, its start page). It keeps running when the app closes (a per-user service: systemd, LaunchAgent or a logon task), restarts on a new app version when idle, and beams to a sandbox and back with chat, memory and browser logins.
+- **Pi without Node.** On a computer without a sandbox, Pi is installed for that computer using the app itself as bun.
+- **Cleaner beams.** The browser now closes cleanly before a beam packs its profile, so cookies set seconds before a beam come along.
+- Old unpacked images are removed when a new one arrives. Intel Macs aren't supported (said plainly).
+- Tests: the ladder; the DevTools screen against a real browser; no sandbox end to end (beam to Docker and back, revive, update, real Pi); gVisor rootless and as root, a whole agent and beams; WSL2 against a stand-in `wsl.exe` that really builds and runs the distro; the compiled app.
+
 ## v0.60.0 — Instrument: the interface, rethought
 
 A ground-up redesign after research into 30+ agent, fleet, remote-desktop and trust products (see `research/` and `DESIGN-PLAN.md`), an independent design review, and a fix round.

@@ -171,7 +171,7 @@ export type ServerMsg =
   | { t: "cursor"; x: number; y: number; who: string }
   | { t: "error"; message: string }
   | { t: "history"; chat: { from: string; channel: string; text: string; ts: number }[]; narration: { text: string; ts: number }[] }
-  | { t: "settings"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
+  | { t: "settings"; /** Runs directly on its computer, without a sandbox. */ unsandboxed?: boolean; /** x11: a whole Linux desktop; cdp: a browser only (no sandbox). */ screen?: "x11" | "cdp"; autonomy: Autonomy; dailyTokenBudget: number; persona?: string; model?: { api: string; baseUrl?: string; model: string; hasKey: boolean }; dayTokens: number; channels: { telegram: boolean; slack: boolean; discord: boolean; nostr: boolean }; /** Same as StatusMsg.problem (for the safety check). */ problem?: AgentProblem }
   | { t: "paused"; paused: boolean; /** true when the owner has the screen (Take over), false for a plain pause */ control?: boolean }
   | { t: "memory"; items: MemoryItem[] }
   | { t: "skills"; items: { name: string; description: string }[]; error?: string }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as RKE, type ReactNode } from "react";
 import { ArrowRightIcon, CalendarBlankIcon, ChatsCircleIcon, CloudArrowUpIcon, FileArrowDownIcon, FolderOpenIcon, KeyboardIcon, MagnifyingGlassIcon, PauseIcon, PlayIcon, PlusIcon, WrenchIcon, XIcon } from "@phosphor-icons/react";
 import type { StatusMsg, TaskRun } from "@scut/protocol";
-import { Agent, Destination, Approval, ResolvedApproval } from "./lib.tsx";
+import { Agent, Destination, Approval, ResolvedApproval, unsandboxed } from "./lib.tsx";
 import { useAgent } from "./useAgent.ts";
-import { BeamMenu, BeamGhost, BeamPendingGhost, BeamCountdown, BeamConfirm, BeamReceipt, BeamFailed, BeamFlights, beamInFlight, placeIcon, placeLabel, placeRunningCost } from "./beam.tsx";
+import { BeamMenu, BeamGhost, BeamPendingGhost, BeamCountdown, BeamConfirm, BeamReceipt, BeamFailed, BeamFlights, beamInFlight, placeIcon, placeLabel, placeOf, placeRunningCost } from "./beam.tsx";
 import { ApprovalCard, approvalTitleShort } from "./ui/ApprovalCard.tsx";
 import {
   Button, IconButton, Kbd, StatusBadge, Lamp, STATUS, toStatus, Plate, Bezel, ScreenNote, Readout, Tray, Switch, Input, Select, Dialog, ThemeToggle,
@@ -176,7 +176,7 @@ export function Unit(p: UnitProps) {
   let status = toStatus(a.state, { needs, beaming, problem: !!problem && !needs });
   if (control && working && !needs) status = "needs"; // it waits for you to give it back (same as the agent view)
   const since = a.since ?? st?.since;
-  const where = placeLabel(dests, agent.current.driver);
+  const where = placeOf(dests, agent.current);
   const word = beaming ? `Beaming to ${placeLabel(dests, agent.beam!.to)}`
     : status === "moving" ? (a.state === "quiescing" ? "Packing up" : "Starting")
     : control ? "You have control" : paused ? "Paused"
@@ -736,6 +736,9 @@ export function Bench(p: BenchProps) {
                   <span className="text-small text-ink-2">{empty ? "nothing here" : plural(here.length, "agent")}</span>
                   <span className="text-small tabular-nums text-ink-2">{placeRunningCost(d)}</span>
                   {!!d.monthlyUsd && <span className="text-small text-ink-2">Connected</span>}
+                  {here.some((a) => unsandboxed(a.current)) && !/no sandbox/i.test(d.label) && (
+                    <span className="text-small text-ink-2" title="These agents run as normal programs on this computer, each with its own browser, and ask before touching anything outside their folder.">No sandbox</span>
+                  )}
                 </>
               );
               return (

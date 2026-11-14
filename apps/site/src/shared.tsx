@@ -3,7 +3,7 @@ import { cx, prefersReducedMotion } from "../../../packages/ui/src/ui/index.ts";
 
 export const REPO = "https://github.com/beamhop/scut";
 export const DOWNLOAD = `${REPO}/actions/workflows/build.yml`;
-export const VERSION = "0.60.0";
+export const VERSION = "0.61.0";
 /** Fixed key so the demo agent's plate glyph is the same on every visit. */
 export const ATLAS_KEY = "7f3c1a9e52b84d06c1e7a3f95b20d8e4c6a1f3b7d9e05c28a4f61b3d7e9c0a25";
 export const NOVA_KEY = "0b9e4f21c7d3a85e6f10b2c4d9a7e3f58c1b06d2e4a9f73b5c8d1e0a6f2b4c97";

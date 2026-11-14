@@ -7,35 +7,39 @@ export class DockerDriver implements HostDriver {
   isolation = "container" as const;
   monthlyUsd = 0;
 
-  constructor(opts: { id?: string; label?: string; host?: string } = {}) {
-    this.id = opts.id ?? "docker";
-    this.label = opts.label ?? "This computer (Docker)";
+  constructor(opts: { id?: string; label?: string; host?: string; bin?: "docker" | "podman" } = {}) {
+    this.bin = opts.bin ?? "docker";
+    this.id = opts.id ?? this.bin;
+    this.label = opts.label ?? (this.bin === "podman" ? "This computer (Podman)" : "This computer (Docker)");
     this.host = opts.host ?? "127.0.0.1";
   }
   private host: string;
+  /** docker, or podman (same command line). */
+  readonly bin: "docker" | "podman";
 
-  static imagePresent(image: string): boolean {
+  static imagePresent(image: string, bin = "docker"): boolean {
     try {
-      return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+      return Bun.spawnSync([bin, "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
     } catch {
       return false; // no docker at all
     }
   }
 
   /** Is there a Docker engine to talk to? (Used only where the built-in microVM engine isn't available.) */
-  static available(): { ok: boolean; reason?: string } {
+  static available(bin = "docker"): { ok: boolean; reason?: string } {
+    const name = bin === "podman" ? "Podman" : "Docker";
     try {
-      const p = Bun.spawnSync(["docker", "info", "--format", "{{.ServerVersion}}"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+      const p = Bun.spawnSync([bin, "info", "--format", bin === "podman" ? "{{.Version.Version}}" : "{{.ServerVersion}}"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
       if (p.exitCode === 0) return { ok: true };
-      return { ok: false, reason: "Docker is installed but not running. Start Docker Desktop (or the Docker service) and reopen Beamhop." };
+      return { ok: false, reason: `${name} is installed but not running` };
     } catch {
-      return { ok: false, reason: "This computer can't run agents yet: its built-in virtualization isn't available here and Docker isn't installed. Install Docker Desktop, or add a cloud and run your agents there." };
+      return { ok: false, reason: `${name} isn't installed` };
     }
   }
 
   /** Download the agent image, reporting layers done/total as docker prints them. */
-  static async pull(image: string, onProgress?: (p: { done: number; total: number }) => void): Promise<void> {
-    const p = Bun.spawn(["docker", "pull", image], { stdout: "pipe", stderr: "pipe" });
+  static async pull(image: string, onProgress?: (p: { done: number; total: number }) => void, bin = "docker"): Promise<void> {
+    const p = Bun.spawn([bin, "pull", image], { stdout: "pipe", stderr: "pipe" });
     const layers = new Map<string, string>();
     let rest = "";
     for await (const chunk of p.stdout as ReadableStream<Uint8Array>) {
@@ -59,20 +63,28 @@ export class DockerDriver implements HostDriver {
     if ((await p.exited) !== 0) throw new Error(`Couldn't download the agent computer: ${(await new Response(p.stderr).text()).trim().slice(-300)}`);
   }
 
+  /** First run: download the image ahead of the first create. */
+  async prepare(image: string, onProgress?: (p: { done: number; total: number }) => void) {
+    const engine = DockerDriver.available(this.bin);
+    if (!engine.ok) throw new Error(engine.reason);
+    if (DockerDriver.imagePresent(image, this.bin)) return;
+    await DockerDriver.pull(image, onProgress, this.bin);
+  }
+
   async revive(inst: Instance): Promise<Instance> {
     const name = inst.meta?.name ?? inst.instanceId;
-    const running = Bun.spawnSync(["docker", "inspect", "-f", "{{.State.Running}}", name], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
+    const running = Bun.spawnSync([this.bin, "inspect", "-f", "{{.State.Running}}", name], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
     if (running === "") return inst; // gone; nothing to revive
-    if (running !== "true") Bun.spawnSync(["docker", "start", name], { stdout: "ignore", stderr: "ignore" });
+    if (running !== "true") Bun.spawnSync([this.bin, "start", name], { stdout: "ignore", stderr: "ignore" });
     // The host port is picked at start, so it can differ from last time.
-    const port = Bun.spawnSync(["docker", "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
+    const port = Bun.spawnSync([this.bin, "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
     return port ? { ...inst, endpoint: `http://${this.host}:${port}` } : inst;
   }
 
   private runArgs(name: string, image: string, env: Record<string, string>, o: { cpus?: number; memoryMb?: number } = {}): string[] {
     const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
     return [
-      "docker", "run", "-d", "--name", name,
+      this.bin, "run", "-d", "--name", name,
       "-p", `${this.host}::8080`,
       "-v", `${name}-data:/data`,
       "--shm-size", "512m",
@@ -95,20 +107,20 @@ export class DockerDriver implements HostDriver {
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     if (code !== 0) throw new Error(`docker run failed: ${err}`);
     const id = out.trim();
-    const port = Bun.spawnSync(["docker", "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
+    const port = Bun.spawnSync([this.bin, "port", name, "8080/tcp"], { stdout: "pipe" }).stdout.toString().trim().split("\n")[0].split(":").pop();
     return { driver: this.id, instanceId: id, endpoint: `http://${this.host}:${port}`, meta: { name } };
   }
 
   async create(o: CreateOpts): Promise<Instance> {
-    const engine = DockerDriver.available();
+    const engine = DockerDriver.available(this.bin);
     if (!engine.ok) throw new Error(engine.reason);
     const name = `scut-${o.name}`;
     return this.run(name, this.runArgs(name, o.image, o.env, o));
   }
 
-  private static inspect(args: string[]): string {
+  private inspect(args: string[]): string {
     try {
-      const p = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "ignore", timeout: 15_000 });
+      const p = Bun.spawnSync([this.bin, ...args], { stdout: "pipe", stderr: "ignore", timeout: 15_000 });
       return p.exitCode === 0 ? p.stdout.toString().trim() : "";
     } catch {
       return "";
@@ -117,8 +129,8 @@ export class DockerDriver implements HostDriver {
 
   outdated(inst: Instance, image: string): boolean {
     const name = inst.meta?.name ?? inst.instanceId;
-    const want = DockerDriver.inspect(["image", "inspect", "-f", "{{.Id}}", image]);
-    const have = DockerDriver.inspect(["inspect", "-f", "{{.Image}}", name]);
+    const want = this.inspect(["image", "inspect", "-f", "{{.Id}}", image]);
+    const have = this.inspect(["inspect", "-f", "{{.Image}}", name]);
     return !!want && !!have && want !== have;
   }
 
@@ -126,20 +138,20 @@ export class DockerDriver implements HostDriver {
     const name = inst.meta?.name ?? inst.instanceId;
     if (!this.outdated(inst, image)) return inst;
     // What the container was started with, minus what its (old) image sets by itself: BEAM_TICKET, test overrides…
-    const oldImage = DockerDriver.inspect(["inspect", "-f", "{{.Image}}", name]);
+    const oldImage = this.inspect(["inspect", "-f", "{{.Image}}", name]);
     const parse = (j: string) => { try { return (JSON.parse(j) ?? []) as string[]; } catch { return []; } };
-    const imageEnv = new Set(parse(DockerDriver.inspect(["image", "inspect", "-f", "{{json .Config.Env}}", oldImage])));
+    const imageEnv = new Set(parse(this.inspect(["image", "inspect", "-f", "{{json .Config.Env}}", oldImage])));
     const own = /^(SCUT_EXTRA_CA|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE)=/; // re-added by runArgs when still wanted
     const env = Object.fromEntries(
-      parse(DockerDriver.inspect(["inspect", "-f", "{{json .Config.Env}}", name]))
+      parse(this.inspect(["inspect", "-f", "{{json .Config.Env}}", name]))
         .filter((e) => !imageEnv.has(e) && !own.test(e))
         .map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)]),
     );
-    const nano = Number(DockerDriver.inspect(["inspect", "-f", "{{.HostConfig.NanoCpus}}", name]) || 0);
-    const mem = Number(DockerDriver.inspect(["inspect", "-f", "{{.HostConfig.Memory}}", name]) || 0);
+    const nano = Number(this.inspect(["inspect", "-f", "{{.HostConfig.NanoCpus}}", name]) || 0);
+    const mem = Number(this.inspect(["inspect", "-f", "{{.HostConfig.Memory}}", name]) || 0);
     const limits = { cpus: nano ? nano / 1e9 : undefined, memoryMb: mem ? Math.round(mem / 1048576) : undefined };
     const backup = `${name}-before-update`;
-    const sh = (...a: string[]) => Bun.spawnSync(["docker", ...a], { stdout: "ignore", stderr: "pipe", timeout: 60_000 });
+    const sh = (...a: string[]) => Bun.spawnSync([this.bin, ...a], { stdout: "ignore", stderr: "pipe", timeout: 60_000 });
     sh("rm", "-f", backup); // a leftover from an earlier attempt that never finished
     // Stop it cleanly (agentd writes as it goes; the disk is a named volume that outlives the container).
     sh("stop", "-t", "20", name);
@@ -166,12 +178,12 @@ export class DockerDriver implements HostDriver {
 
   boundHosts(inst: Instance): string[] {
     const name = inst.meta?.name ?? inst.instanceId;
-    return DockerDriver.inspect(["port", name, "8080/tcp"]).split("\n").filter(Boolean).map((l) => l.slice(0, l.lastIndexOf(":")).replace(/^\[|\]$/g, ""));
+    return this.inspect(["port", name, "8080/tcp"]).split("\n").filter(Boolean).map((l) => l.slice(0, l.lastIndexOf(":")).replace(/^\[|\]$/g, ""));
   }
 
   async destroy(inst: Instance) {
     const name = inst.meta?.name ?? inst.instanceId;
-    Bun.spawnSync(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
-    Bun.spawnSync(["docker", "volume", "rm", "-f", `${name}-data`], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync([this.bin, "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawnSync([this.bin, "volume", "rm", "-f", `${name}-data`], { stdout: "ignore", stderr: "ignore" });
   }
 }

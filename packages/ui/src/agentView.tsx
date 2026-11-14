@@ -6,7 +6,7 @@ import {
 import qrcode from "qrcode-generator";
 import type { Agent, Approval, Destination } from "./lib.tsx";
 import { useAgent } from "./useAgent.ts";
-import { BeamMenu, placeIcon, placeLabel } from "./beam.tsx";
+import { BeamMenu, placeIcon, placeLabel, placeOf } from "./beam.tsx";
 import { SettingsPanel, SETTINGS_SECTIONS, safetySummary, type SettingsSection } from "./settings.tsx";
 import { ApprovalCard, approvalTitleShort, resolutionText } from "./ui/ApprovalCard.tsx";
 import { Activity, buildActivity, useActivityAnnouncements } from "./agent-activity.tsx";
@@ -198,7 +198,7 @@ function DesktopLayout({ agent, a, drive, now, stop, onSettings, settings, dests
   ], [focus, actual, agent.name]);
   useHotkeys({ escape: () => { if (!focus) return false; toggleFocus(); } }, { enabled: focus });
 
-  const where = placeLabel(dests, agent.current.driver);
+  const where = placeOf(dests, agent.current);
   const Place = placeIcon(dests.find((d) => d.id === agent.current.driver) ?? { id: agent.current.driver, monthlyUsd: 0 });
   const safety = safetySummary(a, agent);
 

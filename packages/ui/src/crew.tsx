@@ -329,8 +329,8 @@ export function CrewApp() {
         pending={pending} onConfirmBeam={() => pending && doBeam(pending.agentId, pending.to)} onCancelBeam={cancelBeam} requestBeam={requestBeam}
         landed={{}} onCreate={() => setCreating(true)} onAddCloud={() => setAddCloud(true)} onImport={() => setImporting(true)} onExport={setExportId}
         crewOpen={crewOpen} onToggleCrew={() => setCrewOpen((v) => !v)} awaySince={away.since} onDismissAway={away.dismiss}
-        empty={!creating && <CreateAgent firstRun inline onDone={refresh} />} />
-      {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
+        empty={!creating && <CreateAgent firstRun inline onDone={refresh} onAddCloud={() => setAddCloud(true)} />} />
+      {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} onAddCloud={() => { setCreating(false); setAddCloud(true); }} />}
       {addCloud && <AddCloud helpers={agents} onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); notices.push(`${label} added. Use Beam to… on an agent to move it there.`); }} />}
       {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} agents={agents} />}
       {dialogs}

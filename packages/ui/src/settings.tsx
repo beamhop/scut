@@ -110,7 +110,9 @@ export function safetyItems(a: A, agent: Agent) {
   const problem = agentProblem(a, agent);
   if (problem?.fix === "brain") items.push({ ok: false, text: "No brain yet, so it can't think or do tasks", to: "brain", fix: FIX_LABEL.brain });
   else if (problem?.fix === "key") items.push({ ok: false, text: `${problem.text}. It can't think until the key works`, to: "brain", fix: FIX_LABEL.key });
-  items.push({ ok: true, text: "Works on its own separate computer, away from your files and accounts" });
+  items.push(s.unsandboxed
+    ? { ok: false, text: "No sandbox: it runs as a normal program on this computer. It has its own browser and asks before touching anything outside its folder, but nothing walls it off. Beam it to a cloud to wall it off" }
+    : { ok: true, text: "Works on its own separate computer, away from your files and accounts" });
   items.push(s.autonomy === "auto"
     ? { ok: false, text: "Never asks before acting. \"Risky only\" still lets it work alone but checks payments, messages and logins with you", to: "autonomy" }
     : { ok: true, text: s.autonomy === "ask" ? "Asks you before every action" : "Asks you before payments, messages, deletes and logins", to: "autonomy" });

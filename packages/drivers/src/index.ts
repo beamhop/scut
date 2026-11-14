@@ -20,7 +20,8 @@ export interface Instance {
 export interface HostDriver {
   id: string;
   label: string;
-  isolation: "vm" | "container";
+  /** vm: microVM · container: Docker/Podman · sandbox: gVisor or WSL2 · none: runs directly on this computer. */
+  isolation: "vm" | "container" | "sandbox" | "none";
   /** Rough cost estimate per month for 2 vCPU / 4 GB, in USD. 0 = local. */
   monthlyUsd: number;
   create(opts: CreateOpts): Promise<Instance>;
@@ -34,6 +35,8 @@ export interface HostDriver {
    * up and holds the agent; if it throws, the old host is put back exactly as it was. Never deletes the disk.
    */
   upgrade?(inst: Instance, image: string, check: (next: Instance) => Promise<void>): Promise<Instance>;
+  /** Get the agent computer ready ahead of the first create (download it), reporting parts done/total. */
+  prepare?(image: string, onProgress?: (p: { done: number; total: number }) => void): Promise<unknown>;
   /** Addresses the host's port listens on, on this computer (e.g. ["127.0.0.1"] or ["0.0.0.0"]). */
   boundHosts?(inst: Instance): string[];
 }
@@ -59,3 +62,10 @@ export { SmolvmDriver } from "./smolvm.ts";
 export { FlyDriver } from "./fly.ts";
 export { RenderDriver } from "./render.ts";
 export { RailwayDriver } from "./railway.ts";
+export { GvisorDriver, GVISOR_VERSION } from "./gvisor.ts";
+export { pullImage, extractRootfs, parseRef } from "./oci.ts";
+export { freePort } from "./util.ts";
+export { WslDriver } from "./wsl.ts";
+export { HostProcessDriver, serviceFiles, detectService, type HostRuntime, type ServiceKind } from "./host.ts";
+export { ensureBrowser, installedBrowsers } from "./browser.ts";
+export { chooseLocal, localDriver, ladder, loadSaved, saveLocal, ENGINE_LABEL, type Engine, type Probe, type LocalChoice } from "./local.ts";

@@ -3,9 +3,13 @@ import {
   type AgentSpec, type BeamTicket, type Handoff, type HarnessKind, type ModelConfig, type Autonomy,
   bytesToHex, encodeTicket, generateSecretKey, getPublicKey, hexToBytes, readLease, seal, signAuth, signLease, unseal,
 } from "@scut/protocol";
-import { DockerDriver, FlyDriver, RailwayDriver, RenderDriver, SmolvmDriver, waitHealthy, type HostDriver, type Instance } from "@scut/drivers";
+import {
+  DockerDriver, FlyDriver, RailwayDriver, RenderDriver, WslDriver, chooseLocal, localDriver, saveLocal, waitHealthy,
+  type Engine, type HostDriver, type HostRuntime, type Instance, type LocalChoice,
+} from "@scut/drivers";
 import type { Event } from "nostr-tools";
 import { chmod, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { openAgentFile, writeAgentFile } from "./agentfile.ts";
 
@@ -67,6 +71,27 @@ export class Scut {
     return s;
   }
 
+  /** How agents run on this computer: the engine picked from the ladder (packages/drivers/src/local.ts). */
+  local: LocalChoice = { engine: null, probes: [], hostAllowed: false };
+  private otherLocal = new Map<Engine, HostDriver>();
+
+  /**
+   * The driver that owns an instance. Local instances remember their engine: if this computer has since moved to a
+   * different one (say Docker was installed, or no sandbox was allowed), older agents keep the engine they run on.
+   */
+  driverOf(inst: Instance): HostDriver | undefined {
+    const engine = inst.meta?.engine as Engine | undefined;
+    if (inst.driver !== "local" || !engine || engine === this.local.engine) return this.drivers.get(inst.driver);
+    if (!this.otherLocal.has(engine)) this.otherLocal.set(engine, localDriver(engine, this.home, hostRuntime(this.home)));
+    return this.otherLocal.get(engine);
+  }
+
+  /** Remember which engine made a local instance (see driverOf). */
+  private stamp(inst: Instance, driverId: string): Instance {
+    if (driverId === "local" && this.local.engine) inst.meta = { ...inst.meta, engine: this.local.engine };
+    return inst;
+  }
+
   /** Agents whose computer is being rebuilt from a newer image right now (shown as "updating"). */
   updating = new Map<string, Promise<void>>();
   private updateRetry?: ReturnType<typeof setTimeout>;
@@ -79,7 +104,7 @@ export class Scut {
   async updateOutdatedHosts(image = IMAGE): Promise<{ updated: string[]; waiting: string[]; failed: string[] }> {
     const out = { updated: [] as string[], waiting: [] as string[], failed: [] as string[] };
     for (const a of this.agents) {
-      const d = this.drivers.get(a.current.driver);
+      const d = this.driverOf(a.current);
       if (!d?.upgrade || !d.outdated?.(a.current, image)) continue;
       if (this.updating.has(a.id)) continue;
       if (a.beam && !["online", "failed"].includes(a.beam.stage)) { out.waiting.push(a.name); continue; }
@@ -119,7 +144,7 @@ export class Scut {
     const loopback = /^(127\.|localhost$|\[::1\]$|::1$)/.test(u.hostname);
     const link = (base: string) => `${base}/?auth=${this.freshAuth(base)}`;
     if (!loopback) return { url: link(ep), reachable: true, local: false, expiresInMin: 15 };
-    const hosts = this.drivers.get(rec.current.driver)?.boundHosts?.(rec.current) ?? [];
+    const hosts = this.driverOf(rec.current)?.boundHosts?.(rec.current) ?? [];
     if (lan && hosts.some((h) => h === "0.0.0.0" || h === "::" || h === lan)) {
       return { url: link(`${u.protocol}//${lan}:${u.port}`), reachable: true, local: true, expiresInMin: 15 };
     }
@@ -167,7 +192,7 @@ export class Scut {
         }
       }
       await this.req(a.current.endpoint, "/beam/abort", { method: "POST" }).catch(() => {});
-      if (t) await this.drivers.get(t.driver)?.destroy(t).catch(() => {});
+      if (t) await this.driverOf(t)?.destroy(t).catch(() => {});
       a.beam = { ...a.beam!, stage: "failed", target: undefined, error: `The app closed during the move. ${a.name} stayed where it was.`, doneAt: Date.now() };
     }
     if (stuck.length) await this.save();
@@ -177,7 +202,7 @@ export class Scut {
   async reviveLocalHosts() {
     let changed = false;
     for (const a of this.agents) {
-      const d = this.drivers.get(a.current.driver);
+      const d = this.driverOf(a.current);
       if (!d?.revive || d.monthlyUsd > 0) continue; // only local hosts; clouds keep running on their own
       const ok = await fetch(`${a.current.endpoint}/health`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false);
       if (ok) continue;
@@ -195,7 +220,7 @@ export class Scut {
         if (h.meta?.removed) continue;
         const st = (await fetch(`${h.endpoint}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null)) as { state?: string; agent?: string } | null;
         if (!st || st.state !== "retired" || st.agent !== a.id) continue; // unreachable for now, still in use, or not ours
-        await this.drivers.get(h.driver)?.destroy(h).catch(() => {});
+        await this.driverOf(h)?.destroy(h).catch(() => {});
         h.meta = { ...h.meta, removed: "1" };
         changed = true;
       }
@@ -203,25 +228,48 @@ export class Scut {
     if (changed) await this.save();
   }
 
-  /** First run: the agent computer image (~1.5 GB) downloads in the background while you pick a brain. */
+  /** First run: the agent computer (~1.5 GB, or a browser for no sandbox) downloads while you pick a brain. */
   prefetch: { state: "idle" | "pulling" | "ready" | "error"; done: number; total: number; error?: string } = { state: "idle", done: 0, total: 0 };
   private prefetching?: Promise<void>;
   startPrefetch() {
     const local = this.drivers.get("local");
-    if (!(local instanceof DockerDriver) || this.prefetching) return;
-    const engine = DockerDriver.available();
-    if (!engine.ok) { this.prefetch = { state: "error", done: 0, total: 0, error: engine.reason }; return; }
-    if (DockerDriver.imagePresent(IMAGE)) { this.prefetch = { state: "ready", done: 0, total: 0 }; return; }
+    if (this.prefetching) return;
+    if (!local) {
+      this.prefetch = { state: "error", done: 0, total: 0, error: this.local.unsupported ?? "This computer can't run agents in a sandbox. Run them in your cloud, or here without a sandbox." };
+      return;
+    }
+    if (!local.prepare) { this.prefetch = { state: "ready", done: 0, total: 0 }; return; }
     this.prefetch = { state: "pulling", done: 0, total: 0 };
-    this.prefetching = DockerDriver.pull(IMAGE, (p) => { this.prefetch = { state: "pulling", ...p }; })
+    this.prefetching = local.prepare(IMAGE, (p) => { this.prefetch = { state: "pulling", ...p }; })
       .then(() => { this.prefetch = { ...this.prefetch, state: "ready" }; })
-      .catch((e) => { this.prefetch = { ...this.prefetch, state: "error", error: `${String(e?.message ?? e)} Check your internet connection; Beamhop tries again when you create an agent.` }; this.prefetching = undefined; });
+      .catch((e) => {
+        const msg = String(e?.message ?? e);
+        const offline = /fetch|network|ENOTFOUND|ECONN|timed? ?out|Couldn't download/i.test(msg);
+        this.prefetch = { ...this.prefetch, state: "error", error: offline ? `${msg} Check your internet connection; Beamhop tries again when you create an agent.` : msg };
+        this.prefetching = undefined;
+      });
+  }
+
+  /** Let agents run on this computer without a sandbox (the last rung), or take that back. */
+  async allowHost(allow: boolean) {
+    await saveLocal(this.home, { hostAllowed: allow, ...(allow ? {} : { engine: undefined }) });
+    this.prefetching = undefined;
+    await this.loadDrivers();
+    this.startPrefetch();
+    return this.local;
+  }
+
+  /** Windows without WSL: start turning it on (one admin prompt, then a restart). */
+  enableWsl() {
+    return WslDriver.enableWsl();
   }
 
   async loadDrivers() {
     const p = await loadJson<any>(this.home, "providers.json", {});
-    const local = (process.env.SCUT_LOCAL_DRIVER ?? ((await SmolvmDriver.availability()).available ? "smolvm" : "docker")) as string;
-    this.drivers.set("local", local === "smolvm" ? Object.assign(new SmolvmDriver(), { id: "local" }) : new DockerDriver({ id: "local", label: "This computer" }));
+    this.local = await chooseLocal(this.home);
+    this.drivers.delete("local");
+    this.otherLocal.clear();
+    if (this.local.engine) this.drivers.set("local", localDriver(this.local.engine, this.home, hostRuntime(this.home)));
     // A second local container host labelled as cloud, for demos and tests without provider accounts.
     if (process.env.SCUT_SIM_CLOUD) this.drivers.set("sim-cloud", new DockerDriver({ id: "sim-cloud", label: "Cloud (simulated)" }));
     if (p.fly?.token) this.drivers.set("fly", new FlyDriver(p.fly.token, p.fly.org, p.fly.region));
@@ -349,7 +397,7 @@ export class Scut {
     dailyTokenBudget?: number;
   }): Promise<AgentRecord> {
     const driver = this.drivers.get(o.driver ?? "local");
-    if (!driver) throw new Error(`unknown destination ${o.driver}`);
+    if (!driver) throw new Error((o.driver ?? "local") === "local" ? noLocal(this.local) : `unknown destination ${o.driver}`);
     if ((o.driver ?? "local") === "local") await this.prefetching; // don't start a second download of the same image
     // The first agent's brain (model + key) is remembered on this computer so later agents don't ask again.
     const saved = await this.brain();
@@ -377,7 +425,7 @@ export class Scut {
       dailyTokenBudget: o.dailyTokenBudget ?? 1_000_000, // default hard cap; 0 = none
     };
     const ticket: BeamTicket = { beamId: `create-${id}`, mode: "create", ownerPubkey: this.ownerPubkey, agentPubkey: spec.agentPubkey, issuedAt: Date.now() };
-    const inst = await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
+    const inst = this.stamp(await driver.create({ name: id, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
     try {
       const hello = await (async () => {
         await waitHealthy(inst.endpoint);
@@ -408,7 +456,7 @@ export class Scut {
     const rec = this.get(agentId);
     await this.updating.get(rec.id); // never beam a computer that is being rebuilt
     const driver = this.drivers.get(to);
-    if (!driver) throw new Error(`unknown destination ${to}`);
+    if (!driver) throw new Error(to === "local" ? noLocal(this.local) : `unknown destination ${to}`);
     const src = rec.current;
     let summary: BeamSummary | undefined;
     const startedAt = Date.now();
@@ -431,7 +479,7 @@ export class Scut {
       const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
       const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: rec.agentPubkey, bundleHash: prep.hash, issuedAt: Date.now() };
       const suffix = bytesToHex(crypto.getRandomValues(new Uint8Array(2)));
-      target = await driver.create({ name: `${rec.id}-${suffix}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
+      target = this.stamp(await driver.create({ name: `${rec.id}-${suffix}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
       rec.beam!.target = target; // remembered so a crash from here on can be cleaned up or completed
       await this.save();
       await waitHealthy(target.endpoint);
@@ -457,7 +505,7 @@ export class Scut {
       rec.current = target;
       await stage("online");
       if (opts.destroySource) {
-        await this.drivers.get(src.driver)?.destroy(src).catch(() => {});
+        await this.driverOf(src)?.destroy(src).catch(() => {});
         src.meta = { ...src.meta, removed: "1" };
         await this.save();
       }
@@ -491,7 +539,7 @@ export class Scut {
       );
       const lease = signLease(hexToBytes(secrets.agentSk), rec.id, { holder: "file", seq });
       await this.req(src.endpoint, "/beam/commit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lease }) });
-      await this.drivers.get(src.driver)?.destroy(src).catch(() => {});
+      await this.driverOf(src)?.destroy(src).catch(() => {});
       this.agents = this.agents.filter((a) => a.id !== rec.id);
       await this.save();
       await this.syncCrew();
@@ -507,11 +555,11 @@ export class Scut {
     const { header: h, bundle, secrets } = await openAgentFile(fileBytes, passphrase);
     if (this.agents.some((a) => a.id === h.id)) throw new Error(`${h.name} is already here`);
     const driver = this.drivers.get(driverId);
-    if (!driver) throw new Error(`unknown destination ${driverId}`);
+    if (!driver) throw new Error(driverId === "local" ? noLocal(this.local) : `unknown destination ${driverId}`);
     if (getPublicKey(hexToBytes(secrets.agentSk)) !== h.agentPubkey) throw new Error("This agent file is damaged");
     const beamId = `beam-${bytesToHex(crypto.getRandomValues(new Uint8Array(6)))}`;
     const ticket: BeamTicket = { beamId, mode: "beam", ownerPubkey: this.ownerPubkey, agentPubkey: h.agentPubkey, bundleHash: h.hash, issuedAt: Date.now() };
-    const target = await driver.create({ name: `${h.id}-${bytesToHex(crypto.getRandomValues(new Uint8Array(2)))}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } });
+    const target = this.stamp(await driver.create({ name: `${h.id}-${bytesToHex(crypto.getRandomValues(new Uint8Array(2)))}`, image: IMAGE, env: { ...EXTRA_ENV, BEAM_TICKET: encodeTicket(ticket) } }), driver.id);
     try {
       await waitHealthy(target.endpoint);
       const hello = (await (await fetch(`${target.endpoint}/beam/hello`)).json()) as { hostPubkey: string };
@@ -549,11 +597,59 @@ export class Scut {
 
   async remove(agentId: string) {
     const rec = this.get(agentId);
-    for (const inst of [rec.current, ...rec.history]) await this.drivers.get(inst.driver)?.destroy(inst).catch(() => {});
+    for (const inst of [rec.current, ...rec.history]) await this.driverOf(inst)?.destroy(inst).catch(() => {});
     this.agents = this.agents.filter((a) => a !== rec);
     await this.save();
     await this.syncCrew();
   }
+}
+
+/** Plain words for "this computer has no engine for agents". */
+export function noLocal(l: LocalChoice): string {
+  if (l.unsupported) return l.unsupported;
+  return "This computer can't run agents in a sandbox. Add a cloud to run them there, or choose to run them here without a sandbox.";
+}
+
+/**
+ * How this app starts an agent directly on this computer (no sandbox): the compiled app runs agentd itself
+ * (`scut agentd`) and is a bun for installing harnesses (BUN_BE_BUN=1); in development, bun runs main.ts.
+ */
+export function hostRuntime(home: string): HostRuntime {
+  const compiled = /\$bunfs|~BUN/.test(Bun.main);
+  const main = new URL("./main.ts", import.meta.url).pathname;
+  const self = compiled ? [process.execPath] : [process.execPath, main];
+  return {
+    agentd: [...self, "agentd"],
+    mcp: [...self, "mcp-computer"],
+    bun: [process.execPath],
+    bunEnv: compiled ? { BUN_BE_BUN: "1" } : undefined,
+    uiDir: agentUiDir(home, compiled),
+    version: codeVersion(compiled, main),
+  };
+}
+
+/** Identifies this app's code: the binary (compiled) or the agent daemon's source (development). */
+function codeVersion(compiled: boolean, main: string): string {
+  const { statSync } = require("node:fs") as typeof import("node:fs");
+  try {
+    if (compiled) { const st = statSync(process.execPath); return `bin-${st.size}-${Math.round(st.mtimeMs)}`; }
+    const agentd = new URL("../../../packages/agentd/src/main.ts", import.meta.url).pathname;
+    return `dev-${Math.round(statSync(agentd).mtimeMs)}-${Math.round(statSync(main).mtimeMs)}`;
+  } catch { return "unknown"; }
+}
+
+/** The agent's own web pages (start page, phone view): on disk in development, unpacked from the app otherwise. */
+function agentUiDir(home: string, compiled: boolean): string | undefined {
+  const dev = new URL("../../../packages/ui/dist", import.meta.url).pathname;
+  if (!compiled && existsSync(`${dev}/index.html`)) return dev;
+  const dir = `${home}/ui`;
+  void (async () => {
+    try {
+      const { assets } = await import("./ui-assets.ts");
+      for (const [path, a] of Object.entries(assets)) await Bun.write(`${dir}${path}`, Buffer.from(a.b64, "base64"));
+    } catch {}
+  })();
+  return dir;
 }
 
 export const MASCOTS = ["cyan", "magenta", "lime", "amber", "violet", "coral"];
