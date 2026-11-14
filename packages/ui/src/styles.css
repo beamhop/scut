@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+:root { color-scheme: dark; }
+
 @theme {
   --color-space: #070912;
   --color-panel: #0e1324;

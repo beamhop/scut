@@ -13,7 +13,7 @@ await click("New agent"); await wait(800); await p.screenshot({ path: `${out}/2-
 await p.keyboard.press("Escape"); await click("Cancel"); await wait(400);
 await click("Add a cloud"); await wait(800); await p.screenshot({ path: `${out}/3-add-cloud.png` });
 await click("Cancel"); await wait(400);
-await click("Crew room"); await wait(2500); await p.screenshot({ path: `${out}/4-crew.png` });
+await click("Talk to all agents"); await wait(2500); await p.screenshot({ path: `${out}/4-crew.png` });
 const agents = await (await fetch(`${base}/api/agents`)).json();
 if (agents[0]) {
   await p.goto(`${base}/#/agent/${agents[0].id}`); await wait(3500);

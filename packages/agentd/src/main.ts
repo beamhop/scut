@@ -227,7 +227,7 @@ function prompt(text: string, origin: { channel: string; chatId?: string; from: 
       }
       if (origin.channel === "crew") await postCrew(out);
       setState("running");
-      narrate("Idle");
+      narrate("Ready");
     } catch (e: any) {
       setState("stuck");
       narrate(`Stuck: ${String(e?.message ?? e).slice(0, 200)} — reply or take over to help`);
@@ -367,7 +367,7 @@ async function run() {
   await harness.start();
   await startChannels();
   setState("running");
-  narrate("Idle");
+  narrate("Ready");
 }
 
 async function quiesce() {

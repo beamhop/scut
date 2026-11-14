@@ -51,6 +51,7 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
   const [paused, setPaused] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const ws = useRef<WebSocket | null>(null);
+  const outbox = useRef<string[]>([]);
   const endpoint = agent?.current.endpoint;
   const tokenRef = useRef(agent?.token);
   tokenRef.current = agent?.token;
@@ -66,7 +67,11 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
       sock = new WebSocket(`${endpoint.replace(/^http/, "ws")}/ws?auth=${tokenRef.current}`);
       sock.binaryType = "blob";
       ws.current = sock;
-      sock.onopen = () => { setConnected(true); sock.send(JSON.stringify({ t: "subscribe", frames, fps })); };
+      sock.onopen = () => {
+        setConnected(true);
+        sock.send(JSON.stringify({ t: "subscribe", frames, fps }));
+        for (const m of outbox.current.splice(0)) sock.send(m);
+      };
       sock.onmessage = (ev) => {
         if (ev.data instanceof Blob) {
           const next = URL.createObjectURL(ev.data);
@@ -101,7 +106,11 @@ function useAgent(agent: Agent | undefined, frames: boolean, fps = 8) {
     };
   }, [endpoint, token, frames, beaming]);
 
-  const send = useCallback((m: unknown) => ws.current?.readyState === 1 && ws.current.send(JSON.stringify(m)), []);
+  // Queue messages typed before the socket is open (or while it reconnects) instead of dropping them.
+  const send = useCallback((m: unknown) => {
+    if (ws.current?.readyState === 1) ws.current.send(JSON.stringify(m));
+    else outbox.current.push(JSON.stringify(m));
+  }, []);
   return { frame, state, chat, narration, stats, approvals, agentCursor, settings, pairing, connected, paused, schedules, send };
 }
 
@@ -132,20 +141,40 @@ function Mascot({ variant = "cyan", size = 40, state = "running" }: { variant?: 
   );
 }
 
+/** Plain-language version of an approval title like "open_url https://example.com at 3,4". */
+function humanize(title: string) {
+  const m = title.match(/^(\w+)\s*(.*)$/);
+  if (!m) return title;
+  const [, kind, rest] = m;
+  const host = rest.match(/https?:\/\/([^/\s]+)/)?.[1];
+  switch (kind) {
+    case "open_url": return `open ${host ?? rest}`;
+    case "click": return "click on the screen";
+    case "dblclick": return "double-click on the screen";
+    case "type": return `type ${rest.match(/"(.*)"/)?.[0] ?? "text"}`;
+    case "key": return `press ${rest}`;
+    case "scroll": return "scroll";
+    default: return title.charAt(0).toLowerCase() + title.slice(1);
+  }
+}
+function needsText(a: { approvals: { title: string }[]; state: string }) {
+  return a.approvals.length || a.state === "stuck" ? "Waiting for you" : undefined;
+}
+
 function cost(agent: Agent, t: { input: number; output: number }) {
-  if (!agent.price) return `${((t.input + t.output) / 1000).toFixed(1)}k tokens`;
+  if (!agent.price) return t.input + t.output ? `${((t.input + t.output) / 1000).toFixed(1)}k tokens` : "";
   const usd = (t.input * agent.price.in + t.output * agent.price.out) / 1e6;
-  return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)} spent`;
+  return `$${usd.toFixed(2)} spent`;
 }
 
 const STATE_META: Record<string, { label: string; icon: string; tone: string }> = {
   awaiting: { label: "Beaming in", icon: "◌", tone: "text-sky-300" },
   starting: { label: "Booting", icon: "◌", tone: "text-sky-300" },
-  running: { label: "Idle", icon: "●", tone: "text-slate-400" },
+  running: { label: "Ready", icon: "●", tone: "text-slate-400" },
   busy: { label: "Working", icon: "◆", tone: "text-beam" },
   stuck: { label: "Needs you", icon: "▲", tone: "text-amber-300" },
   quiescing: { label: "Packing up", icon: "◌", tone: "text-sky-300" },
-  retired: { label: "Beamed away", icon: "○", tone: "text-slate-500" },
+  retired: { label: "Beamed away", icon: "○", tone: "text-slate-400" },
 };
 function StateChip({ state }: { state: string }) {
   const m = STATE_META[state] ?? STATE_META.running;
@@ -159,14 +188,14 @@ function BeamMenu({ agent, dests, onBeam, onClose }: { agent: Agent; dests: Dest
   return (
     <div ref={ref} role="menu" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}
       className="absolute right-3 top-3 z-10 w-64 rounded-xl border border-white/10 bg-panel p-2 shadow-2xl">
-      <div className="px-2 pb-1 text-[11px] uppercase tracking-widest text-slate-500">Beam {agent.name} to…</div>
+      <div className="px-2 pb-1 text-[11px] uppercase tracking-widest text-slate-400">Beam {agent.name} to…</div>
       {dests.map((d) => {
         const here = d.id === agent.current.driver;
         return (
           <button key={d.id} role="menuitem" disabled={here} onClick={() => { onBeam(d.id); onClose(); }}
             className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-sm hover:bg-panel2 focus:bg-panel2 focus:outline-none disabled:opacity-40">
             <span>{d.label}{here && " (here)"}</span>
-            <span className="font-mono text-[11px] text-slate-500">{d.monthlyUsd ? `~$${d.monthlyUsd}/mo` : "free"}</span>
+            <span className="font-mono text-[11px] text-slate-400">{d.monthlyUsd ? `~$${d.monthlyUsd}/mo` : "free"}</span>
           </button>
         );
       })}
@@ -196,7 +225,7 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
   const a = useAgent(agent, true, 1);
   const [menu, setMenu] = useState(false);
   const beaming = !!agent.beam && !["online", "failed"].includes(agent.beam.stage);
-  const now = a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
+  const now = needsText(a) ?? a.narration.at(-1)?.text ?? STATE_META[a.state]?.label;
   const where = dests.find((d) => d.id === agent.current.driver)?.label ?? agent.current.driver;
   const needs = a.state === "stuck" || a.approvals.length > 0;
   useEffect(() => { onStatus(agent.id, needs ? "stuck" : a.state); }, [needs, a.state]);
@@ -208,26 +237,32 @@ function Tile({ agent, dests, onOpen, onBeam, onStatus }: { agent: Agent; dests:
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter") onOpen(); if (e.key.toLowerCase() === "b") { e.preventDefault(); setMenu(true); } }}
       aria-label={`${agent.name}, ${STATE_META[a.state]?.label}, on ${where}. Enter to open, B to beam.`}
-      className={`group relative cursor-pointer overflow-hidden rounded-2xl bg-panel outline-none transition focus-visible:ring-2 focus-visible:ring-beam ${needs ? "glow-stuck" : "ring-1 ring-white/10"} ${a.state === "running" && !needs ? "opacity-85 hover:opacity-100" : ""}`}
+      className={`group relative cursor-pointer overflow-hidden rounded-2xl bg-panel outline-none transition focus-visible:ring-2 focus-visible:ring-beam ${needs ? "glow-stuck" : "ring-1 ring-white/10"}`}
     >
       <div className="relative aspect-[16/10] bg-black">
-        {a.frame ? <img src={a.frame} alt="" className="h-full w-full object-cover" draggable={false} /> : <div className="grid h-full place-items-center font-mono text-sm text-slate-600">{a.connected ? "waiting for picture…" : "connecting…"}</div>}
+        {a.frame ? <img src={a.frame} alt="" className="h-full w-full object-cover" draggable={false} /> : <div className="grid h-full place-items-center font-mono text-sm text-slate-600">{`Starting ${agent.name}'s screen…`}</div>}
         <div className="absolute left-2 top-2"><StateChip state={needs ? "stuck" : a.state} /></div>
-        <button onClick={(e) => { e.stopPropagation(); setMenu(!menu); }} className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-beam opacity-0 transition group-hover:opacity-100 focus:opacity-100" aria-haspopup="menu">Beam to…</button>
+        <button onClick={(e) => { e.stopPropagation(); setMenu(!menu); }} className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-beam opacity-80 transition hover:opacity-100 focus:opacity-100" aria-haspopup="menu">Beam to…</button>
         {menu && <BeamMenu agent={agent} dests={dests} onBeam={onBeam} onClose={() => setMenu(false)} />}
         {beaming && <BeamProgress agent={agent} />}
-        {a.approvals.length > 0 && <div className="absolute inset-x-2 bottom-2 rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-black">Approve? {a.approvals[0].title}</div>}
+        {a.approvals.length > 0 && (
+          <div onClick={(e) => e.stopPropagation()} className="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-lg bg-amber-400 px-3 py-2 text-sm text-black shadow-lg">
+            <span className="min-w-0 flex-1 truncate font-medium">{agent.name} wants to {humanize(a.approvals[0].title)}</span>
+            <button className="rounded-full bg-black px-3 py-1 text-amber-300" onClick={() => a.send({ t: "approval", id: a.approvals[0].id, ok: true })}>Allow</button>
+            <button className="rounded-full border border-black px-3 py-1" onClick={() => a.send({ t: "approval", id: a.approvals[0].id, ok: false })}>Don't</button>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-3 p-3">
         <Mascot variant={agent.mascot} state={needs ? "stuck" : a.state} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold">{agent.name}</span>
-            <span className="rounded-full bg-panel2 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-beam">{where}</span>
+            <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
           </div>
           <div className="truncate font-mono text-[12px] text-slate-400">{now}</div>
         </div>
-        {a.stats && <div className="text-right font-mono text-[10px] leading-4 text-slate-500">{a.stats.cpu}% CPU · {(a.stats.memMb / 1024).toFixed(1)} GB<br />{cost(agent, a.stats.tokens)}</div>}
+        {a.stats && <div className="text-right font-mono text-[11px] leading-4 text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">{a.stats.cpu}% CPU · {(a.stats.memMb / 1024).toFixed(1)} GB<br />{cost(agent, a.stats.tokens)}</div>}
       </div>
       {agent.beam?.stage === "failed" && <div className="bg-red-500/15 px-3 py-1.5 text-xs text-red-300">Beam failed, {agent.name} stayed put: {agent.beam.error?.slice(0, 120)}</div>}
     </div>
@@ -239,7 +274,7 @@ function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; o
   const [hot, setHot] = useState<string>();
   return (
     <div className="fixed inset-x-0 bottom-0 border-t border-white/5 bg-panel/90 px-8 py-4 backdrop-blur">
-      <div className="mb-2 font-mono text-[11px] uppercase tracking-widest text-slate-500">Destinations · drag an agent here, or press B on a tile</div>
+      <div className="mb-2 font-mono text-[11px] uppercase tracking-widest text-slate-400">Where your agents live · drag one here to move it</div>
       <div className="flex gap-3 overflow-x-auto">
         {dests.map((d) => (
           <div key={d.id}
@@ -248,7 +283,7 @@ function Dock({ dests, onDrop, dragging, onAddCloud }: { dests: Destination[]; o
             onDrop={(e) => { e.preventDefault(); setHot(undefined); onDrop(d.id, e.dataTransfer.getData("text/agent")); }}
             className={`min-w-48 rounded-xl border bg-panel2 px-4 py-3 transition ${hot === d.id ? "drop-hot border-beam" : dragging ? "border-beam/40" : "border-white/10"}`}>
             <div className="font-semibold">{d.label}</div>
-            <div className="font-mono text-[11px] text-slate-400">{d.isolation === "vm" ? "microVM" : "container"} · {d.monthlyUsd ? `~$${d.monthlyUsd}/mo` : "free"}</div>
+            <div className="font-mono text-[11px] text-slate-400">{d.monthlyUsd ? `~$${d.monthlyUsd}/month per agent` : d.id === "local" ? "Free · runs on this computer" : "Free"}</div>
           </div>
         ))}
         <button onClick={onAddCloud} className="grid min-w-48 place-items-center rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-400 hover:border-beam/50 hover:text-white">+ Add a cloud</button>
@@ -295,7 +330,7 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
   const [telegram, setTelegram] = useState("");
-  const [nostr, setNostr] = useState(true);
+  const [nostr, setNostr] = useState(false);
   const [npub, setNpub] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -347,12 +382,11 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 <input className={input} aria-label="Model" value={model.model} onChange={(e) => setModel({ ...model, model: e.target.value })} />
               </div>
             </details>
-            <p className="text-xs text-slate-500">Have a Claude or ChatGPT subscription? Pick Codex or Copilot CLI as the harness later and sign in on the agent's own screen.</p>
+            <p className="text-xs text-slate-400">Have a Claude or ChatGPT subscription? Choose Codex or Copilot CLI under More options next, then sign in on the agent's own screen.</p>
           </div>
         )}
         {step === 1 && (
           <div className="space-y-4">
-            <textarea className={`${input} h-20`} aria-label="Describe your agent" placeholder={TEMPLATES.find((t) => t.id === template)?.example} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             <div className="grid grid-cols-3 gap-2">
               {TEMPLATES.map((t) => (
                 <button key={t.id} className={`${card} ${template === t.id ? "border-beam" : "border-white/10"}`} onClick={() => setTemplate(t.id)}>
@@ -361,22 +395,26 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
                 </button>
               ))}
             </div>
-            <div>
-              <div className="mb-1 text-xs uppercase tracking-widest text-slate-500">Harness</div>
-              <div className="flex flex-wrap gap-2 text-sm">
-                {HARNESSES.map((h) => (
-                  <button key={h.id} onClick={() => setHarness(h.id)} title={h.note} className={`rounded-full px-3 py-1 ${harness === h.id ? "bg-beam text-black" : "bg-panel2 hover:bg-white/10"}`}>{h.label}</button>
-                ))}
+            <textarea className={`${input} h-20`} aria-label="Describe your agent" placeholder={TEMPLATES.find((t) => t.id === template)?.example} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <input className={input} aria-label="Name" placeholder="Name (optional — we'll pick one)" value={name} onChange={(e) => setName(e.target.value)} />
+            <details className="text-sm text-slate-300" open={template === "developer"}>
+              <summary className="cursor-pointer text-slate-400">More options</summary>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="mb-1 text-xs uppercase tracking-widest text-slate-400">Coding tool</div>
+                  <div className="flex flex-wrap gap-2">
+                    {HARNESSES.map((h) => (
+                      <button key={h.id} onClick={() => setHarness(h.id)} title={h.note} className={`rounded-full px-3 py-1 ${harness === h.id ? "bg-white text-black" : "bg-panel2 hover:bg-white/10"}`}>{h.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <input className={input} aria-label="Telegram bot token" placeholder="Telegram bot token (you can add this later in Settings)" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
+                <div className="flex items-center gap-2">
+                  <label className="flex shrink-0 items-center gap-2"><input type="checkbox" checked={nostr} onChange={(e) => setNostr(e.target.checked)} className="accent-cyan-400" /> Nostr messages</label>
+                  {nostr && <input className={input} aria-label="Your npub for approvals" placeholder="Your npub, to get approval requests (optional)" value={npub} onChange={(e) => setNpub(e.target.value)} />}
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <input className={input} aria-label="Name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-              <input className={input} aria-label="Telegram bot token" placeholder="Telegram bot token (optional)" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={nostr} onChange={(e) => setNostr(e.target.checked)} className="accent-cyan-400" /> Nostr DMs</label>
-              {nostr && <input className={input} aria-label="Your npub for approvals" placeholder="Your npub, to get approvals by DM (optional)" value={npub} onChange={(e) => setNpub(e.target.value)} />}
-            </div>
+            </details>
           </div>
         )}
         {error && <div className="mt-4 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">Couldn't start the agent: {error}</div>}
@@ -385,8 +423,8 @@ function CreateAgent({ firstRun, onDone }: { firstRun: boolean; onDone: () => vo
           {step < last ? (
             <button className="rounded-full bg-beam px-6 py-2 font-semibold text-black" onClick={() => setStep(step + 1)}>Next</button>
           ) : (
-            <button disabled={busy} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-6 py-2 font-semibold text-black disabled:opacity-60" onClick={go}>
-              {busy ? "Beaming in… (~10 s)" : "Beam it in"}
+            <button disabled={busy || (!prompt.trim() && !name.trim())} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-6 py-2 font-semibold text-black disabled:opacity-50" onClick={go}>
+              {busy ? "Beaming in… (~10 s)" : "Create agent"}
             </button>
           )}
         </div>
@@ -433,27 +471,28 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
         {!standalone && <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>}
         <Mascot variant={agent.mascot} size={32} state={a.state} />
         <div className="font-semibold">{agent.name}</div>
-        <span className="rounded-full bg-panel2 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-beam">{where}</span>
+        <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-300">{where}</span>
         <StateChip state={a.state} />
         <div className="ml-auto flex items-center gap-2">
-          <span className="hidden font-mono text-[11px] text-slate-500 lg:inline">
+          <span className="hidden font-mono text-[11px] text-slate-400 lg:inline">
             {a.stats && `${a.stats.cpu}% CPU · ${(a.stats.memMb / 1024).toFixed(1)}/${(a.stats.memTotalMb / 1024).toFixed(1)} GB · ${cost(agent, a.stats.tokens)}`}
           </span>
-          <button onClick={() => a.send({ t: "pause", paused: !a.paused })} className={`rounded-full px-3 py-1 text-sm ${a.paused ? "bg-beam font-semibold text-black" : "bg-panel2 hover:bg-white/10"}`}>{a.paused ? "Hand back" : "Take control"}</button>
           {a.state === "busy" && <button onClick={() => a.send({ t: "stop" })} className="rounded-full border border-red-400/50 px-3 py-1 text-sm text-red-300 hover:bg-red-500/10">Stop</button>}
-          {!standalone && <button onClick={async () => setPhone(await (await fetch(`/api/agents/${agent.id}/phone`)).json())} className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">Open on phone</button>}
           {!standalone && <div className="relative">
             <button onClick={() => setMenu(!menu)} disabled={beaming} className="rounded-full bg-panel2 px-3 py-1 text-sm text-beam hover:bg-white/10 disabled:opacity-50" aria-haspopup="menu">Beam to…</button>
             {menu && <BeamMenu agent={agent} dests={dests} onBeam={onBeam} onClose={() => setMenu(false)} />}
           </div>}
-          <button onClick={() => setShowSettings(!showSettings)} className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">Settings</button>
+          <button onClick={() => setShowSettings(!showSettings)} aria-pressed={showSettings} className={`rounded-full px-3 py-1 text-sm ${showSettings ? "bg-white/15 text-white" : "bg-panel2 hover:bg-white/10"}`}>Settings</button>
+          {!standalone && <button onClick={async () => setPhone(await (await fetch(`/api/agents/${agent.id}/phone`)).json())} title="Open on phone" aria-label="Open on phone" className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">📱</button>}
         </div>
       </header>
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-w-0 flex-1 flex-col p-4">
-          <div className="mb-2 flex items-center gap-2 rounded-lg bg-panel2 px-3 py-1.5 font-mono text-[13px] text-beam" aria-live="polite">
-            <span className="text-slate-500">NOW</span> {a.narration.at(-1)?.text ?? STATE_META[a.state]?.label}
-          </div>
+          {a.state === "busy" || a.state === "stuck" || a.paused ? (
+            <div className="mb-2 flex items-center gap-2 rounded-lg bg-panel2 px-3 py-1.5 font-mono text-[13px] text-slate-200" aria-live="polite">
+              <span className="text-slate-400">NOW</span> {a.paused ? `Paused — you're driving` : (a.narration.at(-1)?.text ?? STATE_META[a.state]?.label)}
+            </div>
+          ) : <div className="mb-2 h-[30px]" />}
           <div
             ref={box}
             tabIndex={0}
@@ -475,16 +514,16 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
             {a.agentCursor && a.state === "busy" && <Cursor p={a.agentCursor} color="#b06bff" label={agent.name} />}
             {myCursor && <Cursor p={myCursor} color="#38e1ff" label="you" />}
             {beaming && <BeamProgress agent={agent} />}
-            {a.paused && <div className="pointer-events-none absolute inset-x-0 top-0 bg-beam py-1 text-center text-xs font-semibold text-black">You have control · {agent.name} is waiting</div>}
+            {a.paused && <div className="pointer-events-none absolute inset-x-0 top-0 bg-beam py-1 text-center text-xs font-semibold text-black">You're driving · {agent.name} is waiting</div>}
+            <button onClick={(e) => { e.stopPropagation(); a.send({ t: "pause", paused: !a.paused }); }} onDoubleClick={(e) => e.stopPropagation()}
+              className={`absolute bottom-3 left-3 cursor-pointer rounded-full px-3 py-1.5 text-sm font-medium shadow-lg ${a.paused ? "bg-beam text-black" : "bg-black/75 text-white hover:bg-black/90"}`}>
+              {a.paused ? `Let ${agent.name} continue` : "Pause & let me drive"}
+            </button>
           </div>
-          <div className="mt-2 text-center text-xs text-slate-500">Shared screen: you and {agent.name} can both act. Click into it to type; logins and payments are yours to do.</div>
+          <div className="mt-2 text-center text-xs text-slate-400">This is {agent.name}'s computer. Click to use it together; do logins and payments yourself.</div>
         </div>
         <aside className="flex min-h-[60vh] w-full flex-col border-t border-white/5 bg-panel lg:min-h-0 lg:w-96 lg:border-l lg:border-t-0">
-          {showSettings && <SettingsPanel a={a} />}
-          {agent.agentPubkey && <div className="flex items-center gap-2 border-b border-white/5 px-4 py-2 font-mono text-[11px] text-slate-500">
-            <span>NOSTR</span>
-            <button className="truncate text-beam hover:underline" title="Copy npub" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 24)}…</button>
-          </div>}
+          {showSettings ? <SettingsPanel a={a} agent={agent} onClose={() => setShowSettings(false)} /> : <>
           {a.pairing?.code && (
             <div className="m-3 rounded-xl border border-beam/30 bg-beam/5 p-3 text-sm">
               <div className="font-semibold">Pair your chat apps</div>
@@ -497,25 +536,26 @@ function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent
             </div>
           )}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {a.chat.length === 0 && <div className="mt-10 text-center text-sm text-slate-500">Say hi to {agent.name}. Try “open wikipedia and find today's featured article”.</div>}
+            {a.chat.length === 0 && <div className="mt-10 text-center text-sm text-slate-400">Say hi to {agent.name}. Try “open wikipedia and find today's featured article”.</div>}
             {a.chat.map((m, i) => (
               <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.from === "agent" ? "bg-panel2" : "ml-auto bg-beam/15"}`}>
-                <div className="mb-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">{m.from === "agent" ? agent.name : m.from} · {m.channel}</div>
+                <div className="mb-0.5 font-mono text-[11px] uppercase tracking-wider text-slate-400">{m.from === "agent" ? agent.name : m.from === "owner" ? "You" : m.from}{m.channel !== "app" ? ` · ${m.channel}` : ""}</div>
                 <div className="whitespace-pre-wrap">{m.text}</div>
               </div>
             ))}
             <div ref={chatEnd} />
           </div>
           <details className="border-t border-white/5">
-            <summary className="cursor-pointer px-3 py-2 font-mono text-[11px] uppercase tracking-widest text-slate-500">Activity ({a.narration.length})</summary>
-            <div className="max-h-40 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-500">
+            <summary className="cursor-pointer px-3 py-2 font-mono text-[11px] uppercase tracking-widest text-slate-400">Activity ({a.narration.length})</summary>
+            <div className="max-h-40 overflow-y-auto px-3 pb-2 font-mono text-[11px] text-slate-400">
               {a.narration.slice(-30).map((n, i) => <div key={i}>{new Date(n.ts).toLocaleTimeString()} {n.text}</div>)}
             </div>
           </details>
           <form className="flex gap-2 border-t border-white/5 p-3" onSubmit={(e) => { e.preventDefault(); if (text.trim()) { a.send({ t: "chat", text }); setText(""); } }}>
             <input value={text} onChange={(e) => setText(e.target.value)} aria-label={`Message ${agent.name}`} className="flex-1 rounded-full border border-white/10 bg-panel2 px-4 py-2 text-sm outline-none focus:border-beam" placeholder={`Message ${agent.name}…`} />
-            <button className="rounded-full bg-beam px-4 text-sm font-semibold text-black">Send</button>
+            <button className="rounded-full bg-white px-4 text-sm font-semibold text-black">Send</button>
           </form>
+          </>}
         </aside>
       </div>
       {phone && <PhoneLink phone={phone} name={agent.name} onClose={() => setPhone(null)} />}
@@ -559,33 +599,40 @@ function PhoneLink({ phone, name, onClose }: { phone: { url: string; local: bool
   );
 }
 
-function SettingsPanel({ a }: { a: ReturnType<typeof useAgent> }) {
+function SettingsPanel({ a, agent, onClose }: { a: ReturnType<typeof useAgent>; agent: Agent; onClose: () => void }) {
   const s = a.settings;
   const [budget, setBudget] = useState(String(s?.dailyTokenBudget ?? 0));
   if (!s) return null;
   const levels = [
     { id: "ask", label: "Ask me first", note: "every action needs approval" },
     { id: "risky", label: "Risky only", note: "payments, messages, deletes, logins" },
-    { id: "auto", label: "Autonomous", note: "never asks" },
+    { id: "auto", label: "Never ask", note: "acts on its own — not recommended for email or payments" },
   ];
   return (
-    <div className="space-y-3 border-b border-white/5 p-4 text-sm">
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Autonomy</div>
+    <div className="flex-1 space-y-5 overflow-y-auto p-5 text-sm">
+      <div className="flex items-center"><div className="text-base font-semibold">Settings</div><button onClick={onClose} className="ml-auto rounded-full bg-white px-3 py-1 text-sm font-semibold text-black">Done</button></div>
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Autonomy</div>
       <div className="space-y-1">
         {levels.map((l) => (
           <label key={l.id} className="flex cursor-pointer items-start gap-2">
             <input type="radio" name="autonomy" checked={s.autonomy === l.id} onChange={() => a.send({ t: "settings", autonomy: l.id })} className="mt-1 accent-cyan-400" />
-            <span><span className="font-medium">{l.label}</span> <span className="text-slate-500">— {l.note}</span></span>
+            <span><span className="font-medium">{l.label}</span> <span className="text-slate-400">— {l.note}</span></span>
           </label>
         ))}
       </div>
       <ChannelSettings a={a} />
       <Schedules a={a} />
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Daily token budget</div>
+      {agent.agentPubkey && (
+        <div className="space-y-1">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Nostr address</div>
+          <button className="truncate font-mono text-[12px] text-slate-200 hover:underline" title="Copy" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 30)}… (copy)</button>
+        </div>
+      )}
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Daily token limit</div>
       <div className="flex items-center gap-2">
         <input value={budget} onChange={(e) => setBudget(e.target.value)} inputMode="numeric" className="w-32 rounded-lg border border-white/10 bg-panel2 px-2 py-1 font-mono" aria-label="Daily token budget, 0 for none" />
         <button onClick={() => a.send({ t: "settings", dailyTokenBudget: Number(budget) || 0 })} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Save</button>
-        <span className="font-mono text-[11px] text-slate-500">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
+        <span className="font-mono text-[11px] text-slate-400">{s.dayTokens.toLocaleString()} used today{s.dailyTokenBudget ? ` of ${s.dailyTokenBudget.toLocaleString()}` : ""}</span>
       </div>
     </div>
   );
@@ -596,11 +643,11 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
   const ch = a.settings?.channels;
   return (
     <div className="space-y-2">
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Channels</div>
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Chat with {"this agent"} from…</div>
       <div className="flex items-center gap-2">
         <span className="w-20">Telegram</span>
         {ch?.telegram ? (
-          <><span className="text-emerald-300">connected</span><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto text-slate-500 hover:text-red-300">Disconnect</button></>
+          <><span className="text-emerald-300">connected</span><button onClick={() => a.send({ t: "settings", channels: { telegram: null } })} className="ml-auto text-slate-400 hover:text-red-300">Disconnect</button></>
         ) : (
           <><input value={tg} onChange={(e) => setTg(e.target.value)} placeholder="Bot token from @BotFather" aria-label="Telegram bot token" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-panel2 px-2 py-1" />
           <button onClick={() => { if (tg.trim()) a.send({ t: "settings", channels: { telegram: { token: tg.trim() } } }); setTg(""); }} className="rounded-full bg-panel2 px-3 py-1 hover:bg-white/10">Connect</button></>
@@ -614,8 +661,8 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
         onDisconnect={() => a.send({ t: "settings", channels: { discord: null } })} />
       <div className="flex items-center gap-2">
         <span className="w-20">Nostr</span>
-        {ch?.nostr ? <span className="text-emerald-300">DMs on</span> : <span className="text-slate-500">off</span>}
-        <button onClick={() => a.send({ t: "settings", channels: { nostr: ch?.nostr ? null : {} } })} className="ml-auto text-slate-500 hover:text-white">{ch?.nostr ? "Turn off" : "Turn on"}</button>
+        {ch?.nostr ? <span className="text-emerald-300">DMs on</span> : <span className="text-slate-400">off</span>}
+        <button onClick={() => a.send({ t: "settings", channels: { nostr: ch?.nostr ? null : {} } })} className="ml-auto text-slate-400 hover:text-white">{ch?.nostr ? "Turn off" : "Turn on"}</button>
       </div>
     </div>
   );
@@ -623,7 +670,7 @@ function ChannelSettings({ a }: { a: ReturnType<typeof useAgent> }) {
 
 function SecretRow({ label, connected, fields, onConnect, onDisconnect }: { label: string; connected: boolean; fields: string[]; onConnect: (v: string[]) => void; onDisconnect: () => void }) {
   const [vals, setVals] = useState(fields.map(() => ""));
-  if (connected) return <div className="flex items-center gap-2"><span className="w-20">{label}</span><span className="text-emerald-300">connected</span><button onClick={onDisconnect} className="ml-auto text-slate-500 hover:text-red-300">Disconnect</button></div>;
+  if (connected) return <div className="flex items-center gap-2"><span className="w-20">{label}</span><span className="text-emerald-300">connected</span><button onClick={onDisconnect} className="ml-auto text-slate-400 hover:text-red-300">Disconnect</button></div>;
   return (
     <div className="flex items-start gap-2">
       <span className="w-20 pt-1">{label}</span>
@@ -658,12 +705,12 @@ function Schedules({ a }: { a: ReturnType<typeof useAgent> }) {
   };
   return (
     <div className="space-y-2">
-      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Scheduled tasks</div>
+      <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">Scheduled tasks</div>
       {a.schedules.map((s) => (
         <div key={s.id} className="flex items-center gap-2 rounded-lg bg-panel2 px-2 py-1.5">
           <input type="checkbox" checked={s.enabled} aria-label="Enabled" onChange={() => save(a.schedules.map((x) => (x.id === s.id ? { ...x, enabled: !x.enabled } : x)))} className="accent-cyan-400" />
-          <div className="min-w-0 flex-1"><div className="truncate">{s.prompt}</div><div className="font-mono text-[10px] text-slate-500">{label(s)}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ""}</div></div>
-          <button aria-label="Delete task" onClick={() => save(a.schedules.filter((x) => x.id !== s.id))} className="text-slate-500 hover:text-red-300">✕</button>
+          <div className="min-w-0 flex-1"><div className="truncate">{s.prompt}</div><div className="font-mono text-[11px] text-slate-400">{label(s)}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ""}</div></div>
+          <button aria-label="Delete task" onClick={() => save(a.schedules.filter((x) => x.id !== s.id))} className="text-slate-400 hover:text-red-300">✕</button>
         </div>
       ))}
       <div className="flex gap-1">
@@ -682,7 +729,7 @@ function Cursor({ p, color, label }: { p: { x: number; y: number }; color: strin
   return (
     <div className="pointer-events-none absolute transition-all duration-150" style={{ left: `${(p.x / SCREEN.w) * 100}%`, top: `${(p.y / SCREEN.h) * 100}%` }}>
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden><path d="M1 1 L1 15 L5 11 L8 17 L10 16 L7 10 L13 10 Z" fill={color} stroke="#000" strokeWidth="1" /></svg>
-      <span className="ml-3 rounded px-1 text-[10px] font-semibold text-black" style={{ background: color }}>{label}</span>
+      <span className="ml-3 rounded px-1 text-[11px] font-semibold text-black" style={{ background: color }}>{label}</span>
     </div>
   );
 }
@@ -730,24 +777,24 @@ function AddCloud({ onClose, onAdded }: { onClose: () => void; onAdded: (label: 
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-6 backdrop-blur" role="dialog" aria-modal="true" aria-label="Add a cloud" onClick={onClose}>
       <div className="w-full max-w-lg rounded-3xl bg-panel p-7 ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
         <div className="text-xl font-semibold">Add a cloud</div>
-        <p className="mb-4 text-sm text-slate-400">Agents beam into your own account. You pay the provider directly; Beamhop never sees your bills.</p>
+        <p className="mb-4 text-sm text-slate-400">Run agents on your own cloud account, even when this computer is off. You pay the provider directly.</p>
         <div className="grid grid-cols-3 gap-2">
           {PROVIDERS.map((x) => (
             <button key={x.id} onClick={() => setPick(x.id)} className={`rounded-xl border bg-panel2 p-3 text-left ${pick === x.id ? "border-beam" : "border-white/10 hover:border-beam/50"}`}>
               <div className="font-medium">{x.label}</div>
-              <div className="font-mono text-[10px] text-slate-500">{x.isolation} · {x.price}</div>
+              <div className="mt-1 text-sm text-slate-200">{x.price}</div>
             </button>
           ))}
         </div>
         <ol className="mt-4 space-y-2 text-sm">
-          <li>1. <a className="text-beam underline" href={p.tokenUrl} target="_blank">Open {p.label} tokens</a> — {p.hint}</li>
-          <li>2. Paste it:</li>
+          <li>1. <a className="text-beam underline" href={p.tokenUrl} target="_blank">Get your {p.label} key</a> — {p.hint}</li>
+          <li>2. Paste your key here:</li>
         </ol>
         <input value={token} onChange={(e) => setToken(e.target.value)} type="password" aria-label={`${p.label} token`} placeholder={`${p.label} token`} className="mt-2 w-full rounded-lg border border-white/10 bg-panel2 px-3 py-2 text-sm outline-none focus:border-beam" />
         {error && <div className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">{error}</div>}
         <div className="mt-5 flex justify-between">
           <button onClick={onClose} className="text-slate-400 hover:text-white">Cancel</button>
-          <button disabled={busy} onClick={connect} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-60">{busy ? "Checking…" : "Connect"}</button>
+          <button disabled={busy || !token.trim()} onClick={connect} className="rounded-full bg-beam px-6 py-2 font-semibold text-black disabled:opacity-50">{busy ? "Checking…" : "Connect"}</button>
         </div>
       </div>
     </div>
@@ -755,7 +802,7 @@ function AddCloud({ onClose, onAdded }: { onClose: () => void; onAdded: (label: 
 }
 
 // ---------------- crew room ----------------
-function CrewRoomPanel({ onClose }: { onClose: () => void }) {
+function CrewRoomPanel({ onClose, agentNames }: { onClose: () => void; agentNames: string[] }) {
   const [data, setData] = useState<{ enabled: boolean; lines: { name: string; text: string; ts: number }[]; members: { name: string; kind: string }[] }>();
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
@@ -770,22 +817,27 @@ function CrewRoomPanel({ onClose }: { onClose: () => void }) {
     <aside className="fixed inset-y-0 right-0 z-30 flex w-[420px] flex-col border-l border-white/10 bg-panel shadow-2xl" aria-label="Crew room">
       <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
         <div className="font-semibold">Crew room</div>
-        <div className="font-mono text-[11px] text-slate-500">{data?.members.filter((m) => m.kind === "agent").length ?? 0} agents · private (Nostr NIP-17)</div>
+        <div className="font-mono text-[11px] text-slate-400">{agentNames.length} agents · end-to-end encrypted</div>
         <button onClick={onClose} className="ml-auto text-slate-400 hover:text-white" aria-label="Close crew room">✕</button>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {data && !data.lines.length && <div className="mt-10 text-center text-sm text-slate-500">Talk to all your agents at once. Mention one by name (“@Scout, find…”) to give it a task.</div>}
+        {data && !data.lines.length && (
+          <div className="mt-10 space-y-3 text-center text-sm text-slate-400">
+            <div>Talk to all your agents at once. Mention one to give it a task:</div>
+            <div className="flex flex-wrap justify-center gap-2">{agentNames.map((n) => <button key={n} onClick={() => setText(`@${n} `)} className="rounded-full bg-panel2 px-3 py-1 text-slate-200 hover:bg-white/10">@{n}</button>)}</div>
+          </div>
+        )}
         {data?.lines.map((l, i) => (
           <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${l.name === "You" || l.name === "Owner" ? "ml-auto bg-beam/15" : "bg-panel2"}`}>
-            <div className="mb-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">{l.name}</div>
+            <div className="mb-0.5 font-mono text-[11px] uppercase tracking-wider text-slate-400">{l.name}</div>
             <div className="whitespace-pre-wrap">{l.text}</div>
           </div>
         ))}
         <div ref={end} />
       </div>
       <form className="flex gap-2 border-t border-white/5 p-3" onSubmit={async (e) => { e.preventDefault(); if (!text.trim()) return; const t = text; setText(""); await fetch("/api/crew", { method: "POST", body: JSON.stringify({ text: t }) }); }}>
-        <input value={text} onChange={(e) => setText(e.target.value)} aria-label="Message the crew" className="flex-1 rounded-full border border-white/10 bg-panel2 px-4 py-2 text-sm outline-none focus:border-beam" placeholder="Message the crew… (@Name to ask one agent)" />
-        <button className="rounded-full bg-beam px-4 text-sm font-semibold text-black">Send</button>
+        <input value={text} onChange={(e) => setText(e.target.value)} aria-label="Message the crew" className="flex-1 rounded-full border border-white/10 bg-panel2 px-4 py-2 text-sm outline-none focus:border-beam" placeholder="Message everyone…" />
+        <button className="rounded-full bg-white px-4 text-sm font-semibold text-black">Send</button>
       </form>
     </aside>
   );
@@ -885,13 +937,13 @@ function CrewApp() {
       <header className="flex items-center gap-3 px-8 py-6">
         <Mascot variant="cyan" size={36} />
         <div className="text-2xl font-bold tracking-tight">Beam<span className="text-beam">hop</span></div>
-        <div className="font-mono text-[11px] uppercase tracking-widest text-slate-500">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-slate-400">
           {agents.length} agent{agents.length === 1 ? "" : "s"}{needCount ? <span className="text-amber-300"> · {needCount} need{needCount === 1 ? "s" : ""} you</span> : ""}
         </div>
-        <button onClick={() => setCrewOpen(!crewOpen)} className="ml-auto rounded-full bg-panel2 px-4 py-2 text-sm hover:bg-white/10">Crew room</button>
+        <button onClick={() => setCrewOpen(!crewOpen)} className="ml-auto rounded-full bg-panel2 px-4 py-2 text-sm hover:bg-white/10">Talk to all agents</button>
         <button onClick={() => setCreating(true)} className="rounded-full bg-gradient-to-r from-beam to-beam2 px-5 py-2 font-semibold text-black">+ New agent</button>
       </header>
-      <main className="grid grid-cols-1 gap-6 px-8 md:grid-cols-2 xl:grid-cols-3">
+      <main className={`grid grid-cols-1 gap-6 px-8 md:grid-cols-2 xl:grid-cols-3 ${crewOpen ? "xl:pr-[440px]" : ""}`}>
         {sorted.map((ag) => (
           <Tile key={ag.id} agent={ag} dests={dests} onOpen={() => (location.hash = `#/agent/${ag.id}`)} onBeam={(to) => beam(ag.id, to)} onStatus={onStatus} />
         ))}
@@ -900,7 +952,7 @@ function CrewApp() {
       {creating && <CreateAgent firstRun={false} onDone={() => { setCreating(false); refresh(); }} />}
       <Dock dests={dests} dragging={dragging} onDrop={(to, id) => id && beam(id, to)} onAddCloud={() => setAddCloud(true)} />
       {addCloud && <AddCloud onClose={() => setAddCloud(false)} onAdded={(label) => { setAddCloud(false); api.destinations().then(setDests); toasts.push(`${label} added. Drag an agent onto it to beam it there.`); }} />}
-      {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} />}
+      {crewOpen && <CrewRoomPanel onClose={() => setCrewOpen(false)} agentNames={agents.map((x) => x.name)} />}
       {toasts.view}
     </div>
   );

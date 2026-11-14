@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.0 — 2026-11-14 02:54
+
+A fresh-eyes design review (separate reviewer, screenshots of every screen) drove this release.
+
+- Approvals can be answered right on the crew grid: "Atlas wants to open example.com — Allow / Don't", in plain words instead of tool names.
+- One accent colour, used for beaming and the main call to action only; neutral location badges and Send buttons; contrast raised to WCAG AA (no more slate-500 or 10 px text); native controls render dark.
+- New agent: templates first, then "describe your agent"; coding tool, Telegram and Nostr moved under "More options"; Nostr off by default; "Create agent" needs a description or a name.
+- Agent view: Settings replace the chat instead of squeezing it, with Done and a pressed state; "Pause & let me drive" sits on the agent's screen; the NOW bar only appears while the agent works; Open on phone is an icon; the Nostr address lives in Settings.
+- Crew grid: CPU/memory/cost only on hover, idle agents no longer look disabled, "Beam to…" always visible, destinations show price in plain words, "Ready" instead of "Idle".
+- Crew room ("Talk to all agents"): correct agent count, "end-to-end encrypted", @mention chips, grid makes room for the panel.
+- Add a cloud: price is the headline, "Get your Fly.io key", Connect disabled until a key is pasted.
+- Bug found by the UI tests: messages typed before the agent's connection opened were silently dropped. They are now queued and sent on connect.
+- Tests: 22/22 e2e, 8/8 UI, smolvm availability check.
+
 ## v0.12.1 — 2026-11-14 02:46
 
 - Beams of big workspaces: agentd accepted at most 128 MB per request (Bun's default), so an agent with a large workspace or browser profile could not beam. Raised to 8 GB (configurable). Tested: a 300 MB workspace beams in ~18 s with an identical sha256 on arrival.

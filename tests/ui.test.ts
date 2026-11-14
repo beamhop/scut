@@ -58,7 +58,7 @@ test("crew grid shows a live tile with state and location", async () => {
   await page.waitForSelector("main img", { timeout: 15_000 }); // a live frame arrived
   const text = await page.evaluate(() => document.body.innerText);
   expect(text).toContain("THIS COMPUTER");
-  expect(text).toContain("Idle");
+  expect(text).toContain("Ready");
   await page.close();
 });
 
@@ -115,7 +115,7 @@ test("create an agent through the UI (Demo harness)", async () => {
   await page.waitForSelector('[role="dialog"]');
   await page.type('[aria-label="Name"]', "Uiborn");
   await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
-  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Beam it in"))!.click());
+  await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Create agent"))!.click());
   await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
   await page.close();
   expect(scut.agents.find((a) => a.name === "Uiborn")).toBeTruthy();
