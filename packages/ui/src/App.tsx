@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerMsg, AgentState, Schedule } from "@scut/protocol";
 import { nip19 } from "nostr-tools";
+import qrcode from "qrcode-generator";
 
 // ---------------- types + api ----------------
 type Instance = { driver: string; instanceId: string; endpoint: string };
@@ -399,7 +400,8 @@ const KEYMAP: Record<string, string> = {
   Enter: "Return", Backspace: "BackSpace", Tab: "Tab", Escape: "Escape", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left",
   ArrowRight: "Right", Delete: "Delete", Home: "Home", End: "End", PageUp: "Prior", PageDown: "Next", " ": "space",
 };
-function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Destination[]; onBack: () => void; onBeam: (to: string) => void }) {
+function AgentView({ agent, dests, onBack, onBeam, standalone = false }: { agent: Agent; dests: Destination[]; onBack: () => void; onBeam: (to: string) => void; standalone?: boolean }) {
+  const [phone, setPhone] = useState<{ url: string; local: boolean } | null>(null);
   const a = useAgent(agent, true);
   const [text, setText] = useState("");
   const [myCursor, setMyCursor] = useState<{ x: number; y: number }>();
@@ -426,9 +428,9 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-3 border-b border-white/5 px-5 py-3">
-        <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>
+    <div className="flex min-h-screen flex-col lg:h-screen">
+      <header className="flex flex-wrap items-center gap-3 border-b border-white/5 px-5 py-3">
+        {!standalone && <button onClick={onBack} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-panel2 hover:text-white">← Crew</button>}
         <Mascot variant={agent.mascot} size={32} state={a.state} />
         <div className="font-semibold">{agent.name}</div>
         <span className="rounded-full bg-panel2 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-beam">{where}</span>
@@ -439,14 +441,15 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
           </span>
           <button onClick={() => a.send({ t: "pause", paused: !a.paused })} className={`rounded-full px-3 py-1 text-sm ${a.paused ? "bg-beam font-semibold text-black" : "bg-panel2 hover:bg-white/10"}`}>{a.paused ? "Hand back" : "Take control"}</button>
           {a.state === "busy" && <button onClick={() => a.send({ t: "stop" })} className="rounded-full border border-red-400/50 px-3 py-1 text-sm text-red-300 hover:bg-red-500/10">Stop</button>}
-          <div className="relative">
+          {!standalone && <button onClick={async () => setPhone(await (await fetch(`/api/agents/${agent.id}/phone`)).json())} className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">Open on phone</button>}
+          {!standalone && <div className="relative">
             <button onClick={() => setMenu(!menu)} disabled={beaming} className="rounded-full bg-panel2 px-3 py-1 text-sm text-beam hover:bg-white/10 disabled:opacity-50" aria-haspopup="menu">Beam to…</button>
             {menu && <BeamMenu agent={agent} dests={dests} onBeam={onBeam} onClose={() => setMenu(false)} />}
-          </div>
+          </div>}
           <button onClick={() => setShowSettings(!showSettings)} className="rounded-full bg-panel2 px-3 py-1 text-sm hover:bg-white/10">Settings</button>
         </div>
       </header>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-w-0 flex-1 flex-col p-4">
           <div className="mb-2 flex items-center gap-2 rounded-lg bg-panel2 px-3 py-1.5 font-mono text-[13px] text-beam" aria-live="polite">
             <span className="text-slate-500">NOW</span> {a.narration.at(-1)?.text ?? STATE_META[a.state]?.label}
@@ -476,12 +479,12 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
           </div>
           <div className="mt-2 text-center text-xs text-slate-500">Shared screen: you and {agent.name} can both act. Click into it to type; logins and payments are yours to do.</div>
         </div>
-        <aside className="flex w-96 flex-col border-l border-white/5 bg-panel">
+        <aside className="flex min-h-[60vh] w-full flex-col border-t border-white/5 bg-panel lg:min-h-0 lg:w-96 lg:border-l lg:border-t-0">
           {showSettings && <SettingsPanel a={a} />}
-          <div className="flex items-center gap-2 border-b border-white/5 px-4 py-2 font-mono text-[11px] text-slate-500">
+          {agent.agentPubkey && <div className="flex items-center gap-2 border-b border-white/5 px-4 py-2 font-mono text-[11px] text-slate-500">
             <span>NOSTR</span>
             <button className="truncate text-beam hover:underline" title="Copy npub" onClick={() => navigator.clipboard?.writeText(nip19.npubEncode(agent.agentPubkey))}>{nip19.npubEncode(agent.agentPubkey).slice(0, 24)}…</button>
-          </div>
+          </div>}
           {a.pairing && !a.pairing.owner && a.pairing.code && (
             <div className="m-3 rounded-xl border border-beam/30 bg-beam/5 p-3 text-sm">
               <div className="font-semibold">Pair your Telegram</div>
@@ -510,6 +513,7 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
           </form>
         </aside>
       </div>
+      {phone && <PhoneLink phone={phone} name={agent.name} onClose={() => setPhone(null)} />}
       <div className="fixed right-4 top-16 z-30 space-y-2" aria-live="assertive">
         {a.approvals.map((ap) => (
           <div key={ap.id} role="alertdialog" aria-label="Approval needed" className="w-80 rounded-xl bg-amber-400 p-3 text-black shadow-xl">
@@ -522,6 +526,29 @@ function AgentView({ agent, dests, onBack, onBeam }: { agent: Agent; dests: Dest
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function PhoneLink({ phone, name, onClose }: { phone: { url: string; local: boolean }; name: string; onClose: () => void }) {
+  const svg = useMemo(() => {
+    const q = qrcode(0, "M");
+    q.addData(phone.url);
+    q.make();
+    return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }, [phone.url]);
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-6" role="dialog" aria-modal="true" aria-label="Open on phone" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl bg-panel p-6 text-center ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 text-lg font-semibold">Open {name} on your phone</div>
+        {phone.local ? (
+          <p className="mb-3 text-sm text-amber-300">{name} runs on this computer, so the link only works here. Beam it to a cloud to reach it from anywhere.</p>
+        ) : (
+          <p className="mb-3 text-sm text-slate-400">Scan within 15 minutes. The link signs you in to this one agent.</p>
+        )}
+        <div className="mx-auto w-56 rounded-xl bg-white p-2" dangerouslySetInnerHTML={{ __html: svg }} />
+        <button className="mt-3 font-mono text-[11px] text-beam underline" onClick={() => navigator.clipboard?.writeText(phone.url)}>Copy link</button>
       </div>
     </div>
   );
@@ -667,7 +694,35 @@ function CrewRoomPanel({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------- app ----------------
+/** When the UI is served by an agent itself (phone link), show just that agent. */
+function standaloneAgent(): Agent | null {
+  const qs = new URLSearchParams(location.search);
+  let token = qs.get("auth");
+  if (token) {
+    try { sessionStorage.setItem("scut-auth", token); } catch {}
+    history.replaceState(null, "", location.pathname + location.hash);
+  } else {
+    try { token = sessionStorage.getItem("scut-auth"); } catch {}
+  }
+  if (!token) return null;
+  return { id: "self", name: "Agent", mascot: "cyan", harness: "", agentPubkey: "", current: { driver: "cloud", instanceId: "", endpoint: location.origin }, history: [], token };
+}
+
 export function App() {
+  const solo = useMemo(standaloneAgent, []);
+  if (solo) return <SoloAgent agent={solo} />;
+  return <CrewApp />;
+}
+
+function SoloAgent({ agent }: { agent: Agent }) {
+  const [info, setInfo] = useState({ name: agent.name, mascot: agent.mascot, agentPubkey: "" });
+  useEffect(() => {
+    fetch(`/status?auth=${agent.token}`).then((r) => r.json()).then((s) => s.spec && setInfo({ name: s.spec.name, mascot: s.spec.mascot ?? "cyan", agentPubkey: s.spec.agentPubkey })).catch(() => {});
+  }, []);
+  return <AgentView agent={{ ...agent, ...info }} dests={[]} onBack={() => {}} onBeam={() => {}} standalone />;
+}
+
+function CrewApp() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [dests, setDests] = useState<Destination[]>([]);
   const [loaded, setLoaded] = useState(false);

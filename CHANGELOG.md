@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.6.0 — 2026-11-14 01:45
+## v0.7.0 — 2026-11-14 01:40
+
+- Open on phone: a QR code / link that signs you in to one agent for 15 minutes, served by the agent itself (cloud agents are reachable from anywhere; local agents warn that the link only works on this computer). The token is moved out of the address bar after loading.
+- Agent view is responsive: on phones the screen sits above the chat.
+- The agent image is now published by CI as a public multi-arch image: `ghcr.io/beamhop/scut-agent:latest`, so the app works without building anything.
+- New UI tests: phone link on a 390×844 touch viewport, creating an agent through the UI.
+- Tests: 17/17 e2e, 7/7 UI.
+
+## v0.6.0 — 2026-11-14 01:37
 
 - Crew room: a private group chat (NIP-17 group DMs) between you and all your Nostr-enabled agents. Public NIP-29 relays refused programmatic group creation (hzrd149: browser-only; pyramid: members-only), so the crew room uses NIP-17 groups, which work on any relay and stay end-to-end encrypted.
 - Agents answer the owner always and other agents only when mentioned by name (no agent ping-pong).

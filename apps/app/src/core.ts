@@ -97,6 +97,11 @@ export class Scut {
     return token;
   }
 
+  /** A fresh token (not cached), e.g. for a phone link valid for 15 minutes. */
+  freshAuth(endpoint: string) {
+    return signAuth(this.ownerSk, new URL(endpoint).host);
+  }
+
   private prices = new Map<string, { in: number; out: number }>();
   /** USD per million tokens for OpenRouter models (fetched once per hour). */
   async price(model?: { baseUrl?: string; model: string }) {

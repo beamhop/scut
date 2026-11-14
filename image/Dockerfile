@@ -5,6 +5,7 @@ FROM ${REGISTRY}library/node:22-bookworm-slim AS node
 FROM ${REGISTRY}oven/bun:1-debian AS bun
 
 FROM ${REGISTRY}library/debian:bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/beamhop/scut" org.opencontainers.image.description="Beamhop agent: a sandboxed Linux desktop + agent harness"
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11-utils openbox xdotool ffmpeg chromium \

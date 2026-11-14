@@ -83,8 +83,38 @@ test("agent view: chat round trip, settings panel, history", async () => {
   await page.waitForFunction(() => document.body.textContent!.includes("Autonomy"), { timeout: 5000 });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.body.innerText.includes("hello from the UI test"), { timeout: 15_000 }); // history replay
-  await page.screenshot({ path: "/home/claude/shots/ui-test-agent.png" });
+  await page.screenshot({ path: `${process.env.SCUT_SHOTS ?? tmpdir()}/ui-test-agent.png` });
   await page.close();
+});
+
+test("phone link opens the agent alone on a phone-sized screen, signed in", async () => {
+  const link = await (await fetch(`${base}/api/agents/${agentId}/phone`)).json();
+  expect(link.url).toContain("?auth=");
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+  await page.goto(link.url, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.body.innerText.includes("Gridy"), { timeout: 20_000 });
+  expect(page.url()).not.toContain("auth="); // token moved out of the address bar
+  await page.waitForSelector('input[aria-label^="Message"]');
+  await page.type('input[aria-label^="Message"]', "from my phone");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.body.innerText.includes("mock: message #2"), { timeout: 30_000 });
+  await page.screenshot({ path: `${process.env.SCUT_SHOTS ?? tmpdir()}/ui-test-phone.png` });
+  await page.close();
+});
+
+test("create an agent through the UI (Demo harness)", async () => {
+  const page = await open("/");
+  await page.waitForFunction(() => document.body.innerText.includes("New agent"), { timeout: 10_000 });
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "+ New agent")!.click());
+  await page.waitForSelector('[role="dialog"]');
+  await page.type('[aria-label="Name"]', "Uiborn");
+  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent === "Demo")!.click());
+  await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.startsWith("Beam it in"))!.click());
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]') && document.body.innerText.includes("Uiborn"), { timeout: 90_000 });
+  await page.close();
+  expect(scut.agents.find((a) => a.name === "Uiborn")).toBeTruthy();
 });
 
 test("no console errors on any page", () => {

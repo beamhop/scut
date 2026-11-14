@@ -51,6 +51,11 @@ export function serve(scut: Scut, port: number, uiDir: string, crew?: CrewRoom) 
           }
           if (!action) return json({ ...rec, token: scut.auth(rec.current.endpoint) });
           if (action === "token") return json({ endpoint: rec.current.endpoint, token: scut.auth(rec.current.endpoint) });
+          if (action === "phone") {
+            const ep = rec.current.endpoint;
+            const local = /^http:\/\/(127\.|localhost)/.test(ep);
+            return json({ url: `${ep}/?auth=${scut.freshAuth(ep)}`, local, expiresInMin: 15 });
+          }
           if (action === "beam" && req.method === "POST") {
             const { to } = (await req.json()) as { to: string };
             if (rec.beam && !["online", "failed"].includes(rec.beam.stage)) return json({ error: "beam in progress" }, 409);
